@@ -106,7 +106,7 @@ const App = () => {
           <div className="bg-blue-600 p-2 rounded-lg">
             <Newspaper size={24} />
           </div>
-          <h1 className="font-bold text-xl tracking-tight">PulseNews</h1>
+          <h1 className="font-bold text-xl tracking-tight">NewsPage</h1>
         </div>
 
         <nav className="flex-1 px-4 space-y-2">
