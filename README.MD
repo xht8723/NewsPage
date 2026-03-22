@@ -52,5 +52,3 @@ A privacy-first, desktop news aggregation application powered entirely by local,
 * [ ] Profile system resources to verify zero background usage when idle.
 * [ ] Implement error handling for API limits, network drops, and Ollama timeouts.
 * [ ] Compile final Windows executable (`.msi` or `.exe`) using Tauri build tools.
-
-*Developed for Windows*
