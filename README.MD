@@ -1,4 +1,4 @@
-# NexNews: Local AI News Aggregator
+# NewsPage: Local AI News Aggregator
 
 A privacy-first, desktop news aggregation application powered entirely by local, small-parameter Large Language Models (<4B). NexNews fetches, categorizes, and summarizes news using Retrieval-Augmented Generation (RAG) while ensuring zero data leakage to cloud APIs and giving users absolute control over computational resources.
 
