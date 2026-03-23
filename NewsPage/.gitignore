@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 *.local
+\extractor_python\build\text_extractor
+\extractor_python\text_extractor.spec
 
 # Editor directories and files
 .vscode/*
