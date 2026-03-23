@@ -2,12 +2,6 @@ use ollama_rs::generation::completion::request::GenerationRequest;
 use ollama_rs::Ollama;
 use tauri_plugin_shell::ShellExt;
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
 #[tauri::command]
 async fn summarize_url(app_handle: tauri::AppHandle, url: &str) -> Result<String, String> {
     // 1. Resolve and execute the sidecar
@@ -36,7 +30,7 @@ async fn summarize_url(app_handle: tauri::AppHandle, url: &str) -> Result<String
     // 2. Initialize Ollama and create the request object (required for v0.2+)
     let ollama = Ollama::default();
     let model = "qwen2.5:3b".to_string();
-    let prompt = format!("Summarize the following news article, as short and precise as possible: {}", text);
+    let prompt = format!("Summarize the following news article into Chinese, as short and precise as possible: {}", text);
     
     let request = GenerationRequest::new(model, prompt);
 
@@ -47,12 +41,17 @@ async fn summarize_url(app_handle: tauri::AppHandle, url: &str) -> Result<String
     }
 }
 
+#[tauri::command]
+async fn receive_news_from_serp<R: Runtime>(app: tauri::AppHandle<R>, window: tauri::Window<R>) -> Result<(), String> {
+  Ok(())
+}]
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init()) // Required for sidecars
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, summarize_url])
+        .invoke_handler(tauri::generate_handler![summarize_url])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
