@@ -4,6 +4,10 @@ A privacy-first, desktop news aggregation application powered entirely by local,
 
 <img src="image/README/1774185740499.png" alt="1774185740499" width="100%" style="max-width: 800px; height: auto;">
 
+## Getting Started
+
+For instructions on how to build and run the application, please see the [NewsPage/README.md](NewsPage/README.md) file.
+
 ## ✨ Core Features
 
 * **100% Local AI Processing:** Utilizes local models via Ollama (e.g., Phi-3, Qwen) for all summarization and tagging operations.
@@ -46,7 +50,7 @@ A privacy-first, desktop news aggregation application powered entirely by local,
 
 * [ ] Establish Tauri IPC (Inter-Process Communication) to send processed data from Rust to React.
 * [ ] Dynamically render UI cards with AI-generated titles, summaries, and tags.
-* [ ] Implement detailed view for full summaries and original source links.
+* [ ] Implement detailed view for full summaries and and original source links.
 * [ ] Add dynamic UI states (loading indicators, progress bars during LLM processing).
 
 ### Phase 5: Testing & Packaging
