@@ -125,6 +125,17 @@ pub fn list_supported_topics() -> Vec<String> {
 		.collect()
 }
 
+fn resolve_serp_api_key(api_key: Option<&str>) -> Result<String, String> {
+	if let Some(key) = api_key {
+		let trimmed = key.trim();
+		if !trimmed.is_empty() {
+			return Ok(trimmed.to_string());
+		}
+	}
+
+	std::env::var("SERP_API").map_err(|e| format!("Failed to read SERP_API: {}", e))
+}
+
 fn topic_token(topic: &str) -> Option<&'static str> {
 	let normalized = normalize_topic_name(topic);
 	SUPPORTED_TOPICS
@@ -134,6 +145,10 @@ fn topic_token(topic: &str) -> Option<&'static str> {
 }
 
 pub async fn get_serp_search_results(topic: &str) -> Result<Value, String> {
+	get_serp_search_results_with_api_key(topic, None).await
+}
+
+pub async fn get_serp_search_results_with_api_key(topic: &str, api_key: Option<&str>) -> Result<Value, String> {
 	let token = topic_token(topic).ok_or_else(|| {
 		format!(
 			"Unsupported topic '{}'. Supported topics: {}",
@@ -142,7 +157,7 @@ pub async fn get_serp_search_results(topic: &str) -> Result<Value, String> {
 		)
 	})?;
 
-    let serp_api = std::env::var("SERP_API").map_err(|e| format!("Failed to read SERP_API: {}", e))?;
+    let serp_api = resolve_serp_api_key(api_key)?;
     let mut params = HashMap::<String, String>::new();
     params.insert("engine".to_string(), "google_news".to_string());
     params.insert("topic_token".to_string(), token.to_string());
@@ -184,29 +199,30 @@ fn truncate_serp_news_items(items: &mut Vec<SerpNewsItem>, limit: Option<usize>)
 	items.truncate(limit);
 }
 
-async fn collect_serp_items(query: &str) -> Result<Vec<SerpNewsItem>, String> {
-	let response = get_serp_search_results(query).await?;
+async fn collect_serp_items(query: &str, api_key: Option<&str>) -> Result<Vec<SerpNewsItem>, String> {
+	let response = get_serp_search_results_with_api_key(query, api_key).await?;
 	parse_serp_api_value(&response)
 }
 
 pub async fn scrape_serp(query: &str, limit: Option<usize>) -> Result<Vec<SerpNewsItem>, String> {
-	let mut items = collect_serp_items(query).await?;
+	let mut items = collect_serp_items(query, None).await?;
 	sort_serp_news_items_by_date_desc(&mut items);
 	truncate_serp_news_items(&mut items, limit);
 	Ok(items)
 }
 
-pub async fn scrape_serp_topics(
+pub async fn scrape_serp_topics_with_api_key(
 	include_topics: &[String],
 	exclude_topics: &[String],
 	limit: Option<usize>,
+	api_key: Option<&str>,
 ) -> Result<Vec<SerpNewsItem>, String> {
 	let topics = resolve_selected_topics(include_topics, exclude_topics)?;
 	let mut all_items: Vec<SerpNewsItem> = Vec::new();
 	let mut seen_ids: HashSet<String> = HashSet::new();
 
 	for topic in topics {
-		let items = collect_serp_items(&topic).await?;
+		let items = collect_serp_items(&topic, api_key).await?;
 		for item in items {
 			if seen_ids.insert(item.id.clone()) {
 				all_items.push(item);
@@ -218,6 +234,14 @@ pub async fn scrape_serp_topics(
 	truncate_serp_news_items(&mut all_items, limit);
 
 	Ok(all_items)
+}
+
+pub async fn scrape_serp_topics(
+	include_topics: &[String],
+	exclude_topics: &[String],
+	limit: Option<usize>,
+) -> Result<Vec<SerpNewsItem>, String> {
+	scrape_serp_topics_with_api_key(include_topics, exclude_topics, limit, None).await
 }
 
 fn normalize_text(text: &str) -> String {
@@ -283,6 +307,7 @@ fn to_serp_news_item(entry: &SerpNewsEntry, category: &str) -> Option<SerpNewsIt
 		ai_summary: String::new(),
 		og_content: String::new(),
 		snippet: String::new(),
+		is_enriched: false,
 	})
 }
 
@@ -349,6 +374,7 @@ mod tests {
 			ai_summary: String::new(),
 			og_content: String::new(),
 			snippet: String::new(),
+			is_enriched: false,
 		}
 	}
 

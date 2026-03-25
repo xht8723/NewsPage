@@ -1,9 +1,31 @@
 use ollama_rs::generation::completion::request::GenerationRequest;
 use ollama_rs::Ollama;
+use reqwest::Url;
 use trafilatura::{extract, Options};
 use crate::news_item::NewsItem;
 
-const MODEL: &str = "qwen2.5:3b";
+const DEFAULT_MODEL: &str = "qwen2.5:3b";
+const DEFAULT_OLLAMA_ADDRESS: &str = "http://127.0.0.1:11434";
+
+fn parse_ollama_address(address: &str) -> Result<(String, u16), String> {
+	let trimmed = address.trim();
+	let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+		trimmed.to_string()
+	} else {
+		format!("http://{}", trimmed)
+	};
+
+	let parsed = Url::parse(&with_scheme)
+		.map_err(|e| format!("Invalid Ollama address '{}': {}", address, e))?;
+	let host = parsed
+		.host_str()
+		.ok_or_else(|| "Ollama address is missing host".to_string())?
+		.to_string();
+	let scheme = parsed.scheme().to_string();
+	let port = parsed.port_or_known_default().unwrap_or(11434);
+	// Include the scheme so ollama-rs can construct a valid absolute URL
+	Ok((format!("{}://{}", scheme, host), port))
+}
 
 /// Fetches the raw HTML at `url` and uses trafilatura to extract the main article text.
 pub async fn fetch_article_text(url: &str) -> Result<String, String> {
@@ -25,8 +47,16 @@ pub async fn fetch_article_text(url: &str) -> Result<String, String> {
 async fn run_ollama_prompts(
 	title: &str,
 	text: &str,
+	ollama_address: Option<&str>,
+	model: Option<&str>,
 ) -> Result<(Vec<String>, String, String), String> {
-	let ollama = Ollama::default();
+	let address = ollama_address.unwrap_or(DEFAULT_OLLAMA_ADDRESS);
+	let model = model.unwrap_or(DEFAULT_MODEL).trim();
+	if model.is_empty() {
+		return Err("Ollama model cannot be empty".to_string());
+	}
+	let (host, port) = parse_ollama_address(address)?;
+	let ollama = Ollama::new(host, port);
 
 	// --- Prompt 1: Tags ---
 	let prompt_tags = format!(
@@ -41,7 +71,7 @@ async fn run_ollama_prompts(
 		title, text
 	);
 	let tag_response = ollama
-		.generate(GenerationRequest::new(MODEL.to_string(), prompt_tags))
+		.generate(GenerationRequest::new(model.to_string(), prompt_tags))
 		.await
 		.map_err(|e| format!("Ollama tags error: {}", e))?;
 
@@ -64,7 +94,7 @@ async fn run_ollama_prompts(
 		title, text
 	);
 	let snippet_response = ollama
-		.generate(GenerationRequest::new(MODEL.to_string(), prompt_snippet))
+		.generate(GenerationRequest::new(model.to_string(), prompt_snippet))
 		.await
 		.map_err(|e| format!("Ollama snippet error: {}", e))?;
 
@@ -83,7 +113,7 @@ async fn run_ollama_prompts(
 		title, text
 	);
 	let summary_response = ollama
-		.generate(GenerationRequest::new(MODEL.to_string(), prompt_summary))
+		.generate(GenerationRequest::new(model.to_string(), prompt_summary))
 		.await
 		.map_err(|e| format!("Ollama summary error: {}", e))?;
 
@@ -96,10 +126,18 @@ const DEFAULT_ENRICH_LIMIT: usize = 5;
 
 /// Enriches a single `NewsItem` by fetching the article text and running
 /// Ollama prompts. Fields are only overwritten if they are currently empty.
-pub async fn enrich_news_item(mut item: NewsItem) -> Result<NewsItem, String> {
+pub async fn enrich_news_item(item: NewsItem) -> Result<NewsItem, String> {
+	enrich_news_item_with_config(item, None, None).await
+}
+
+pub async fn enrich_news_item_with_config(
+	mut item: NewsItem,
+	ollama_address: Option<&str>,
+	model: Option<&str>,
+) -> Result<NewsItem, String> {
 	let text = fetch_article_text(&item.url).await?;
 
-	let (tags, snippet, ai_summary) = run_ollama_prompts(&item.title, &text).await?;
+	let (tags, snippet, ai_summary) = run_ollama_prompts(&item.title, &text, ollama_address, model).await?;
 
 	if item.og_content.is_empty() {
 		item.og_content = text;
@@ -123,10 +161,19 @@ pub async fn enrich_news_items(
 	items: Vec<NewsItem>,
 	limit: Option<usize>,
 ) -> Vec<Result<NewsItem, String>> {
+	enrich_news_items_with_config(items, limit, None, None).await
+}
+
+pub async fn enrich_news_items_with_config(
+	items: Vec<NewsItem>,
+	limit: Option<usize>,
+	ollama_address: Option<&str>,
+	model: Option<&str>,
+) -> Vec<Result<NewsItem, String>> {
 	let limit = limit.unwrap_or(DEFAULT_ENRICH_LIMIT);
 	let mut results = Vec::new();
 	for item in items.into_iter().take(limit) {
-		results.push(enrich_news_item(item).await);
+		results.push(enrich_news_item_with_config(item, ollama_address, model).await);
 	}
 	results
 }
@@ -155,6 +202,7 @@ mod tests {
 			ai_summary: String::new(),
 			og_content: String::new(),
 			snippet: String::new(),
+			is_enriched: false,
 		};
 
 		let enriched = enrich_news_item(item).await.expect("enrich_news_item failed");

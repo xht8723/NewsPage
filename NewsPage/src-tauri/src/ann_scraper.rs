@@ -172,6 +172,7 @@ pub fn extract_news_item_fields(item_html: &str) -> Option<AnnNewsItem> {
         ai_summary: String::new(),
         og_content: String::new(),
         snippet: String::new(),
+        is_enriched: false,
     })
 }
 
@@ -207,6 +208,7 @@ mod tests {
             ai_summary: String::new(),
             og_content: String::new(),
             snippet: String::new(),
+            is_enriched: false,
         }
     }
 
