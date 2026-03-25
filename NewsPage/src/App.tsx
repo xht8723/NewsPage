@@ -1,4 +1,7 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   LayoutGrid,
   LayoutList,
@@ -13,33 +16,54 @@ import {
   RefreshCw,
   X,
   Settings,
+  SlidersHorizontal,
 } from "lucide-react";
 import "./App.css";
 
-const CATEGORIES = [
-  "All",
+const TOPIC_CATEGORIES = [
+  "World",
+  "Gaming",
+  "Anime",
   "Technology",
-  "Business",
-  "Politics",
   "Science",
-  "Health",
-  "Sports",
+  "Business",
   "Entertainment",
 ] as const;
 
+const CATEGORIES = ["All", ...TOPIC_CATEGORIES] as const;
+
 type Category = (typeof CATEGORIES)[number];
+type TopicCategory = (typeof TOPIC_CATEGORIES)[number];
 type LayoutMode = "grid" | "card" | "list";
 
 interface NewsArticle {
   id: string;
-  category: Exclude<Category, "All">;
-  tag: string;
+  category: TopicCategory;
+  tags: string[];
   title: string;
-  summary: string;
+  snippet: string;
+  aiSummary: string;
   content: string;
+  url: string;
   thumbnailUrl: string;
   date: string;
   timestamp: number;
+}
+
+interface BackendNewsItem {
+  id: string;
+  title: string;
+  url: string;
+  date: string;
+  source_name: string;
+  source_icon: string;
+  authors: string[];
+  thumbnail: string;
+  tags: string[];
+  category: string;
+  ai_summary: string;
+  og_content: string;
+  snippet: string;
 }
 
 interface UserSettings {
@@ -49,51 +73,83 @@ interface UserSettings {
   language: string;
 }
 
-const SAMPLE_TITLES: Record<Exclude<Category, "All">, string[]> = {
-  Technology: ["Open-source assistant reaches new speed milestone", "Battery breakthrough cuts charge time for EV fleets"],
-  Business: ["Regional retailers post stronger-than-expected quarter", "Logistics startup expands same-day delivery network"],
-  Politics: ["Parliament debates new transparency package", "City leaders announce cross-border climate partnership"],
-  Science: ["Astronomers identify unusual signal from nearby system", "Researchers map coral recovery after reef restoration"],
-  Health: ["Hospital network pilots AI-supported triage process", "Public health campaign improves early screening uptake"],
-  Sports: ["Underdog team clinches playoff spot in final minutes", "National federation unveils youth coaching initiative"],
-  Entertainment: ["Festival lineup blends indie cinema and live scoring", "Streaming platform greenlights ambitious historical series"],
+const DEFAULT_VISIBLE_CATEGORIES: Record<TopicCategory, boolean> = {
+  World: true,
+  Gaming: true,
+  Anime: true,
+  Technology: true,
+  Science: true,
+  Business: true,
+  Entertainment: true,
 };
 
-const SAMPLE_TAGS = [
-  "Breaking",
-  "Analysis",
-  "Field Report",
-  "Policy",
-  "Trends",
-  "Deep Dive",
-  "Watchlist",
-];
+function formatDateLocal(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
-function createMockArticles(date: string): NewsArticle[] {
-  const categories = CATEGORIES.filter((c): c is Exclude<Category, "All"> => c !== "All");
-  return categories.map((category, index) => {
-    const titleOptions = SAMPLE_TITLES[category];
-    const title = titleOptions[index % titleOptions.length];
-    const tag = SAMPLE_TAGS[(index + date.length) % SAMPLE_TAGS.length];
-    const summary = `${category} briefing for ${date}: ${title}. Early indicators show broad impact across local and global stakeholders.`;
-    const content = [
-      `${title} is shaping today's agenda in ${category.toLowerCase()} circles, with experts flagging momentum around execution and measurable outcomes.`,
-      "Observers describe the latest updates as practical rather than symbolic, with near-term actions expected over the next cycle.",
-      "Analysts will monitor follow-up announcements to confirm whether the current pace translates into durable results.",
-    ].join("\n");
+function offsetDateString(dateString: string, days: number): string {
+  const nextDate = new Date(`${dateString}T00:00:00`);
+  nextDate.setDate(nextDate.getDate() + days);
+  return formatDateLocal(nextDate);
+}
 
-    return {
-      id: `${date}-${category}-${index}`,
-      category,
-      tag,
-      title,
-      summary,
-      content,
-      thumbnailUrl: `https://picsum.photos/seed/${encodeURIComponent(`${date}-${category}-${index}`)}/640/360`,
-      date,
-      timestamp: Date.now() + index,
-    };
-  });
+function getUtcDateKey(dateValue: string): string {
+  const parsed = Date.parse(dateValue);
+  if (!Number.isNaN(parsed)) {
+    return new Date(parsed).toISOString().slice(0, 10);
+  }
+
+  return dateValue.slice(0, 10);
+}
+
+function toTopicCategory(value: string): TopicCategory {
+  const normalized = value.trim().toLowerCase();
+  const found = TOPIC_CATEGORIES.find((category) => category.toLowerCase() === normalized);
+  return found ?? "World";
+}
+
+function resolveThumbnailSrc(thumbnail: string): string {
+  const fallback = "https://placehold.co/640x360/27272a/a1a1aa?text=News";
+  const value = thumbnail.trim();
+  if (!value) {
+    return fallback;
+  }
+
+  if (/^(asset|tauri|file):/i.test(value)) {
+    return value;
+  }
+
+  if (/^https?:\/\//i.test(value)) {
+    return value;
+  }
+
+  try {
+    const normalizedPath = value.replace(/\\/g, "/");
+    return convertFileSrc(normalizedPath);
+  } catch {
+    return fallback;
+  }
+}
+
+function mapBackendNewsItem(item: BackendNewsItem): NewsArticle {
+  const parsedTimestamp = Date.parse(item.date);
+  const normalizedTags = item.tags.length > 0 ? item.tags : [item.source_name || "Update"];
+  return {
+    id: item.id,
+    category: toTopicCategory(item.category),
+    tags: normalizedTags,
+    title: item.title,
+    snippet: item.snippet || "",
+    aiSummary: item.ai_summary || "",
+    content: item.og_content || item.ai_summary || item.snippet || "Content unavailable.",
+    url: item.url || "",
+    thumbnailUrl: resolveThumbnailSrc(item.thumbnail),
+    date: getUtcDateKey(item.date),
+    timestamp: Number.isNaN(parsedTimestamp) ? Date.now() : parsedTimestamp,
+  };
 }
 
 function App(): React.JSX.Element {
@@ -101,11 +157,17 @@ function App(): React.JSX.Element {
   const [loading, setLoading] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<Category>("All");
   const [layout, setLayout] = useState<LayoutMode>("card");
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split("T")[0]);
+  const [selectedDate, setSelectedDate] = useState(() => formatDateLocal(new Date()));
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [showCalendar, setShowCalendar] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [selectedArticle, setSelectedArticle] = useState<NewsArticle | null>(null);
+  const [visibleCategories, setVisibleCategories] = useState<Record<TopicCategory, boolean>>(DEFAULT_VISIBLE_CATEGORIES);
+  const refreshTimeoutRef = useRef<number | null>(null);
+  const [enrichmentProgress, setEnrichmentProgress] = useState<{ current: number; total: number; enriched: number } | null>(null);
+  const todayString = formatDateLocal(new Date());
+  const canGoToNextDay = selectedDate < todayString;
 
   const [settings, setSettings] = useState<UserSettings>({
     aiEnhanced: true,
@@ -114,30 +176,155 @@ function App(): React.JSX.Element {
     language: "English",
   });
 
+  const fetchEnrichedNews = useCallback(async (filterByDate: boolean = true) => {
+    const categoryArg = selectedCategory === "All" ? null : selectedCategory.toLowerCase();
+    const rows = await invoke<BackendNewsItem[]>("get_enriched_news", {
+      category: categoryArg,
+      date: filterByDate ? selectedDate : null,
+      limit: 500,
+      offset: 0,
+    });
+
+    setNews(rows.map(mapBackendNewsItem));
+  }, [selectedCategory, selectedDate]);
+
+  const scheduleRefresh = useCallback((filterByDate: boolean) => {
+    if (refreshTimeoutRef.current !== null) {
+      window.clearTimeout(refreshTimeoutRef.current);
+    }
+
+    refreshTimeoutRef.current = window.setTimeout(() => {
+      void fetchEnrichedNews(filterByDate);
+    }, 300);
+  }, [fetchEnrichedNews]);
+
   const generateNews = async () => {
     setLoading(true);
-    await new Promise((resolve) => setTimeout(resolve, 450));
-    const generatedArticles = createMockArticles(selectedDate);
-    setNews((prev) => [...generatedArticles, ...prev.filter((item) => item.date !== selectedDate)]);
-    setLoading(false);
+    setNews([]);  // Clear articles to show "loading" state
+    setEnrichmentProgress({ current: 0, total: 0, enriched: 0 });
+    console.log("🚀 Starting enrichment pipeline...");
+    invoke("start_all_action")
+      .then(() => {
+        console.log("✅ Enrichment pipeline completed!");
+      })
+      .catch((error) => {
+        console.error("❌ Enrichment pipeline failed:", error);
+        setLoading(false);
+      });
+  };
+
+  const availableCategories = useMemo(
+    () => ["All", ...TOPIC_CATEGORIES.filter((category) => visibleCategories[category])] as Category[],
+    [visibleCategories],
+  );
+
+  useEffect(() => {
+    void fetchEnrichedNews();
+  }, [fetchEnrichedNews]);
+
+  useEffect(() => {
+    let unlistenUpdated: (() => void) | null = null;
+    let unlistenCompleted: (() => void) | null = null;
+
+    const initListeners = async () => {
+      try {
+        unlistenUpdated = await listen<{current: number; total: number; enriched_count: number}>("enriched-news-updated", (event) => {
+          console.log("📬 enriched-news-updated event received:", event.payload);
+          setEnrichmentProgress({
+            current: event.payload.current,
+            total: event.payload.total,
+            enriched: event.payload.enriched_count,
+          });
+          // While enriching, fetch without date filter so newly-enriched items are visible immediately.
+          scheduleRefresh(false);
+        });
+        console.log("✅ Listener registered: enriched-news-updated");
+      } catch (error) {
+        console.error("❌ Failed to register enriched-news-updated listener:", error);
+      }
+
+      try {
+        unlistenCompleted = await listen("enriched-news-sync-complete", (event) => {
+          console.log("📬 enriched-news-sync-complete event received:", event.payload);
+          setEnrichmentProgress(null);
+          setLoading(false);
+          // Fetch with current date/category filter now that enrichment is done
+          void fetchEnrichedNews(true);
+        });
+        console.log("✅ Listener registered: enriched-news-sync-complete");
+      } catch (error) {
+        console.error("❌ Failed to register enriched-news-sync-complete listener:", error);
+      }
+    };
+
+    void initListeners();
+
+    return () => {
+      if (refreshTimeoutRef.current !== null) {
+        window.clearTimeout(refreshTimeoutRef.current);
+        refreshTimeoutRef.current = null;
+      }
+      if (unlistenUpdated) {
+        unlistenUpdated();
+      }
+      if (unlistenCompleted) {
+        unlistenCompleted();
+      }
+    };
+  }, [scheduleRefresh]);
+
+  useEffect(() => {
+    if (selectedCategory !== "All" && !visibleCategories[selectedCategory] && availableCategories.length > 0) {
+      setSelectedCategory(availableCategories[0]);
+    }
+  }, [availableCategories, selectedCategory, visibleCategories]);
+
+  const toggleCategoryVisibility = (category: TopicCategory) => {
+    setVisibleCategories((current) => {
+      const visibleCount = TOPIC_CATEGORIES.filter((item) => current[item]).length;
+      if (current[category] && visibleCount === 1) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [category]: !current[category],
+      };
+    });
   };
 
   const filteredNews = useMemo(() => {
-    const dateFiltered = news.filter((item) => item.date === selectedDate);
-    if (selectedCategory === "All") {
-      return dateFiltered;
+    const sortedNews = [...news].sort((left, right) => {
+      if (left.date === right.date) {
+        return right.timestamp - left.timestamp;
+      }
+      return right.date.localeCompare(left.date);
+    });
+
+    if (enrichmentProgress !== null) {
+      if (selectedCategory === "All") {
+        return sortedNews.filter((item) => visibleCategories[item.category]);
+      }
+      return sortedNews.filter((item) => item.category === selectedCategory);
     }
+
+    const dateFiltered = sortedNews.filter((item) => item.date === selectedDate);
+
+    if (selectedCategory === "All") {
+      return dateFiltered.filter((item) => visibleCategories[item.category]);
+    }
+
     return dateFiltered.filter((item) => item.category === selectedCategory);
-  }, [news, selectedCategory, selectedDate]);
+  }, [enrichmentProgress, news, selectedCategory, selectedDate, visibleCategories]);
 
   const getTagColor = (category: NewsArticle["category"]) => {
     const colors: Record<NewsArticle["category"], string> = {
+      World: "bg-sky-500/90",
+      Gaming: "bg-violet-500/90",
+      Anime: "bg-pink-500/90",
       Technology: "bg-indigo-500/90",
-      Business: "bg-emerald-500/90",
-      Politics: "bg-rose-500/90",
       Science: "bg-amber-500/90",
-      Health: "bg-teal-500/90",
-      Sports: "bg-orange-500/90",
+      Business: "bg-emerald-500/90",
       Entertainment: "bg-fuchsia-500/90",
     };
     return colors[category] || "bg-zinc-500";
@@ -154,8 +341,49 @@ function App(): React.JSX.Element {
         </div>
 
         <nav className="flex-1 space-y-1.5 overflow-y-auto p-4">
-          <p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-widest text-zinc-500">Categories</p>
-          {CATEGORIES.map((cat) => (
+          <div className="mb-3 flex items-center justify-between px-3">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Categories</p>
+            <button
+              onClick={() => setShowCategoryManager((current) => !current)}
+              className={`inline-flex items-center rounded-full border p-1.5 transition-colors ${
+                isDarkMode ? "border-zinc-800 text-zinc-400 hover:bg-zinc-800" : "border-zinc-200 text-zinc-600 hover:bg-zinc-200"
+              }`}
+              aria-label="Manage visible categories"
+            >
+              <SlidersHorizontal size={12} />
+            </button>
+          </div>
+
+          {showCategoryManager && (
+            <div className={`mb-4 space-y-2 rounded-2xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/70" : "border-zinc-200 bg-white"}`}>
+              {TOPIC_CATEGORIES.map((category) => {
+                const visibleCount = TOPIC_CATEGORIES.filter((item) => visibleCategories[item]).length;
+                const isLastVisible = visibleCategories[category] && visibleCount === 1;
+
+                return (
+                  <button
+                    key={`${category}-visibility`}
+                    onClick={() => toggleCategoryVisibility(category)}
+                    disabled={isLastVisible}
+                    className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs font-bold transition-all ${
+                      visibleCategories[category]
+                        ? isDarkMode
+                          ? "bg-zinc-800 text-zinc-100"
+                          : "bg-zinc-100 text-zinc-900"
+                        : isDarkMode
+                          ? "bg-zinc-900 text-zinc-500"
+                          : "bg-zinc-50 text-zinc-500"
+                    } ${isLastVisible ? "cursor-not-allowed opacity-50" : "hover:opacity-90"}`}
+                  >
+                    <span>{category}</span>
+                    <span className="text-[10px] uppercase tracking-widest">{visibleCategories[category] ? "Shown" : "Hidden"}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {availableCategories.map((cat) => (
             <button
               key={cat}
               onClick={() => setSelectedCategory(cat)}
@@ -171,6 +399,12 @@ function App(): React.JSX.Element {
               {selectedCategory === cat && <ChevronRight size={14} />}
             </button>
           ))}
+
+          {availableCategories.length === 0 && (
+            <div className="rounded-2xl border border-dashed border-zinc-700 px-3 py-4 text-xs text-zinc-500">
+              Select at least one topic to keep the feed visible.
+            </div>
+          )}
         </nav>
 
         <div className="space-y-4 border-t border-inherit p-4">
@@ -188,6 +422,30 @@ function App(): React.JSX.Element {
               <p className="text-xs font-bold">{selectedDate}</p>
             </div>
           </button>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => setSelectedDate((currentDate) => offsetDateString(currentDate, -1))}
+              className={`rounded-xl border px-3 py-2 text-[10px] font-black uppercase tracking-widest transition-all ${
+                isDarkMode
+                  ? "border-zinc-800 bg-zinc-950/50 text-zinc-300 hover:bg-zinc-800"
+                  : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-200"
+              }`}
+            >
+              Yesterday
+            </button>
+            {canGoToNextDay && (
+              <button
+                onClick={() => setSelectedDate((currentDate) => offsetDateString(currentDate, 1))}
+                className={`rounded-xl border px-3 py-2 text-[10px] font-black uppercase tracking-widest transition-all ${
+                  isDarkMode
+                    ? "border-zinc-800 bg-zinc-950/50 text-zinc-300 hover:bg-zinc-800"
+                    : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-200"
+                }`}
+              >
+                Next day
+              </button>
+            )}
+          </div>
         </div>
       </aside>
 
@@ -195,7 +453,22 @@ function App(): React.JSX.Element {
         <header className="mb-8 flex flex-col justify-between gap-4 md:flex-row md:items-center">
           <div>
             <h2 className={`text-2xl font-black ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{selectedCategory} News</h2>
-            <p className="text-sm font-medium text-zinc-500">Session briefing for {selectedDate}</p>
+            <p className="text-sm font-medium text-zinc-500">
+              {enrichmentProgress ? (
+                <span
+                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 font-semibold shadow-sm ${
+                    isDarkMode
+                      ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                      : "border-emerald-400 bg-emerald-50 text-emerald-800"
+                  }`}
+                >
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                  Enriching: {enrichmentProgress.current}/{enrichmentProgress.total} items ({enrichmentProgress.enriched} completed)
+                </span>
+              ) : (
+                selectedCategory === "All" ? `All briefings for ${selectedDate}` : `Session briefing for ${selectedDate}`
+              )}
+            </p>
           </div>
 
           <div className="flex items-center gap-2">
@@ -229,7 +502,7 @@ function App(): React.JSX.Element {
             <Search size={48} className="text-zinc-500" />
             <div>
               <h3 className="text-lg font-bold">No briefings for this date</h3>
-              <p className="text-sm">Click Generate to create local mock news for {selectedDate}.</p>
+              <p className="text-sm">Click Generate to run the backend pipeline and populate enriched news for {selectedDate}.</p>
             </div>
           </div>
         ) : (
@@ -269,7 +542,13 @@ function App(): React.JSX.Element {
                     <span className={`rounded px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-white shadow-sm ${getTagColor(item.category)}`}>
                       {item.category}
                     </span>
-                    <span className="rounded bg-zinc-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-zinc-500">{item.tag}</span>
+                  </div>
+                  <div className="mb-4 flex flex-wrap gap-1.5">
+                    {item.tags.map((tag, tagIndex) => (
+                      <span key={`${item.id}-tag-${tagIndex}`} className="rounded bg-zinc-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-zinc-500">
+                        {tag}
+                      </span>
+                    ))}
                   </div>
                   <h3
                     className={`${settings.compactView ? "text-base" : "text-lg"} mb-3 font-bold leading-tight transition-colors ${
@@ -279,7 +558,7 @@ function App(): React.JSX.Element {
                     {item.title}
                   </h3>
                   {!settings.compactView && (
-                    <p className={`mb-5 text-sm leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-600"}`}>{item.summary}</p>
+                    <p className={`mb-5 text-sm leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-600"}`}>{item.snippet}</p>
                   )}
                   <div
                     className={`mt-auto flex items-center text-[10px] font-black uppercase tracking-widest opacity-60 transition-opacity group-hover:opacity-100 ${
@@ -443,21 +722,49 @@ function App(): React.JSX.Element {
                   {selectedArticle.title}
                 </h2>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <span className="rounded-full bg-zinc-500/20 px-3 py-1 text-[10px] font-bold uppercase tracking-widest opacity-70">{selectedArticle.tag}</span>
+                  {selectedArticle.tags.map((tag, tagIndex) => (
+                    <span key={`${selectedArticle.id}-detail-tag-${tagIndex}`} className="rounded-full bg-zinc-500/20 px-3 py-1 text-[10px] font-bold uppercase tracking-widest opacity-70">
+                      {tag}
+                    </span>
+                  ))}
                   <span className="rounded-full bg-zinc-500/20 px-3 py-1 text-[10px] font-bold uppercase tracking-widest opacity-70">{selectedArticle.date}</span>
                 </div>
               </div>
 
               <div className={`rounded-2xl border-l-4 p-6 ${isDarkMode ? "border-zinc-400 bg-zinc-900" : "border-zinc-800 bg-white"}`}>
-                <p className={`text-xl font-medium italic leading-relaxed ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>
-                  "{selectedArticle.summary}"
-                </p>
+                <ReactMarkdown
+                  components={{
+                    ul: ({ children }) => (
+                      <ul className={`space-y-2 text-lg leading-relaxed ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{children}</ul>
+                    ),
+                    li: ({ children }) => (
+                      <li className="flex gap-2">
+                        <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${isDarkMode ? "bg-zinc-400" : "bg-zinc-600"}`} />
+                        <span>{children}</span>
+                      </li>
+                    ),
+                    p: ({ children }) => (
+                      <p className={`text-lg leading-relaxed ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{children}</p>
+                    ),
+                  }}
+                >
+                  {selectedArticle.aiSummary}
+                </ReactMarkdown>
               </div>
 
               <div className={`space-y-6 text-lg leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-700"}`}>
-                {selectedArticle.content.split("\n").map((para, i) => (
-                  <p key={i}>{para}</p>
-                ))}
+                {selectedArticle.url && (
+                  <button
+                    onClick={() => invoke("open_url", { url: selectedArticle.url })}
+                    className={`inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors ${
+                      isDarkMode
+                        ? "bg-zinc-700 text-zinc-100 hover:bg-zinc-600"
+                        : "bg-zinc-200 text-zinc-900 hover:bg-zinc-300"
+                    }`}
+                  >
+                    Open Original Article
+                  </button>
+                )}
               </div>
             </div>
           </article>

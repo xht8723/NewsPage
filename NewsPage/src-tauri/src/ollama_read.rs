@@ -55,7 +55,7 @@ async fn run_ollama_prompts(
 
 	// --- Prompt 2: Snippet (one sentence) ---
 	let prompt_snippet = format!(
-		"You are a news summarizer. Write exactly ONE sentence that captures the most important point of the article below.\n\
+		"You are a news summarizer. Write exactly ONE sentence that captures the most important point of the article below\n\
 		Rules:\n\
 		- Output ONLY the single sentence. No explanation. No prefix.\n\
 		- Be concise and factual.\n\n\
@@ -74,9 +74,10 @@ async fn run_ollama_prompts(
 	let prompt_summary = format!(
 		"You are a precise news summarizer. Write a clear, well-structured summary of the article below.\n\
 		Rules:\n\
-		- 3 to 5 sentences.\n\
-		- Cover the key who, what, when, where, and why.\n\
-		- Output ONLY the summary text. No titles. No bullet points.\n\n\
+		- Write 3 to 10 bullet points.\n\
+		- Each bullet point starts with '- ' and is one concise sentence.\n\
+		- Cover the key who, what, when, where, and why across the bullets.\n\
+		- Output ONLY the bullet points. No titles. No intro text.\n\n\
 		Title: {}\n\
 		Article: {}",
 		title, text
@@ -91,12 +92,10 @@ async fn run_ollama_prompts(
 	Ok((tags, snippet, ai_summary))
 }
 
-/// Enriches a `NewsItem` by:
-/// 1. Fetching the article text from `item.url` via trafilatura.
-/// 2. Running three Ollama prompts (tags, snippet, full summary).
-/// 3. Filling in `og_content`, `tags`, `snippet`, and `ai_summary`.
-///
-/// Fields are only overwritten if they are currently empty.
+const DEFAULT_ENRICH_LIMIT: usize = 5;
+
+/// Enriches a single `NewsItem` by fetching the article text and running
+/// Ollama prompts. Fields are only overwritten if they are currently empty.
 pub async fn enrich_news_item(mut item: NewsItem) -> Result<NewsItem, String> {
 	let text = fetch_article_text(&item.url).await?;
 
@@ -116,6 +115,20 @@ pub async fn enrich_news_item(mut item: NewsItem) -> Result<NewsItem, String> {
 	}
 
 	Ok(item)
+}
+
+/// Enriches up to `limit` items (default: 5) from `items`.
+/// Returns one `Result` per processed item in the same order.
+pub async fn enrich_news_items(
+	items: Vec<NewsItem>,
+	limit: Option<usize>,
+) -> Vec<Result<NewsItem, String>> {
+	let limit = limit.unwrap_or(DEFAULT_ENRICH_LIMIT);
+	let mut results = Vec::new();
+	for item in items.into_iter().take(limit) {
+		results.push(enrich_news_item(item).await);
+	}
+	results
 }
 
 #[cfg(test)]

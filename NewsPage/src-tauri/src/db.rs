@@ -39,12 +39,13 @@ pub async fn init_db(db_path: &str) -> Result<SqlitePool, sqlx::Error> {
 		.await?;
 
 	create_news_table(&pool).await?;
+	create_unenriched_news_table(&pool).await?;
 	Ok(pool)
 }
 
 pub async fn create_news_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 	sqlx::query(
-		"CREATE TABLE IF NOT EXISTS news_items (
+		"CREATE TABLE IF NOT EXISTS enriched_news (
 			id TEXT PRIMARY KEY,
 			title TEXT NOT NULL,
 			url TEXT NOT NULL,
@@ -65,22 +66,95 @@ pub async fn create_news_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 	.execute(pool)
 	.await?;
 
-	sqlx::query("CREATE INDEX IF NOT EXISTS idx_news_items_date ON news_items(date)")
+	sqlx::query("CREATE INDEX IF NOT EXISTS idx_enriched_news_date ON enriched_news(date)")
 		.execute(pool)
 		.await?;
-	sqlx::query("CREATE INDEX IF NOT EXISTS idx_news_items_category ON news_items(category)")
+	sqlx::query("CREATE INDEX IF NOT EXISTS idx_enriched_news_category ON enriched_news(category)")
 		.execute(pool)
 		.await?;
-	sqlx::query("CREATE INDEX IF NOT EXISTS idx_news_items_source_name ON news_items(source_name)")
+	sqlx::query("CREATE INDEX IF NOT EXISTS idx_enriched_news_source_name ON enriched_news(source_name)")
 		.execute(pool)
 		.await?;
 
 	Ok(())
 }
 
+pub async fn create_unenriched_news_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+	sqlx::query(
+		"CREATE TABLE IF NOT EXISTS unenriched_news (
+			id TEXT PRIMARY KEY,
+			title TEXT NOT NULL,
+			url TEXT NOT NULL,
+			date TEXT NOT NULL,
+			source_name TEXT NOT NULL,
+			source_icon TEXT NOT NULL,
+			authors TEXT NOT NULL DEFAULT '[]',
+			thumbnail TEXT NOT NULL,
+			tags TEXT NOT NULL DEFAULT '[]',
+			category TEXT NOT NULL,
+			ai_summary TEXT NOT NULL,
+			og_content TEXT NOT NULL,
+			snippet TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)",
+	)
+	.execute(pool)
+	.await?;
+
+	sqlx::query("CREATE INDEX IF NOT EXISTS idx_unenriched_news_date ON unenriched_news(date)")
+		.execute(pool)
+		.await?;
+	sqlx::query("CREATE INDEX IF NOT EXISTS idx_unenriched_news_category ON unenriched_news(category)")
+		.execute(pool)
+		.await?;
+
+	Ok(())
+}
+
+pub async fn upsert_unenriched_article(pool: &SqlitePool, article: &NewsItem) -> Result<(), sqlx::Error> {
+	sqlx::query(
+		"INSERT INTO unenriched_news (
+			id, title, url, date, source_name, source_icon, authors,
+			thumbnail, tags, category, ai_summary, og_content, snippet
+		) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+		ON CONFLICT(id) DO UPDATE SET
+			title = excluded.title,
+			url = excluded.url,
+			date = excluded.date,
+			source_name = excluded.source_name,
+			source_icon = excluded.source_icon,
+			authors = excluded.authors,
+			thumbnail = excluded.thumbnail,
+			tags = excluded.tags,
+			category = excluded.category,
+			ai_summary = excluded.ai_summary,
+			og_content = excluded.og_content,
+			snippet = excluded.snippet,
+			updated_at = CURRENT_TIMESTAMP",
+	)
+	.bind(&article.id)
+	.bind(&article.title)
+	.bind(&article.url)
+	.bind(&article.date)
+	.bind(&article.source_name)
+	.bind(&article.source_icon)
+	.bind(encode_string_list(&article.authors))
+	.bind(&article.thumbnail)
+	.bind(encode_string_list(&article.tags))
+	.bind(&article.category)
+	.bind(&article.ai_summary)
+	.bind(&article.og_content)
+	.bind(&article.snippet)
+	.execute(pool)
+	.await?;
+
+	Ok(())
+}
+
 pub async fn insert_article(pool: &SqlitePool, article: &NewsItem) -> Result<(), sqlx::Error> {
 	sqlx::query(
-		"INSERT INTO news_items (
+		"INSERT INTO enriched_news (
 			id, title, url, date, source_name, source_icon, authors,
 			thumbnail, tags, category, ai_summary, og_content, snippet
 		) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
@@ -106,7 +180,7 @@ pub async fn insert_article(pool: &SqlitePool, article: &NewsItem) -> Result<(),
 
 pub async fn upsert_article(pool: &SqlitePool, article: &NewsItem) -> Result<(), sqlx::Error> {
 	sqlx::query(
-		"INSERT INTO news_items (
+		"INSERT INTO enriched_news (
 			id, title, url, date, source_name, source_icon, authors,
 			thumbnail, tags, category, ai_summary, og_content, snippet
 		) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
@@ -148,7 +222,7 @@ pub async fn get_article_by_id(pool: &SqlitePool, id: &str) -> Result<Option<New
 	let row = sqlx::query(
 		"SELECT id, title, url, date, source_name, source_icon, authors,
 				thumbnail, tags, category, ai_summary, og_content, snippet
-		 FROM news_items
+		 FROM enriched_news
 		 WHERE id = ?1",
 	)
 	.bind(id)
@@ -162,7 +236,7 @@ pub async fn list_articles(pool: &SqlitePool, limit: i64, offset: i64) -> Result
 	let rows = sqlx::query(
 		"SELECT id, title, url, date, source_name, source_icon, authors,
 				thumbnail, tags, category, ai_summary, og_content, snippet
-		 FROM news_items
+		 FROM enriched_news
 		 ORDER BY date DESC
 		 LIMIT ?1 OFFSET ?2",
 	)
@@ -183,7 +257,7 @@ pub async fn get_articles_by_category(
 	let rows = sqlx::query(
 		"SELECT id, title, url, date, source_name, source_icon, authors,
 				thumbnail, tags, category, ai_summary, og_content, snippet
-		 FROM news_items
+		 FROM enriched_news
 		 WHERE category = ?1
 		 ORDER BY date DESC
 		 LIMIT ?2 OFFSET ?3",
@@ -201,7 +275,7 @@ pub async fn get_articles_on_date(pool: &SqlitePool, date: &str) -> Result<Vec<N
 	let rows = sqlx::query(
 		"SELECT id, title, url, date, source_name, source_icon, authors,
 				thumbnail, tags, category, ai_summary, og_content, snippet
-		 FROM news_items
+		 FROM enriched_news
 		 WHERE date = ?1
 		 ORDER BY date DESC",
 	)
@@ -222,7 +296,7 @@ pub async fn search_articles_by_title(
 	let rows = sqlx::query(
 		"SELECT id, title, url, date, source_name, source_icon, authors,
 				thumbnail, tags, category, ai_summary, og_content, snippet
-		 FROM news_items
+		 FROM enriched_news
 		 WHERE title LIKE ?1
 		 ORDER BY date DESC
 		 LIMIT ?2 OFFSET ?3",
@@ -243,7 +317,7 @@ pub async fn update_summary_and_tags(
 	tags: &[String],
 ) -> Result<bool, sqlx::Error> {
 	let result = sqlx::query(
-		"UPDATE news_items
+		"UPDATE enriched_news
 		 SET ai_summary = ?1,
 			 tags = ?2,
 			 updated_at = CURRENT_TIMESTAMP
@@ -259,7 +333,16 @@ pub async fn update_summary_and_tags(
 }
 
 pub async fn delete_article_by_id(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
-	let result = sqlx::query("DELETE FROM news_items WHERE id = ?1")
+	let result = sqlx::query("DELETE FROM enriched_news WHERE id = ?1")
+		.bind(id)
+		.execute(pool)
+		.await?;
+
+	Ok(result.rows_affected() > 0)
+}
+
+pub async fn delete_unenriched_article_by_id(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
+	let result = sqlx::query("DELETE FROM unenriched_news WHERE id = ?1")
 		.bind(id)
 		.execute(pool)
 		.await?;

@@ -1,3 +1,4 @@
+use chrono::DateTime;
 use std::collections::HashSet;
 use std::collections::HashMap;
 use serpapi_search_rust::serp_api_search::SerpApiSearch;
@@ -16,6 +17,7 @@ const TOPIC_SCIENCE: &str = "CAAqKggKIiRDQkFTRlFvSUwyMHZNRFp0Y1RjU0JXVnVMVWRDR2d
 const TOPIC_ENTERTAINMENT: &str = "CAAqKggKIiRDQkFTRlFvSUwyMHZNREpxYW5RU0JXVnVMVWRDR2dKRFFTZ0FQAQ";
 const TOPIC_BUSINESS: &str = "CAAqKggKIiRDQkFTRlFvSUwyMHZNRGx6TVdZU0JXVnVMVWRDR2dKRFFTZ0FQAQ";
 const TOPIC_ANIME: &str = "CAAqJAgKIh5DQkFTRUFvSEwyMHZNR3A0ZVJJRlpXNHRSMElvQUFQAQ";
+const DEFAULT_SERP_ITEM_LIMIT: usize = 100;
 
 const SUPPORTED_TOPICS: [(&str, &str); 7] = [
 	("gaming", TOPIC_GAMING),
@@ -158,27 +160,62 @@ pub fn parse_serp_api_value(payload: &Value) -> Result<Vec<SerpNewsItem>, String
 	parse_serp_api_result(&raw)
 }
 
-pub async fn scrape_serp(query: &str) -> Result<Vec<SerpNewsItem>, String> {
+fn parse_serp_timestamp(date: &str) -> Option<i64> {
+	DateTime::parse_from_rfc3339(date)
+		.ok()
+		.map(|datetime| datetime.timestamp())
+		.or_else(|| {
+			DateTime::parse_from_str(date.trim_end_matches(" UTC"), "%m/%d/%Y, %I:%M %p, %z")
+				.ok()
+				.map(|datetime| datetime.timestamp())
+		})
+}
+
+fn serp_sort_key(item: &SerpNewsItem) -> (Option<i64>, String) {
+	(parse_serp_timestamp(&item.date), item.date.clone())
+}
+
+fn sort_serp_news_items_by_date_desc(items: &mut [SerpNewsItem]) {
+	items.sort_by(|left, right| serp_sort_key(right).cmp(&serp_sort_key(left)));
+}
+
+fn truncate_serp_news_items(items: &mut Vec<SerpNewsItem>, limit: Option<usize>) {
+	let limit = limit.unwrap_or(DEFAULT_SERP_ITEM_LIMIT);
+	items.truncate(limit);
+}
+
+async fn collect_serp_items(query: &str) -> Result<Vec<SerpNewsItem>, String> {
 	let response = get_serp_search_results(query).await?;
 	parse_serp_api_value(&response)
+}
+
+pub async fn scrape_serp(query: &str, limit: Option<usize>) -> Result<Vec<SerpNewsItem>, String> {
+	let mut items = collect_serp_items(query).await?;
+	sort_serp_news_items_by_date_desc(&mut items);
+	truncate_serp_news_items(&mut items, limit);
+	Ok(items)
 }
 
 pub async fn scrape_serp_topics(
 	include_topics: &[String],
 	exclude_topics: &[String],
+	limit: Option<usize>,
 ) -> Result<Vec<SerpNewsItem>, String> {
 	let topics = resolve_selected_topics(include_topics, exclude_topics)?;
 	let mut all_items: Vec<SerpNewsItem> = Vec::new();
 	let mut seen_ids: HashSet<String> = HashSet::new();
 
 	for topic in topics {
-		let items = scrape_serp(&topic).await?;
+		let items = collect_serp_items(&topic).await?;
 		for item in items {
 			if seen_ids.insert(item.id.clone()) {
 				all_items.push(item);
 			}
 		}
 	}
+
+	sort_serp_news_items_by_date_desc(&mut all_items);
+	truncate_serp_news_items(&mut all_items, limit);
 
 	Ok(all_items)
 }
@@ -287,7 +324,33 @@ pub fn parse_serp_api_result(payload: &str) -> Result<Vec<SerpNewsItem>, String>
 
 #[cfg(test)]
 mod tests {
-	use super::{parse_serp_api_result, resolve_selected_topics, scrape_serp, list_supported_topics};
+	use super::{
+		list_supported_topics,
+		parse_serp_api_result,
+		resolve_selected_topics,
+		scrape_serp,
+		sort_serp_news_items_by_date_desc,
+		truncate_serp_news_items,
+		SerpNewsItem,
+	};
+
+	fn test_item(title: &str, date: &str) -> SerpNewsItem {
+		SerpNewsItem {
+			id: title.to_string(),
+			title: title.to_string(),
+			url: format!("https://example.com/{title}"),
+			date: date.to_string(),
+			source_name: String::new(),
+			source_icon: String::new(),
+			authors: Vec::new(),
+			thumbnail: String::new(),
+			tags: Vec::new(),
+			category: "gaming".to_string(),
+			ai_summary: String::new(),
+			og_content: String::new(),
+			snippet: String::new(),
+		}
+	}
 
 	#[test]
 	fn parses_serp_fixture_into_flat_news_items() {
@@ -338,7 +401,7 @@ mod tests {
 			return;
 		}
 
-		let items = scrape_serp("latest gaming news")
+		let items = scrape_serp("gaming", None)
 			.await
 			.expect("Expected live SerpAPI request to parse");
 		assert!(!items.is_empty());
@@ -355,7 +418,7 @@ mod tests {
 		let include = vec!["gaming".to_string(), "world".to_string()];
 		let exclude: Vec<String> = vec![];
 
-		let items = super::scrape_serp_topics(&include, &exclude)
+		let items = super::scrape_serp_topics(&include, &exclude, None)
 			.await
 			.expect("scrape_serp_topics failed");
 
@@ -374,5 +437,42 @@ mod tests {
 		}
 
 		assert!(!items.is_empty(), "Expected at least one news item");
+	}
+
+	#[test]
+	fn sorts_serp_news_items_by_date_desc() {
+		let mut items = vec![
+			test_item("older", "2026-03-22T15:19:26Z"),
+			test_item("newest", "2026-03-23T02:16:31Z"),
+			test_item("middle", "03/22/2026, 07:40 PM, +0000 UTC"),
+		];
+
+		sort_serp_news_items_by_date_desc(&mut items);
+
+		assert_eq!(items[0].title, "newest");
+		assert_eq!(items[1].title, "middle");
+		assert_eq!(items[2].title, "older");
+	}
+
+	#[test]
+	fn truncates_serp_news_items_to_default_limit() {
+		let mut items: Vec<_> = (0..12)
+			.map(|index| test_item(&format!("item-{index}"), "2026-03-23T02:16:31Z"))
+			.collect();
+
+		truncate_serp_news_items(&mut items, None);
+
+		assert_eq!(items.len(), 10);
+	}
+
+	#[test]
+	fn truncates_serp_news_items_to_requested_limit() {
+		let mut items: Vec<_> = (0..12)
+			.map(|index| test_item(&format!("item-{index}"), "2026-03-23T02:16:31Z"))
+			.collect();
+
+		truncate_serp_news_items(&mut items, Some(4));
+
+		assert_eq!(items.len(), 4);
 	}
 }
