@@ -4,18 +4,6 @@
   "description": "Capability for the main window",
   "windows": ["main"],
   "permissions": [
-    "core:default",
-    "opener:default",
-    "shell:allow-execute",
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "args": true,
-          "sidecar": true,
-          "name": "../extractor_python/dist/text_extractor"
-        }
-      ]
-    }
+    "core:default"
   ]
 }

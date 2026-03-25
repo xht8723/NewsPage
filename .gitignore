@@ -1,3 +1,6 @@
 *.env
 serp_json_test.json
 tagged_news.json
+python_test_script
+enriched_newsItems_test.json
+newsItems_test.json
