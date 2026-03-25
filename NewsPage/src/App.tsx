@@ -4,6 +4,7 @@ import {
   LayoutList,
   CreditCard,
   Calendar,
+  ArrowLeft,
   Moon,
   Sun,
   Newspaper,
@@ -36,6 +37,7 @@ interface NewsArticle {
   title: string;
   summary: string;
   content: string;
+  thumbnailUrl: string;
   date: string;
   timestamp: number;
 }
@@ -87,6 +89,7 @@ function createMockArticles(date: string): NewsArticle[] {
       title,
       summary,
       content,
+      thumbnailUrl: `https://picsum.photos/seed/${encodeURIComponent(`${date}-${category}-${index}`)}/640/360`,
       date,
       timestamp: Date.now() + index,
     };
@@ -245,6 +248,22 @@ function App(): React.JSX.Element {
                   isDarkMode ? "border-zinc-800 bg-zinc-900 hover:border-zinc-600" : "border-zinc-200 bg-white hover:border-zinc-300"
                 } ${layout === "list" ? "flex flex-col gap-4 p-4 md:flex-row" : "flex flex-col"}`}
               >
+                <div
+                  className={`${
+                    layout === "list" ? "h-44 w-full md:h-auto md:w-56 md:flex-shrink-0" : settings.compactView ? "h-36 w-full" : "h-44 w-full"
+                  } overflow-hidden rounded-xl`}
+                >
+                  <img
+                    src={item.thumbnailUrl}
+                    alt={`${item.title} thumbnail`}
+                    loading="lazy"
+                    className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                    onError={(e) => {
+                      e.currentTarget.onerror = null;
+                      e.currentTarget.src = "https://placehold.co/640x360/27272a/a1a1aa?text=News";
+                    }}
+                  />
+                </div>
                 <div className={`${settings.compactView ? "p-4" : "p-6"} ${layout === "list" ? "md:py-2" : ""} flex flex-1 flex-col`}>
                   <div className="mb-4 flex items-center gap-2">
                     <span className={`rounded px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-white shadow-sm ${getTagColor(item.category)}`}>
@@ -381,21 +400,38 @@ function App(): React.JSX.Element {
       )}
 
       {selectedArticle && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setSelectedArticle(null)} />
+        <div className={`fixed inset-0 z-50 overflow-y-auto ${isDarkMode ? "bg-zinc-950 text-zinc-300" : "bg-zinc-100 text-zinc-800"}`}>
           <div
-            className={`relative max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl border shadow-2xl ${
-              isDarkMode ? "border-zinc-800 bg-zinc-900 text-zinc-300" : "bg-white text-zinc-800"
-            }`}
+            className={`sticky top-0 z-10 flex items-center border-b px-4 py-4 md:px-8 ${
+              isDarkMode ? "border-zinc-800 bg-zinc-950/95" : "border-zinc-200 bg-zinc-100/95"
+            } backdrop-blur-md`}
           >
             <button
               onClick={() => setSelectedArticle(null)}
-              className="absolute right-6 top-6 z-10 rounded-full bg-black/40 p-2 text-white transition-colors hover:bg-black/60"
+              className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-black uppercase tracking-widest transition-colors ${
+                isDarkMode ? "border-zinc-700 text-zinc-200 hover:bg-zinc-800" : "border-zinc-300 text-zinc-800 hover:bg-white"
+              }`}
             >
-              <X size={20} />
+              <ArrowLeft size={14} />
+              Return
             </button>
-            <div className={`p-8 pt-16 ${isDarkMode ? "bg-zinc-950/50" : "bg-zinc-100"}`}>
-              <div className="mb-6">
+          </div>
+
+          <article className="pb-16">
+            <div className="h-64 w-full md:h-[30rem]">
+              <img
+                src={selectedArticle.thumbnailUrl}
+                alt={`${selectedArticle.title} thumbnail`}
+                className="h-full w-full object-cover"
+                onError={(e) => {
+                  e.currentTarget.onerror = null;
+                  e.currentTarget.src = "https://placehold.co/1200x640/27272a/a1a1aa?text=News";
+                }}
+              />
+            </div>
+
+            <div className="mx-auto w-full max-w-5xl space-y-8 px-4 pt-8 md:px-8">
+              <div>
                 <span
                   className={`mb-4 inline-block rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest text-white shadow-sm ${getTagColor(
                     selectedArticle.category,
@@ -403,26 +439,28 @@ function App(): React.JSX.Element {
                 >
                   {selectedArticle.category}
                 </span>
-                <h2 className={`text-3xl font-black leading-tight ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{selectedArticle.title}</h2>
+                <h2 className={`text-3xl font-black leading-tight md:text-5xl ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>
+                  {selectedArticle.title}
+                </h2>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <span className="rounded-full bg-zinc-500/20 px-3 py-1 text-[10px] font-bold uppercase tracking-widest opacity-70">{selectedArticle.tag}</span>
+                  <span className="rounded-full bg-zinc-500/20 px-3 py-1 text-[10px] font-bold uppercase tracking-widest opacity-70">{selectedArticle.date}</span>
+                </div>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <span className="rounded-full bg-zinc-500/20 px-3 py-1 text-[10px] font-bold uppercase tracking-widest opacity-60">{selectedArticle.tag}</span>
-                <span className="rounded-full bg-zinc-500/20 px-3 py-1 text-[10px] font-bold uppercase tracking-widest opacity-60">{selectedArticle.date}</span>
-              </div>
-            </div>
-            <div className="space-y-8 p-8">
-              <div className={`rounded-2xl border-l-4 p-6 ${isDarkMode ? "border-zinc-400 bg-zinc-800" : "border-zinc-800 bg-zinc-50"}`}>
+
+              <div className={`rounded-2xl border-l-4 p-6 ${isDarkMode ? "border-zinc-400 bg-zinc-900" : "border-zinc-800 bg-white"}`}>
                 <p className={`text-xl font-medium italic leading-relaxed ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>
                   "{selectedArticle.summary}"
                 </p>
               </div>
-              <div className={`space-y-6 text-lg leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-600"}`}>
+
+              <div className={`space-y-6 text-lg leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-700"}`}>
                 {selectedArticle.content.split("\n").map((para, i) => (
                   <p key={i}>{para}</p>
                 ))}
               </div>
             </div>
-          </div>
+          </article>
         </div>
       )}
 
