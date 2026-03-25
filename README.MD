@@ -2,7 +2,7 @@
 
 A privacy-first, desktop news aggregation application powered entirely by local, small-parameter Large Language Models (<4B). NexNews fetches, categorizes, and summarizes news using Retrieval-Augmented Generation (RAG) while ensuring zero data leakage to cloud APIs and giving users absolute control over computational resources.
 
-<img src="image/README/1774185740499.png" alt="1774185740499" width="100%" style="max-width: 800px; height: auto;">
+<img src="image/README/1774438004542.png" alt="1774438004542" style="width: 100%; max-width: 800px; height: auto;" />
 
 ## Getting Started
 
