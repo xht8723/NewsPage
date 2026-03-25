@@ -1,60 +1,37 @@
-# NewsPage: Local AI News Aggregator
+# NewsPage
 
-A privacy-first, desktop news aggregation application powered entirely by local, small-parameter Large Language Models (<4B). NexNews fetches, categorizes, and summarizes news using Retrieval-Augmented Generation (RAG) while ensuring zero data leakage to cloud APIs and giving users absolute control over computational resources.
+NewsPage is a desktop AI news reader built with Tauri, Rust, and React. It fetches current headlines, enriches them locally with Ollama, and presents structured summaries and tags in a fast native-style UI.
 
-<img src="image/README/1774438004542.png" alt="1774438004542" style="width: 100%; max-width: 800px; height: auto;" />
+<img src="image/README/1774438004542.png" alt="NewsPage UI" style="width: 100%; max-width: 800px; height: auto;" />
 
-## Getting Started
+## Key Features
 
-For instructions on how to build and run the application, please see the [NewsPage/README.md](NewsPage/README.md) file.
+- Local AI enrichment with Ollama (model: `qwen2.5:3b`)
+- News ingestion through SerpAPI, then article parsing/enrichment in Rust
+- SQLite-backed storage with staged enrichment flow
+- Real-time frontend updates while enrichment is running
+- Thumbnail caching to app data for faster reloads
+- Detail view with structured AI summary and quick link to the original article
 
-## ✨ Core Features
+## Stack
 
-* **100% Local AI Processing:** Utilizes local models via Ollama (e.g., Phi-3, Qwen) for all summarization and tagging operations.
-* **Zero-Waste Compute:** Operates on an explicit "Start Processing" interaction model. The app remains completely dormant, consuming zero CPU/GPU resources until manually triggered.
-* **Anti-Hallucination RAG Pipeline:** Grounds LLM summaries strictly in fetched article text using a local vector database to prevent fabricated information.
-* **Intelligent Categorization:** Automatically sorts unstructured news feeds into semantic categories based on user interests.
-* **Native Performance:** Built with Tauri and Rust for a lightweight, high-performance native OS experience with a minimal RAM footprint compared to Electron.
+- Frontend: React + TypeScript + Vite + Tailwind
+- Desktop shell: Tauri 2
+- Backend: Rust + Tokio + SQLx (SQLite)
+- AI runtime: Ollama via `ollama-rs`
 
-## 🛠️ Technology Stack
+## Quick Start
 
-* **Frontend:** React (TypeScript), Tailwind CSS
-* **Framework:** Tauri (WebView2)
-* **Backend / System Interop:** Rust
-* **AI Engine:** Ollama (Local LLM & Embeddings)
-* **Database:** SQLite (Metadata/Preferences) + Local Vector DB (e.g., Qdrant or `sqlite-vss` for RAG)
+The full setup, build, and Ollama guide is in [NewsPage/README.md](NewsPage/README.md).
 
-## 🗺️ Development Roadmap
+In short:
 
-### Phase 1: Environment Setup & Prototyping
+1. Install Node.js, Rust, and WebView2 runtime.
+2. Install and run Ollama, then pull `qwen2.5:3b`.
+3. Create `.env` with `SERP_API=...`.
+4. Run the app with `npm run tauri dev` inside `NewsPage`.
 
-* [ ] Initialize Tauri project with React and Tailwind.
-* [ ] Install Ollama and benchmark <4B parameter models for speed and logic.
-* [ ] Build static UI skeleton (Grid/Card layout, "Start Processing" master button).
-* [ ] Initialize local SQLite database with `Articles`, `Categories`, and `UserPreferences` schemas.
+## Project Layout
 
-### Phase 2: Data Ingestion & RAG Foundation
-
-* [ ] Write Rust backend routines to fetch data from Google News/RSS APIs.
-* [ ] Wire the "Start Processing" UI trigger to the Rust fetch sequence.
-* [ ] Integrate local vector storage for article embeddings.
-* [ ] Configure embedding generation via Ollama (e.g., `nomic-embed-text`) for the fetched text.
-
-### Phase 3: The AI Pipeline
-
-* [ ] Implement RAG retrieval logic to match user interests against stored vectors.
-* [ ] Design strict system prompts for the local LLM to enforce JSON formatting and eliminate hallucinations.
-* [ ] Create the core processing loop: Fetch -> Embed -> Retrieve -> Summarize/Tag -> Save to SQLite.
-
-### Phase 4: UI Integration & Refinement
-
-* [ ] Establish Tauri IPC (Inter-Process Communication) to send processed data from Rust to React.
-* [ ] Dynamically render UI cards with AI-generated titles, summaries, and tags.
-* [ ] Implement detailed view for full summaries and and original source links.
-* [ ] Add dynamic UI states (loading indicators, progress bars during LLM processing).
-
-### Phase 5: Testing & Packaging
-
-* [ ] Profile system resources to verify zero background usage when idle.
-* [ ] Implement error handling for API limits, network drops, and Ollama timeouts.
-* [ ] Compile final Windows executable (`.msi` or `.exe`) using Tauri build tools.
+- `NewsPage/`: Tauri application source
+- `image/README/`: documentation images
