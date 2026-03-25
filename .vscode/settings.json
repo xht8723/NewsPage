@@ -1,7 +1,0 @@
-{
-    "python-envs.defaultEnvManager": "ms-python.python:system",
-    "chat.tools.terminal.autoApprove": {
-        "cargo check": true,
-        "npm run build": true
-    }
-}
