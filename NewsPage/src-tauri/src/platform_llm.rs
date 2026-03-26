@@ -895,6 +895,51 @@ impl LLMProviderImpl for GeminiProvider {
     }
 }
 
+/// Embedding model used for preference scoring (always via Ollama, local).
+pub const EMBED_MODEL: &str = "nomic-embed-text";
+
+/// Call Ollama's `/api/embed` endpoint and return the embedding vector.
+/// Uses the same `base_url` format as the rest of the Ollama integration
+/// (e.g. `"http://127.0.0.1:11434"`).
+pub async fn get_ollama_embedding(base_url: &str, input: &str) -> Result<Vec<f32>, String> {
+    #[derive(Serialize)]
+    struct EmbedRequest<'a> {
+        model: &'a str,
+        input: &'a str,
+    }
+
+    #[derive(Deserialize)]
+    struct EmbedResponse {
+        embeddings: Vec<Vec<f32>>,
+    }
+
+    let url = format!("{}/api/embed", base_url.trim_end_matches('/'));
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&EmbedRequest { model: EMBED_MODEL, input })
+        .send()
+        .await
+        .map_err(|e| format!("Ollama embed request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Ollama embed returned {}: {}", status, body));
+    }
+
+    let parsed: EmbedResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Ollama embed response: {}", e))?;
+
+    parsed
+        .embeddings
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Ollama embed returned empty embeddings array".to_string())
+}
+
 /// Factory function to create an LLM provider instance
 pub fn create_provider(config: &LLMConfig) -> Result<Box<dyn LLMProviderImpl>, String> {
     match &config.provider {

@@ -17,3 +17,13 @@ pub struct NewsItem {
     pub snippet: String,
     pub is_enriched: bool,
 }
+
+/// A `NewsItem` annotated with a preference relevance score in the range [-1.0, 1.0].
+/// Score 0.0 means no preference has been configured or the article has no embedding.
+/// The struct serializes flat (all `NewsItem` fields + `preference_score`) for the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RankedNewsItem {
+    #[serde(flatten)]
+    pub item: NewsItem,
+    pub preference_score: f32,
+}

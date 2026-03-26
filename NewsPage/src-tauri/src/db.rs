@@ -5,6 +5,19 @@ use std::str::FromStr;
 
 use crate::news_item::NewsItem;
 
+/// Encode a `Vec<f32>` as a flat little-endian byte blob for SQLite BLOB storage.
+pub fn encode_embedding(vec: &[f32]) -> Vec<u8> {
+    vec.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+
+/// Decode a flat little-endian byte blob back to `Vec<f32>`.
+pub fn decode_embedding(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}
+
 fn encode_string_list(items: &[String]) -> String {
 serde_json::to_string(items).unwrap_or_else(|_| "[]".to_string())
 }
@@ -74,14 +87,79 @@ sqlx::query("CREATE INDEX IF NOT EXISTS idx_news_category ON news(category)")
 sqlx::query("CREATE INDEX IF NOT EXISTS idx_news_is_enriched ON news(is_enriched)")
 .execute(pool).await?;
 
-Ok(())
+    // Migration: add embedding column to existing databases (safe to run on fresh DBs too).
+    let _ = sqlx::query("ALTER TABLE news ADD COLUMN embedding BLOB")
+        .execute(pool)
+        .await; // Ignore error — column already exists on existing databases.
+
+    Ok(())
 }
 
-/// Insert a new article with is_enriched = false.
-/// On conflict, update all metadata fields.
-/// is_enriched uses MAX() so it can never be downgraded from true to false.
-/// Enriched-only fields (tags, ai_summary, og_content, snippet, thumbnail)
-/// are only overwritten when the incoming row is itself enriched.
+/// Persist an embedding vector for the given article id.
+pub async fn save_embedding(pool: &SqlitePool, id: &str, embedding: &[f32]) -> Result<(), sqlx::Error> {
+    let blob = encode_embedding(embedding);
+    sqlx::query("UPDATE news SET embedding = ?1 WHERE id = ?2")
+        .bind(blob)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Return all enriched articles together with their stored embeddings.
+/// The embedding is `None` when the article has not been embedded yet.
+pub async fn get_articles_with_embeddings(
+    pool: &SqlitePool,
+    category: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<(NewsItem, Option<Vec<f32>>)>, sqlx::Error> {
+    let rows = if let Some(cat) = category {
+        sqlx::query(
+            "SELECT id, title, url, date, source_name, source_icon, authors,
+                    thumbnail, tags, category, ai_summary, og_content, snippet, is_enriched,
+                    embedding
+             FROM news
+             WHERE is_enriched = 1 AND category = ?1
+             ORDER BY date DESC
+             LIMIT ?2 OFFSET ?3",
+        )
+        .bind(cat)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query(
+            "SELECT id, title, url, date, source_name, source_icon, authors,
+                    thumbnail, tags, category, ai_summary, og_content, snippet, is_enriched,
+                    embedding
+             FROM news
+             WHERE is_enriched = 1
+             ORDER BY date DESC
+             LIMIT ?1 OFFSET ?2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?
+    };
+
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let item = row_to_news_item(row);
+            let embedding: Option<Vec<f32>> = row
+                .try_get::<Option<Vec<u8>>, _>("embedding")
+                .ok()
+                .flatten()
+                .filter(|b| !b.is_empty())
+                .map(|b| decode_embedding(&b));
+            (item, embedding)
+        })
+        .collect())
+}
+
 pub async fn upsert_article(pool: &SqlitePool, article: &NewsItem) -> Result<(), sqlx::Error> {
 sqlx::query(
 "INSERT INTO news (

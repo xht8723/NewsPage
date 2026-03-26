@@ -51,6 +51,7 @@ interface NewsArticle {
   sourceIconUrl: string;
   date: string;
   timestamp: number;
+  preferenceScore: number;
 }
 
 interface BackendNewsItem {
@@ -67,6 +68,7 @@ interface BackendNewsItem {
   ai_summary: string;
   og_content: string;
   snippet: string;
+  preference_score?: number;
 }
 
 interface UserSettings {
@@ -82,6 +84,9 @@ interface UserSettings {
   geminiApiKey: string;
   geminiModel: string;
   serpApiKey: string;
+  likedConcepts: string;
+  dislikedConcepts: string;
+  sortMode: string; // "date" | "score"
 }
 
 interface CardContextMenuState {
@@ -211,6 +216,7 @@ function mapBackendNewsItem(item: BackendNewsItem): NewsArticle {
     sourceIconUrl: resolveSourceIcon(item.source_name, item.source_icon),
     date: getUtcDateKey(item.date),
     timestamp: Number.isNaN(parsedTimestamp) ? Date.now() : parsedTimestamp,
+    preferenceScore: item.preference_score ?? 0,
   };
 }
 
@@ -227,6 +233,7 @@ function App(): React.JSX.Element {
   const [selectedArticle, setSelectedArticle] = useState<NewsArticle | null>(null);
   const [visibleCategories, setVisibleCategories] = useState<Record<TopicCategory, boolean>>(DEFAULT_VISIBLE_CATEGORIES);
   const refreshTimeoutRef = useRef<number | null>(null);
+  const fetchCounterRef = useRef(0);
   const [enrichmentProgress, setEnrichmentProgress] = useState<{ current: number; total: number; enriched: number } | null>(null);
   const [enrichmentError, setEnrichmentError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<CardContextMenuState | null>(null);
@@ -247,7 +254,11 @@ function App(): React.JSX.Element {
     geminiApiKey: "",
     geminiModel: "gemini-2.5-flash",
     serpApiKey: "",
+    likedConcepts: "",
+    dislikedConcepts: "",
+    sortMode: "date",
   });
+  const isRelevanceMode = settings.sortMode === "score";
   const [ollamaConnectionState, setOllamaConnectionState] = useState<OllamaConnectionState>("unknown");
   const [isTestingOllama, setIsTestingOllama] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
@@ -275,6 +286,9 @@ function App(): React.JSX.Element {
           geminiApiKey: saved.geminiApiKey ?? prev.geminiApiKey,
           geminiModel: saved.geminiModel?.trim() ? saved.geminiModel : prev.geminiModel,
           serpApiKey: saved.serpApiKey ?? prev.serpApiKey,
+          likedConcepts: saved.likedConcepts ?? prev.likedConcepts,
+          dislikedConcepts: saved.dislikedConcepts ?? prev.dislikedConcepts,
+          sortMode: saved.sortMode?.trim() ? saved.sortMode : prev.sortMode,
         }));
         if (saved.selectedCategory && (CATEGORIES as readonly string[]).includes(saved.selectedCategory)) {
           setSelectedCategory(saved.selectedCategory as Category);
@@ -350,22 +364,44 @@ function App(): React.JSX.Element {
   }, [saveSetting]);
 
   const fetchEnrichedNews = useCallback(async (filterByDate: boolean = true, preserveOnEmpty: boolean = false) => {
+    const thisFetch = ++fetchCounterRef.current;
     const categoryArg = selectedCategory === "All" ? null : selectedCategory.toLowerCase();
-    const rows = await invoke<BackendNewsItem[]>("get_enriched_news", {
-      category: categoryArg,
-      date: filterByDate ? selectedDate : null,
-      limit: 500,
-      offset: 0,
-    });
+    const liked = settings.likedConcepts
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const disliked = settings.dislikedConcepts
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    try {
+      const rows = await invoke<BackendNewsItem[]>("get_enriched_news", {
+        category: categoryArg,
+        date: filterByDate ? selectedDate : null,
+        limit: 500,
+        offset: 0,
+        sortBy: settings.sortMode,
+        likedConcepts: liked,
+        dislikedConcepts: disliked,
+        ollamaAddress: settings.ollamaAddress,
+      });
 
-    const mapped = rows.map(mapBackendNewsItem);
-    setNews((prev) => {
-      if ((preserveOnEmpty || loading) && mapped.length === 0 && prev.length > 0) {
-        return prev;
+      const mapped = rows.map(mapBackendNewsItem);
+      if (thisFetch !== fetchCounterRef.current) {
+        // A newer fetch has been dispatched; discard these stale results.
+        return;
       }
-      return mapped;
-    });
-  }, [selectedCategory, selectedDate, loading]);
+      setNews((prev) => {
+        if (preserveOnEmpty && mapped.length === 0 && prev.length > 0) {
+          return prev;
+        }
+        return mapped;
+      });
+    } catch (error) {
+      // During in-flight enrichment, keep the current list stable if relevance refresh fails.
+      console.warn("Skipping transient news refresh error:", error);
+    }
+  }, [selectedCategory, selectedDate, settings.sortMode, settings.likedConcepts, settings.dislikedConcepts, settings.ollamaAddress]);
 
   const scheduleRefresh = useCallback((filterByDate: boolean) => {
     if (refreshTimeoutRef.current !== null) {
@@ -466,10 +502,7 @@ function App(): React.JSX.Element {
             total: event.payload.total,
             enriched: event.payload.enriched_count,
           });
-          const eventDate = event.payload.date ? getUtcDateKey(event.payload.date) : null;
-          if (selectedDate === todayString || eventDate === selectedDate) {
-            scheduleRefresh(true);
-          }
+          scheduleRefresh(true);
         });
         console.log("✅ Listener registered: enriched-news-updated");
       } catch (error) {
@@ -509,7 +542,7 @@ function App(): React.JSX.Element {
         unlistenCompleted();
       }
     };
-  }, [scheduleRefresh, fetchEnrichedNews, selectedDate, todayString]);
+  }, [scheduleRefresh, fetchEnrichedNews]);
 
   useEffect(() => {
     if (selectedCategory !== "All" && !visibleCategories[selectedCategory] && availableCategories.length > 0) {
@@ -620,13 +653,33 @@ function App(): React.JSX.Element {
     });
   };
 
+  const setSortMode = (mode: "date" | "score") => {
+    setSettings((current) => (current.sortMode === mode ? current : { ...current, sortMode: mode }));
+    saveSetting("sortMode", mode);
+  };
+
+  const setPreferenceConcepts = (field: "likedConcepts" | "dislikedConcepts", value: string) => {
+    setSettings((current) => ({ ...current, [field]: value }));
+    saveSetting(field, value);
+  };
+
   const filteredNews = useMemo(() => {
-    const sortedNews = [...news].sort((left, right) => {
-      if (left.date === right.date) {
-        return right.timestamp - left.timestamp;
-      }
-      return right.date.localeCompare(left.date);
-    });
+    let sortedNews: NewsArticle[];
+    if (settings.sortMode === "score") {
+      sortedNews = [...news].sort((a, b) => {
+        const diff = b.preferenceScore - a.preferenceScore;
+        if (Math.abs(diff) > 0.0001) return diff;
+        if (a.date === b.date) return b.timestamp - a.timestamp;
+        return b.date.localeCompare(a.date);
+      });
+    } else {
+      sortedNews = [...news].sort((left, right) => {
+        if (left.date === right.date) {
+          return right.timestamp - left.timestamp;
+        }
+        return right.date.localeCompare(left.date);
+      });
+    }
 
     const dateFiltered = sortedNews.filter((item) => item.date === selectedDate);
 
@@ -635,7 +688,7 @@ function App(): React.JSX.Element {
     }
 
     return dateFiltered.filter((item) => item.category === selectedCategory);
-  }, [news, selectedCategory, selectedDate, visibleCategories]);
+  }, [news, selectedCategory, selectedDate, visibleCategories, settings.sortMode]);
 
   const getTagColor = (category: NewsArticle["category"]) => {
     const colors: Record<NewsArticle["category"], string> = {
@@ -649,6 +702,84 @@ function App(): React.JSX.Element {
     };
     return colors[category] || "bg-zinc-500";
   };
+
+  const renderPreferencePanel = (className = "") => (
+    <div className={`rounded-2xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/50" : "border-zinc-200 bg-white"} ${className}`.trim()}>
+      <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Feed Ranking</p>
+      <div className={`flex items-center gap-0.5 rounded-full border p-1 text-[10px] font-black uppercase tracking-widest ${
+        isDarkMode ? "border-zinc-800 bg-zinc-900" : "border-zinc-200 bg-zinc-50"
+      }`}>
+        <button
+          onClick={() => setSortMode("date")}
+          className={`flex-1 rounded-full px-3 py-1.5 transition-all ${
+            settings.sortMode === "date"
+              ? isDarkMode
+                ? "bg-zinc-200 text-zinc-900 shadow"
+                : "bg-zinc-800 text-white shadow"
+              : isDarkMode
+                ? "text-zinc-500 hover:text-zinc-300"
+                : "text-zinc-500 hover:text-zinc-700"
+          }`}
+        >
+          Date
+        </button>
+        <button
+          onClick={() => setSortMode("score")}
+          className={`flex-1 rounded-full px-3 py-1.5 transition-all ${
+            settings.sortMode === "score"
+              ? isDarkMode
+                ? "bg-zinc-200 text-zinc-900 shadow"
+                : "bg-zinc-800 text-white shadow"
+              : isDarkMode
+                ? "text-zinc-500 hover:text-zinc-300"
+                : "text-zinc-500 hover:text-zinc-700"
+          }`}
+        >
+          Relevance
+        </button>
+      </div>
+
+      <div
+        className={`grid overflow-hidden transition-[grid-template-rows,opacity,margin] duration-300 ease-out ${
+          isRelevanceMode ? "mt-3 grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0 pointer-events-none"
+        }`}
+      >
+        <div className="min-h-0 space-y-3">
+          <div>
+            <label className="mb-1.5 block text-xs font-medium opacity-70">Topics I enjoy</label>
+            <input
+              type="text"
+              placeholder="indie games, retro hardware, game preservation"
+              value={settings.likedConcepts}
+              onChange={(e) => setPreferenceConcepts("likedConcepts", e.target.value)}
+              className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                isDarkMode
+                  ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                  : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+              }`}
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-medium opacity-70">Topics to avoid</label>
+            <input
+              type="text"
+              placeholder="mobile games, NFTs, battle royale"
+              value={settings.dislikedConcepts}
+              onChange={(e) => setPreferenceConcepts("dislikedConcepts", e.target.value)}
+              className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                isDarkMode
+                  ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                  : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+              }`}
+            />
+          </div>
+          <p className={`text-xs ${isDarkMode ? "text-zinc-600" : "text-zinc-400"}`}>
+            Requires nomic-embed-text in Ollama for relevance scoring.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className={`min-h-screen transition-colors duration-300 ${isDarkMode ? "bg-zinc-950 text-zinc-400" : "bg-zinc-100 text-zinc-800"}`}>
@@ -731,6 +862,7 @@ function App(): React.JSX.Element {
         </nav>
 
         <div className="space-y-4 border-t border-inherit p-4">
+          {renderPreferencePanel()}
           <button
             onClick={() => setShowCalendar(true)}
             className={`w-full rounded-xl border px-3 py-3 transition-all ${
@@ -835,6 +967,10 @@ function App(): React.JSX.Element {
           </div>
         </header>
 
+        <div className="mb-6 md:hidden">
+          {renderPreferencePanel()}
+        </div>
+
         <section className={`news-scroll min-h-0 flex-1 overflow-y-auto pb-24 pr-1 ${isDarkMode ? "news-scroll-dark" : "news-scroll-light"}`}>
           {filteredNews.length === 0 ? (
             <div className="flex flex-col items-center justify-center space-y-4 py-32 text-center opacity-40">
@@ -886,6 +1022,18 @@ function App(): React.JSX.Element {
                       <span className={`rounded px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-white shadow-sm ${getTagColor(item.category)}`}>
                         {item.category}
                       </span>
+                      {settings.sortMode === "score" && item.preferenceScore !== 0 && (
+                        <span
+                          title={`Relevance score: ${item.preferenceScore.toFixed(3)}`}
+                          className={`ml-auto rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-widest ${
+                            item.preferenceScore > 0
+                              ? isDarkMode ? "bg-emerald-500/20 text-emerald-400" : "bg-emerald-100 text-emerald-700"
+                              : isDarkMode ? "bg-red-500/20 text-red-400" : "bg-red-100 text-red-700"
+                          }`}
+                        >
+                          {item.preferenceScore > 0 ? "+" : ""}{(item.preferenceScore * 100).toFixed(0)}%
+                        </span>
+                      )}
                     </div>
                     <div className="mb-4 flex flex-wrap gap-1.5">
                       {item.tags.map((tag, tagIndex) => (

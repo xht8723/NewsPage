@@ -1,5 +1,5 @@
 use crate::db::{get_article_by_id, get_unenriched_articles_by_category, list_unenriched_categories, mark_enriched, upsert_article};
-use crate::news_item::NewsItem;
+use crate::news_item::{NewsItem, RankedNewsItem};
 use crate::serp_parser::{list_supported_topics, scrape_serp_topics, scrape_serp_topics_with_api_key};
 use crate::ollama_read::fetch_article_text;
 use chrono::{DateTime, Local, Utc};
@@ -124,9 +124,39 @@ async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str
     Ok(file_path.to_string_lossy().to_string())
 }
 
+/// Cosine similarity between two equally-sized vectors.
+/// Returns 0.0 for zero vectors or empty inputs.
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+    (dot / (norm_a * norm_b)).clamp(-1.0, 1.0)
+}
+
+/// Compute a preference score for an article vector relative to liked and disliked concept vectors.
+/// Score = avg_cosine(article, liked) − avg_cosine(article, disliked).
+/// Returns 0.0 when both sides are empty or the article has no embedding.
+fn article_preference_score(article_vec: &[f32], liked: &[Vec<f32>], disliked: &[Vec<f32>]) -> f32 {
+    let avg_sim = |vecs: &[Vec<f32>]| -> f32 {
+        if vecs.is_empty() {
+            return 0.0;
+        }
+        let total: f32 = vecs.iter().map(|v| cosine_similarity(article_vec, v)).sum();
+        total / vecs.len() as f32
+    };
+    avg_sim(liked) - avg_sim(disliked)
+}
+
 struct AppState {
     db: SqlitePool,
     last_scrape: Mutex<Option<SystemTime>>,
+    preference_embedding_cache: Mutex<HashMap<String, Vec<f32>>>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -164,7 +194,11 @@ async fn get_enriched_news(
     date: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
-) -> Result<Vec<NewsItem>, String> {
+    sort_by: Option<String>,
+    liked_concepts: Option<Vec<String>>,
+    disliked_concepts: Option<Vec<String>>,
+    ollama_address: Option<String>,
+) -> Result<Vec<RankedNewsItem>, String> {
     let limit = limit.unwrap_or(300).clamp(1, 1000);
     let offset = offset.unwrap_or(0).max(0);
 
@@ -175,21 +209,134 @@ async fn get_enriched_news(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
 
-    let mut items = if let Some(ref selected_category) = category {
-        db::get_articles_by_category(&state.db, selected_category, limit, offset)
-            .await
-            .map_err(|e| format!("DB read error: {}", e))?
+    let sort_mode = sort_by.as_deref().unwrap_or("date");
+    let liked: Vec<String> = liked_concepts
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let disliked: Vec<String> = disliked_concepts
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let use_scoring = sort_mode == "score" && (!liked.is_empty() || !disliked.is_empty());
+
+    if use_scoring {
+        let base_url = ollama_address
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "http://127.0.0.1:11434".to_string());
+        let cache_prefix = base_url.trim_end_matches('/').to_ascii_lowercase();
+
+        // Fetch all articles with embeddings (no LIMIT — scoring needs the full set).
+        let rows = db::get_articles_with_embeddings(
+            &state.db,
+            category.as_deref(),
+            10_000,
+            0,
+        )
+        .await
+        .map_err(|e| format!("DB read error: {}", e))?;
+
+        // Generate preference embeddings (one per concept string).
+        let mut liked_vecs: Vec<Vec<f32>> = Vec::new();
+        for concept in &liked {
+            let key = format!("{}::liked::{}", cache_prefix, concept.trim().to_ascii_lowercase());
+            if let Some(cached) = state.preference_embedding_cache.lock().unwrap().get(&key).cloned() {
+                liked_vecs.push(cached);
+                continue;
+            }
+            match platform_llm::get_ollama_embedding(&base_url, concept).await {
+                Ok(v) => {
+                    state
+                        .preference_embedding_cache
+                        .lock()
+                        .unwrap()
+                        .insert(key, v.clone());
+                    liked_vecs.push(v);
+                }
+                Err(e) => println!("Skipping liked concept '{}': {}", concept, e),
+            }
+        }
+        let mut disliked_vecs: Vec<Vec<f32>> = Vec::new();
+        for concept in &disliked {
+            let key = format!("{}::disliked::{}", cache_prefix, concept.trim().to_ascii_lowercase());
+            if let Some(cached) = state.preference_embedding_cache.lock().unwrap().get(&key).cloned() {
+                disliked_vecs.push(cached);
+                continue;
+            }
+            match platform_llm::get_ollama_embedding(&base_url, concept).await {
+                Ok(v) => {
+                    state
+                        .preference_embedding_cache
+                        .lock()
+                        .unwrap()
+                        .insert(key, v.clone());
+                    disliked_vecs.push(v);
+                }
+                Err(e) => println!("Skipping disliked concept '{}': {}", concept, e),
+            }
+        }
+
+        // If all preference embeddings fail, keep the current UI ordering by returning an error.
+        if liked_vecs.is_empty() && disliked_vecs.is_empty() {
+            return Err("Relevance sort temporarily unavailable: could not resolve preference embeddings from Ollama".to_string());
+        }
+
+        let mut ranked: Vec<RankedNewsItem> = rows
+            .into_iter()
+            .map(|(item, emb)| {
+                let score = emb
+                    .as_deref()
+                    .map(|v| article_preference_score(v, &liked_vecs, &disliked_vecs))
+                    .unwrap_or(0.0);
+                RankedNewsItem { item, preference_score: score }
+            })
+            .collect();
+
+        // Apply date filter.
+        if let Some(ref date_utc_day) = date {
+            ranked.retain(|r| is_on_utc_day(&r.item.date, date_utc_day));
+        }
+
+        // Sort by score descending, then by date descending as tie-breaker.
+        ranked.sort_by(|a, b| {
+            b.preference_score
+                .partial_cmp(&a.preference_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.item.date.cmp(&a.item.date))
+        });
+
+        // Apply pagination in memory.
+        let start = offset as usize;
+        let end = (start + limit as usize).min(ranked.len());
+        Ok(if start < ranked.len() { ranked[start..end].to_vec() } else { vec![] })
     } else {
-        db::list_articles(&state.db, limit, offset)
-            .await
-            .map_err(|e| format!("DB read error: {}", e))?
-    };
+        // Default path: date-sorted, DB-level pagination.
+        let items = if let Some(ref selected_category) = category {
+            db::get_articles_by_category(&state.db, selected_category, limit, offset)
+                .await
+                .map_err(|e| format!("DB read error: {}", e))?
+        } else {
+            db::list_articles(&state.db, limit, offset)
+                .await
+                .map_err(|e| format!("DB read error: {}", e))?
+        };
 
-    if let Some(ref date_utc_day) = date {
-        items.retain(|item| is_on_utc_day(&item.date, date_utc_day));
+        let mut items = items;
+        if let Some(ref date_utc_day) = date {
+            items.retain(|item| is_on_utc_day(&item.date, date_utc_day));
+        }
+
+        Ok(items
+            .into_iter()
+            .map(|item| RankedNewsItem { item, preference_score: 0.0 })
+            .collect())
     }
-
-    Ok(items)
 }
 
 #[tauri::command]
@@ -262,6 +409,7 @@ async fn purge_database(app: tauri::AppHandle, state: tauri::State<'_, AppState>
 
     // Reset the in-memory scrape time gate
     *state.last_scrape.lock().unwrap() = None;
+    state.preference_embedding_cache.lock().unwrap().clear();
 
     // Remove last_scrape_epoch from settings.json so it stays cleared across restarts
     let settings_path = app_data.join("settings.json");
@@ -584,6 +732,19 @@ async fn start_all_action(
                     }
                 }
 
+                // Generate and store embedding (soft failure — missing embedding degrades gracefully).
+                let embed_text = format!("{} {} {}", enriched.title, enriched.tags.join(" "), enriched.snippet);
+                match platform_llm::get_ollama_embedding(&ollama_address, &embed_text).await {
+                    Ok(vec) => {
+                        if let Err(e) = db::save_embedding(&state.db, &enriched.id, &vec).await {
+                            println!("Embedding save failed for {}: {}", enriched.id, e);
+                        }
+                    }
+                    Err(e) => {
+                        println!("Embedding generation skipped for '{}': {}", enriched.title, e);
+                    }
+                }
+
                 enriched.is_enriched = true;
                 upsert_article(&state.db, &enriched)
                     .await
@@ -761,7 +922,7 @@ async fn reprocess_article(
         platform_llm::LLMProvider::Ollama => platform_llm::LLMConfig {
             provider: selected_provider,
             api_key: None,
-            endpoint: Some(ollama_address),
+            endpoint: Some(ollama_address.clone()),
             model: ollama_model,
         },
         platform_llm::LLMProvider::OpenAI => platform_llm::LLMConfig {
@@ -820,6 +981,19 @@ async fn reprocess_article(
             Err(err) => {
                 println!("Thumbnail cache failed for {}: {}", enriched.id, err);
             }
+        }
+    }
+
+    // Generate and store embedding (soft failure).
+    let embed_text = format!("{} {} {}", enriched.title, enriched.tags.join(" "), enriched.snippet);
+    match platform_llm::get_ollama_embedding(&ollama_address, &embed_text).await {
+        Ok(vec) => {
+            if let Err(e) = db::save_embedding(&state.db, &enriched.id, &vec).await {
+                println!("Embedding save failed for {}: {}", enriched.id, e);
+            }
+        }
+        Err(e) => {
+            println!("Embedding generation skipped for '{}': {}", enriched.title, e);
         }
     }
 
@@ -908,7 +1082,11 @@ pub fn run() {
                 .and_then(|raw| serde_json::from_str::<HashMap<String, String>>(&raw).ok())
                 .and_then(|map| map.get("last_scrape_epoch").and_then(|s| s.parse::<u64>().ok()))
                 .map(|epoch| UNIX_EPOCH + Duration::from_secs(epoch));
-            app.manage(AppState { db: pool, last_scrape: Mutex::new(last_scrape) });
+            app.manage(AppState {
+                db: pool,
+                last_scrape: Mutex::new(last_scrape),
+                preference_embedding_cache: Mutex::new(HashMap::new()),
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
