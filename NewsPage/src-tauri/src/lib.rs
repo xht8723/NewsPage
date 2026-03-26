@@ -23,7 +23,9 @@ pub type CleanedArticle = NewsItem;
 
 const DEFAULT_OLLAMA_ADDRESS: &str = "http://127.0.0.1:11434";
 const DEFAULT_OLLAMA_MODEL: &str = "qwen2.5:3b";
+const DEFAULT_OLLAMA_EMBEDDING_MODEL: &str = platform_llm::DEFAULT_EMBED_MODEL;
 const ARTICLE_PROCESS_TIMEOUT_SECS: u64 = 30;
+const RELEVANCE_UNAVAILABLE_TOKEN: &str = "RELEVANCE_OLLAMA_UNAVAILABLE";
 
 #[derive(serde::Deserialize)]
 struct OllamaTagsResponse {
@@ -50,6 +52,33 @@ fn normalize_ollama_base_url(address: &str) -> Result<String, String> {
     let scheme = parsed.scheme();
     let port = parsed.port_or_known_default().unwrap_or(11434);
     Ok(format!("{}://{}:{}", scheme, host, port))
+}
+
+async fn verify_llm_provider_handshake(
+    provider: &str,
+    llm: &dyn platform_llm::LLMProviderImpl,
+    config: &platform_llm::LLMConfig,
+) -> Result<(), String> {
+    llm.test_connection()
+        .await
+        .map_err(|e| format!("{} handshake failed: {}", provider, e))?;
+
+    let available_models = llm
+        .list_models()
+        .await
+        .map_err(|e| format!("{} model discovery failed: {}", provider, e))?;
+
+    let selected_model = config.model.trim();
+    if !selected_model.is_empty() && !available_models.iter().any(|m| m == selected_model) {
+        return Err(format!(
+            "{} model '{}' is unavailable. Available models: {}",
+            provider,
+            selected_model,
+            available_models.join(", ")
+        ));
+    }
+
+    Ok(())
 }
 
 fn sanitize_filename(value: &str) -> String {
@@ -198,6 +227,7 @@ async fn get_enriched_news(
     liked_concepts: Option<Vec<String>>,
     disliked_concepts: Option<Vec<String>>,
     ollama_address: Option<String>,
+    ollama_embedding_model: Option<String>,
 ) -> Result<Vec<RankedNewsItem>, String> {
     let limit = limit.unwrap_or(300).clamp(1, 1000);
     let offset = offset.unwrap_or(0).max(0);
@@ -229,7 +259,19 @@ async fn get_enriched_news(
         let base_url = ollama_address
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "http://127.0.0.1:11434".to_string());
+            .unwrap_or_else(|| DEFAULT_OLLAMA_ADDRESS.to_string());
+        let embedding_model = ollama_embedding_model
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| DEFAULT_OLLAMA_EMBEDDING_MODEL.to_string());
+
+        if let Err(e) = test_ollama_connection(base_url.clone()).await {
+            return Err(format!(
+                "{}: Relevance sort unavailable because Ollama is unreachable at {} ({})",
+                RELEVANCE_UNAVAILABLE_TOKEN, base_url, e
+            ));
+        }
+
         let cache_prefix = base_url.trim_end_matches('/').to_ascii_lowercase();
 
         // Fetch all articles with embeddings (no LIMIT — scoring needs the full set).
@@ -245,12 +287,17 @@ async fn get_enriched_news(
         // Generate preference embeddings (one per concept string).
         let mut liked_vecs: Vec<Vec<f32>> = Vec::new();
         for concept in &liked {
-            let key = format!("{}::liked::{}", cache_prefix, concept.trim().to_ascii_lowercase());
+            let key = format!(
+                "{}::{}::liked::{}",
+                cache_prefix,
+                embedding_model.to_ascii_lowercase(),
+                concept.trim().to_ascii_lowercase()
+            );
             if let Some(cached) = state.preference_embedding_cache.lock().unwrap().get(&key).cloned() {
                 liked_vecs.push(cached);
                 continue;
             }
-            match platform_llm::get_ollama_embedding(&base_url, concept).await {
+            match platform_llm::get_ollama_embedding(&base_url, concept, Some(&embedding_model)).await {
                 Ok(v) => {
                     state
                         .preference_embedding_cache
@@ -264,12 +311,17 @@ async fn get_enriched_news(
         }
         let mut disliked_vecs: Vec<Vec<f32>> = Vec::new();
         for concept in &disliked {
-            let key = format!("{}::disliked::{}", cache_prefix, concept.trim().to_ascii_lowercase());
+            let key = format!(
+                "{}::{}::disliked::{}",
+                cache_prefix,
+                embedding_model.to_ascii_lowercase(),
+                concept.trim().to_ascii_lowercase()
+            );
             if let Some(cached) = state.preference_embedding_cache.lock().unwrap().get(&key).cloned() {
                 disliked_vecs.push(cached);
                 continue;
             }
-            match platform_llm::get_ollama_embedding(&base_url, concept).await {
+            match platform_llm::get_ollama_embedding(&base_url, concept, Some(&embedding_model)).await {
                 Ok(v) => {
                     state
                         .preference_embedding_cache
@@ -284,7 +336,10 @@ async fn get_enriched_news(
 
         // If all preference embeddings fail, keep the current UI ordering by returning an error.
         if liked_vecs.is_empty() && disliked_vecs.is_empty() {
-            return Err("Relevance sort temporarily unavailable: could not resolve preference embeddings from Ollama".to_string());
+            return Err(format!(
+                "{}: Relevance sort unavailable because preference embeddings could not be generated",
+                RELEVANCE_UNAVAILABLE_TOKEN
+            ));
         }
 
         let mut ranked: Vec<RankedNewsItem> = rows
@@ -496,6 +551,7 @@ async fn start_all_action(
     gemini_model: Option<String>,
     ollama_address: Option<String>,
     ollama_model: Option<String>,
+    ollama_embedding_model: Option<String>,
 ) -> Result<(), String> {
     let limit = limit.clamp(1, 100) as i64;
     println!("Starting full pipeline action (per-category limit={})…", limit);
@@ -519,6 +575,10 @@ async fn start_all_action(
         .get("ollamaModel")
         .cloned()
         .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_string());
+    let saved_ollama_embedding_model = settings_map
+        .get("ollamaEmbeddingModel")
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_OLLAMA_EMBEDDING_MODEL.to_string());
     let saved_llm_provider = settings_map
         .get("llmProvider")
         .cloned()
@@ -559,6 +619,10 @@ async fn start_all_action(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or(saved_ollama_model);
+    let ollama_embedding_model = ollama_embedding_model
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_ollama_embedding_model);
     let llm_provider = llm_provider
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -617,6 +681,7 @@ async fn start_all_action(
         },
     };
     let llm = platform_llm::create_provider(&llm_config)?;
+    verify_llm_provider_handshake(&llm_provider, llm.as_ref(), &llm_config).await?;
     println!(
         "Using LLM provider '{}' with model '{}'",
         llm_provider,
@@ -734,7 +799,7 @@ async fn start_all_action(
 
                 // Generate and store embedding (soft failure — missing embedding degrades gracefully).
                 let embed_text = format!("{} {} {}", enriched.title, enriched.tags.join(" "), enriched.snippet);
-                match platform_llm::get_ollama_embedding(&ollama_address, &embed_text).await {
+                match platform_llm::get_ollama_embedding(&ollama_address, &embed_text, Some(&ollama_embedding_model)).await {
                     Ok(vec) => {
                         if let Err(e) = db::save_embedding(&state.db, &enriched.id, &vec).await {
                             println!("Embedding save failed for {}: {}", enriched.id, e);
@@ -828,6 +893,7 @@ async fn reprocess_article(
     gemini_model: Option<String>,
     ollama_address: Option<String>,
     ollama_model: Option<String>,
+    ollama_embedding_model: Option<String>,
 ) -> Result<NewsItem, String> {
     let app_data_dir = app
         .path()
@@ -851,6 +917,10 @@ async fn reprocess_article(
         .get("ollamaModel")
         .cloned()
         .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_string());
+    let saved_ollama_embedding_model = settings_map
+        .get("ollamaEmbeddingModel")
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_OLLAMA_EMBEDDING_MODEL.to_string());
     let saved_llm_provider = settings_map
         .get("llmProvider")
         .cloned()
@@ -888,6 +958,10 @@ async fn reprocess_article(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or(saved_ollama_model);
+    let ollama_embedding_model = ollama_embedding_model
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_ollama_embedding_model);
     let llm_provider = llm_provider
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -986,7 +1060,7 @@ async fn reprocess_article(
 
     // Generate and store embedding (soft failure).
     let embed_text = format!("{} {} {}", enriched.title, enriched.tags.join(" "), enriched.snippet);
-    match platform_llm::get_ollama_embedding(&ollama_address, &embed_text).await {
+    match platform_llm::get_ollama_embedding(&ollama_address, &embed_text, Some(&ollama_embedding_model)).await {
         Ok(vec) => {
             if let Err(e) = db::save_embedding(&state.db, &enriched.id, &vec).await {
                 println!("Embedding save failed for {}: {}", enriched.id, e);
@@ -1087,6 +1161,32 @@ pub fn run() {
                 last_scrape: Mutex::new(last_scrape),
                 preference_embedding_cache: Mutex::new(HashMap::new()),
             });
+
+            if let Ok(raw) = std::fs::read_to_string(&settings_path) {
+                if let Ok(mut settings_map) = serde_json::from_str::<HashMap<String, String>>(&raw) {
+                    let persisted_sort_mode = settings_map
+                        .get("sortMode")
+                        .map(|v| v.trim().to_ascii_lowercase())
+                        .unwrap_or_else(|| "date".to_string());
+                    if persisted_sort_mode == "score" {
+                        let startup_ollama_address = settings_map
+                            .get("ollamaAddress")
+                            .cloned()
+                            .unwrap_or_else(|| DEFAULT_OLLAMA_ADDRESS.to_string());
+                        let reachable = tauri::async_runtime::block_on(test_ollama_connection(startup_ollama_address.clone())).is_ok();
+                        if !reachable {
+                            settings_map.insert("sortMode".to_string(), "date".to_string());
+                            if let Ok(json) = serde_json::to_string_pretty(&settings_map) {
+                                let _ = std::fs::write(&settings_path, json);
+                            }
+                            println!(
+                                "Startup check: Ollama unreachable at {}. Relevance sort was reset to date.",
+                                startup_ollama_address
+                            );
+                        }
+                    }
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

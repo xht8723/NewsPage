@@ -77,6 +77,7 @@ interface UserSettings {
   llmProvider: string; // "ollama" | "openai" | "claude" | "gemini"
   ollamaAddress: string;
   ollamaModel: string;
+  ollamaEmbeddingModel: string;
   openaiApiKey: string;
   openaiModel: string;
   claudeApiKey: string;
@@ -110,6 +111,8 @@ const DEFAULT_VISIBLE_CATEGORIES: Record<TopicCategory, boolean> = {
 const OPENAI_MODELS = ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"] as const;
 const CLAUDE_MODELS = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6"] as const;
 const GEMINI_MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-flash-preview"] as const;
+const DEFAULT_EMBEDDING_MODEL = "nomic-embed-text";
+const RELEVANCE_UNAVAILABLE_TOKEN = "RELEVANCE_OLLAMA_UNAVAILABLE";
 
 function formatDateLocal(date: Date): string {
   const year = date.getFullYear();
@@ -247,6 +250,7 @@ function App(): React.JSX.Element {
     llmProvider: "ollama",
     ollamaAddress: "http://127.0.0.1:11434",
     ollamaModel: "qwen2.5:3b",
+    ollamaEmbeddingModel: DEFAULT_EMBEDDING_MODEL,
     openaiApiKey: "",
     openaiModel: "gpt-5.4-mini",
     claudeApiKey: "",
@@ -279,6 +283,7 @@ function App(): React.JSX.Element {
           llmProvider: saved.llmProvider?.trim() ? saved.llmProvider : prev.llmProvider,
           ollamaAddress: saved.ollamaAddress?.trim() ? saved.ollamaAddress : prev.ollamaAddress,
           ollamaModel: saved.ollamaModel?.trim() ? saved.ollamaModel : prev.ollamaModel,
+          ollamaEmbeddingModel: saved.ollamaEmbeddingModel?.trim() ? saved.ollamaEmbeddingModel : prev.ollamaEmbeddingModel,
           openaiApiKey: saved.openaiApiKey ?? prev.openaiApiKey,
           openaiModel: saved.openaiModel?.trim() ? saved.openaiModel : prev.openaiModel,
           claudeApiKey: saved.claudeApiKey ?? prev.claudeApiKey,
@@ -324,6 +329,17 @@ function App(): React.JSX.Element {
     }, 500);
   }, []);
 
+  const disableRelevanceSort = useCallback((reason: string) => {
+    setSettings((current) => {
+      if (current.sortMode !== "score") {
+        return current;
+      }
+      console.info(`Disabling relevance sort: ${reason}`);
+      saveSetting("sortMode", "date");
+      return { ...current, sortMode: "date" };
+    });
+  }, [saveSetting]);
+
   const testOllamaConnection = useCallback(async (address: string) => {
     setIsTestingOllama(true);
     try {
@@ -331,10 +347,11 @@ function App(): React.JSX.Element {
       setOllamaConnectionState("ok");
     } catch {
       setOllamaConnectionState("fail");
+      disableRelevanceSort("Ollama connection test failed");
     } finally {
       setIsTestingOllama(false);
     }
-  }, []);
+  }, [disableRelevanceSort]);
 
   const refreshOllamaModels = useCallback(async (address: string, preferredModel?: string) => {
     setIsRefreshingModels(true);
@@ -358,10 +375,11 @@ function App(): React.JSX.Element {
     } catch {
       setOllamaConnectionState("fail");
       setOllamaModels([]);
+      disableRelevanceSort("Ollama model refresh failed");
     } finally {
       setIsRefreshingModels(false);
     }
-  }, [saveSetting]);
+  }, [disableRelevanceSort, saveSetting]);
 
   const fetchEnrichedNews = useCallback(async (filterByDate: boolean = true, preserveOnEmpty: boolean = false) => {
     const thisFetch = ++fetchCounterRef.current;
@@ -384,6 +402,7 @@ function App(): React.JSX.Element {
         likedConcepts: liked,
         dislikedConcepts: disliked,
         ollamaAddress: settings.ollamaAddress,
+        ollamaEmbeddingModel: settings.ollamaEmbeddingModel,
       });
 
       const mapped = rows.map(mapBackendNewsItem);
@@ -398,10 +417,13 @@ function App(): React.JSX.Element {
         return mapped;
       });
     } catch (error) {
+      if (settings.sortMode === "score" && String(error).includes(RELEVANCE_UNAVAILABLE_TOKEN)) {
+        disableRelevanceSort("backend reported relevance unavailable");
+      }
       // During in-flight enrichment, keep the current list stable if relevance refresh fails.
       console.warn("Skipping transient news refresh error:", error);
     }
-  }, [selectedCategory, selectedDate, settings.sortMode, settings.likedConcepts, settings.dislikedConcepts, settings.ollamaAddress]);
+  }, [selectedCategory, selectedDate, settings.sortMode, settings.likedConcepts, settings.dislikedConcepts, settings.ollamaAddress, settings.ollamaEmbeddingModel, disableRelevanceSort]);
 
   const scheduleRefresh = useCallback((filterByDate: boolean) => {
     if (refreshTimeoutRef.current !== null) {
@@ -425,24 +447,64 @@ function App(): React.JSX.Element {
       geminiModel: settings.geminiModel,
       ollamaAddress: settings.ollamaAddress,
       ollamaModel: settings.ollamaModel,
+      ollamaEmbeddingModel: settings.ollamaEmbeddingModel,
     };
 
+    const selectedModel =
+      settings.llmProvider === "openai"
+        ? settings.openaiModel
+        : settings.llmProvider === "claude"
+          ? settings.claudeModel
+          : settings.llmProvider === "gemini"
+            ? settings.geminiModel
+            : settings.ollamaModel;
+
+    const selectedApiKey =
+      settings.llmProvider === "openai"
+        ? settings.openaiApiKey
+        : settings.llmProvider === "claude"
+          ? settings.claudeApiKey
+          : settings.llmProvider === "gemini"
+            ? settings.geminiApiKey
+            : "";
+
+    const selectedEndpoint = settings.llmProvider === "ollama" ? settings.ollamaAddress : "";
+
     setLoading(true);
-    setEnrichmentProgress({ current: 0, total: 0, enriched: 0 });
+    setEnrichmentProgress(null);
     setEnrichmentError(null);
-    console.log("🚀 Starting enrichment pipeline...");
-    invoke("start_all_action", {
-      limit: settings.newsLimit,
-      cooldownHours: settings.scrapeCooldownHours,
-      ...llmArgs,
-    })
-      .then(() => {
-        console.log("✅ Enrichment pipeline completed!");
-      })
-      .catch((error) => {
-        console.error("❌ Enrichment pipeline failed:", error);
-        setLoading(false);
+
+    try {
+      await invoke<boolean>("test_provider_connection", {
+        provider: settings.llmProvider,
+        apiKey: selectedApiKey || null,
+        endpoint: selectedEndpoint || null,
+        model: selectedModel,
       });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setLoading(false);
+      setEnrichmentProgress(null);
+      setEnrichmentError(message);
+      return;
+    }
+
+    setEnrichmentProgress({ current: 0, total: 0, enriched: 0 });
+    console.log("🚀 Starting enrichment pipeline...");
+    try {
+      await invoke("start_all_action", {
+        limit: settings.newsLimit,
+        cooldownHours: settings.scrapeCooldownHours,
+        ...llmArgs,
+      });
+      console.log("✅ Enrichment pipeline completed!");
+    } catch (error) {
+      console.error("❌ Enrichment pipeline failed:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      setEnrichmentError(message);
+      setEnrichmentProgress(null);
+      setLoading(false);
+    }
   };
 
   const reprocessArticle = useCallback(async (article: NewsArticle) => {
@@ -465,6 +527,7 @@ function App(): React.JSX.Element {
         geminiModel: settings.geminiModel,
         ollamaAddress: settings.ollamaAddress,
         ollamaModel: settings.ollamaModel,
+        ollamaEmbeddingModel: settings.ollamaEmbeddingModel,
       });
 
       const mapped = mapBackendNewsItem(updatedItem);
@@ -488,6 +551,30 @@ function App(): React.JSX.Element {
   useEffect(() => {
     void fetchEnrichedNews();
   }, [fetchEnrichedNews]);
+
+  useEffect(() => {
+    if (settings.sortMode !== "score") {
+      return;
+    }
+
+    let cancelled = false;
+    void invoke<boolean>("test_ollama_connection", { address: settings.ollamaAddress })
+      .then(() => {
+        if (!cancelled) {
+          setOllamaConnectionState("ok");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setOllamaConnectionState("fail");
+          disableRelevanceSort("Ollama disconnected while relevance mode is active");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.sortMode, settings.ollamaAddress, disableRelevanceSort]);
 
   useEffect(() => {
     let unlistenUpdated: (() => void) | null = null;
@@ -791,7 +878,7 @@ function App(): React.JSX.Element {
           <h1 className={`text-xl font-bold tracking-tight ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>NewsPage</h1>
         </div>
 
-        <nav className="flex-1 space-y-1.5 overflow-y-auto p-4">
+        <nav className="hide-scrollbar flex-1 space-y-1.5 overflow-y-auto p-4">
           <div className="mb-3 flex items-center justify-between px-3">
             <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Categories</p>
             <button
@@ -923,6 +1010,16 @@ function App(): React.JSX.Element {
                 >
                   <span className="inline-block h-2.5 w-2.5 rounded-full bg-red-500" />
                   {getProviderLabel(settings.llmProvider)} error — {enrichmentError}
+                  <button
+                    type="button"
+                    onClick={() => setEnrichmentError(null)}
+                    aria-label="Dismiss error"
+                    className={`ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full transition-colors ${
+                      isDarkMode ? "hover:bg-red-500/20" : "hover:bg-red-200"
+                    }`}
+                  >
+                    <X size={12} />
+                  </button>
                 </span>
               ) : enrichmentProgress ? (
                 <span
@@ -1159,7 +1256,7 @@ function App(): React.JSX.Element {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => { setShowSettings(false); setPurgeConfirmStep(0); }} />
           <div
-            className={`relative w-full max-w-md overflow-hidden rounded-3xl border shadow-2xl ${
+            className={`relative w-full max-w-6xl overflow-hidden rounded-3xl border shadow-2xl ${
               isDarkMode ? "border-zinc-800 bg-zinc-900 text-zinc-300" : "border-zinc-200 bg-white text-zinc-800"
             }`}
           >
@@ -1177,147 +1274,196 @@ function App(): React.JSX.Element {
               </button>
             </div>
             <div className="max-h-[calc(100vh-10rem)] space-y-6 overflow-y-auto p-6">
-              {/* General */}
-              <div>
-                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>General</p>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-4">
-                    <span className="text-sm font-medium">Number of news pulled</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={50}
-                      value={settings.newsLimit}
-                      onChange={(e) => {
-                        const val = Math.min(50, Math.max(1, Number(e.target.value)));
-                        setSettings((s) => ({ ...s, newsLimit: val }));
-                        saveSetting("newsLimit", String(val));
-                      }}
-                      className={`w-20 rounded-lg border px-3 py-1.5 text-center text-sm font-semibold focus:outline-none ${
-                        isDarkMode
-                          ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                          : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                      }`}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between gap-4">
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
+                  <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>General Settings</p>
+                  <div className="space-y-3">
                     <div>
-                      <span className="text-sm font-medium">Scrape cooldown (hours)</span>
-                      <p className="mt-0.5 text-xs opacity-50">Min time between website scrapes. 0 = always scrape.</p>
+                      <label className="mb-1.5 block text-xs font-medium opacity-70">Number of news pulled per category</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={50}
+                        value={settings.newsLimit}
+                        onChange={(e) => {
+                          const val = Math.min(50, Math.max(1, Number(e.target.value)));
+                          setSettings((s) => ({ ...s, newsLimit: val }));
+                          saveSetting("newsLimit", String(val));
+                        }}
+                        className={`w-full rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
+                          isDarkMode
+                            ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                            : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                        }`}
+                      />
                     </div>
-                    <input
-                      type="number"
-                      min={0}
-                      max={24}
-                      value={settings.scrapeCooldownHours}
-                      onChange={(e) => {
-                        const val = Math.min(24, Math.max(0, Number(e.target.value)));
-                        setSettings((s) => ({ ...s, scrapeCooldownHours: val }));
-                        saveSetting("scrapeCooldownHours", String(val));
-                      }}
-                      className={`w-20 shrink-0 rounded-lg border px-3 py-1.5 text-center text-sm font-semibold focus:outline-none ${
-                        isDarkMode
-                          ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                          : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                      }`}
-                    />
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium opacity-70">Scrape cooldown (hours)</label>
+                      <p className="mb-1.5 text-xs opacity-50">Min time between website scrapes. 0 = always scrape.</p>
+                      <input
+                        type="number"
+                        min={0}
+                        max={24}
+                        value={settings.scrapeCooldownHours}
+                        onChange={(e) => {
+                          const val = Math.min(24, Math.max(0, Number(e.target.value)));
+                          setSettings((s) => ({ ...s, scrapeCooldownHours: val }));
+                          saveSetting("scrapeCooldownHours", String(val));
+                        }}
+                        className={`w-full rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
+                          isDarkMode
+                            ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                            : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                        }`}
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* API Settings */}
-              <div>
-                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>API Settings</p>
-                <div className="space-y-3">
-                  {/* LLM Provider Selection */}
-                  <div>
-                    <label className="mb-2 block text-xs font-medium opacity-70">LLM Provider</label>
-                    <select
-                      value={settings.llmProvider}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setSettings((s) => ({ ...s, llmProvider: val }));
-                        saveSetting("llmProvider", val);
-                      }}
-                      className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                        isDarkMode
-                          ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                          : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                      }`}
-                    >
-                      <option value="ollama">Ollama (Local)</option>
-                      <option value="openai">OpenAI</option>
-                      <option value="claude">Claude (Anthropic)</option>
-                      <option value="gemini">Google Gemini</option>
-                    </select>
-                  </div>
-
-                  {/* Ollama Settings */}
-                  {settings.llmProvider === "ollama" && (
-                    <>
-                      <div className={`rounded-xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
-                        <div className="mb-3 flex items-center justify-between gap-2">
-                          <label className="text-xs font-medium opacity-70">Ollama Connection Address</label>
-                          <div className="flex items-center gap-2">
-                            <span
-                              className={`h-2.5 w-2.5 rounded-full ${
-                                ollamaConnectionState === "ok"
-                                  ? "bg-emerald-500"
-                                  : ollamaConnectionState === "fail"
-                                    ? "bg-red-500"
-                                    : "bg-zinc-500"
-                              }`}
-                              title={ollamaConnectionState === "ok" ? "Connected" : ollamaConnectionState === "fail" ? "Connection failed" : "Not tested"}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => void testOllamaConnection(settings.ollamaAddress)}
-                              disabled={isTestingOllama}
-                              className={`rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
-                                isDarkMode
-                                  ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                                  : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                              } disabled:opacity-50`}
-                            >
-                              {isTestingOllama ? "Testing..." : "Test Connection"}
-                            </button>
-                          </div>
-                        </div>
-                        <input
-                          type="text"
-                          placeholder="http://127.0.0.1:11434"
-                          value={settings.ollamaAddress}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setSettings((s) => ({ ...s, ollamaAddress: val }));
-                            setOllamaConnectionState("unknown");
-                            saveSetting("ollamaAddress", val);
-                          }}
-                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                            isDarkMode
-                              ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                              : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
-                          }`}
-                        />
-                      </div>
-
-                      <div className={`rounded-xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
-                        <div className="mb-2 flex items-center justify-between gap-2">
-                          <label className="text-xs font-medium opacity-70">Ollama Model</label>
+                <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
+                  <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Ollama Settings</p>
+                  <div className="space-y-3">
+                    <div>
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <label className="text-xs font-medium opacity-70">Endpoint Address</label>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`h-2.5 w-2.5 rounded-full ${
+                              ollamaConnectionState === "ok"
+                                ? "bg-emerald-500"
+                                : ollamaConnectionState === "fail"
+                                  ? "bg-red-500"
+                                  : "bg-zinc-500"
+                            }`}
+                            title={ollamaConnectionState === "ok" ? "Connected" : ollamaConnectionState === "fail" ? "Connection failed" : "Not tested"}
+                          />
                           <button
                             type="button"
-                            onClick={() => void refreshOllamaModels(settings.ollamaAddress)}
-                            disabled={isRefreshingModels}
-                            className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                            onClick={() => void testOllamaConnection(settings.ollamaAddress)}
+                            disabled={isTestingOllama}
+                            className={`rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
                               isDarkMode
                                 ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
                                 : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
                             } disabled:opacity-50`}
                           >
-                            <RefreshCw size={12} className={isRefreshingModels ? "animate-spin" : ""} />
-                            Refresh
+                            {isTestingOllama ? "Testing..." : "Test Connection"}
                           </button>
                         </div>
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="http://127.0.0.1:11434"
+                        value={settings.ollamaAddress}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSettings((s) => ({ ...s, ollamaAddress: val }));
+                          setOllamaConnectionState("unknown");
+                          saveSetting("ollamaAddress", val);
+                        }}
+                        className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                          isDarkMode
+                            ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                            : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+                        }`}
+                      />
+                    </div>
+
+                    <div>
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <label className="text-xs font-medium opacity-70">Ollama LLM Model</label>
+                        <button
+                          type="button"
+                          onClick={() => void refreshOllamaModels(settings.ollamaAddress, settings.ollamaModel)}
+                          disabled={isRefreshingModels}
+                          className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                            isDarkMode
+                              ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                          } disabled:opacity-50`}
+                        >
+                          <RefreshCw size={12} className={isRefreshingModels ? "animate-spin" : ""} />
+                          Refresh
+                        </button>
+                      </div>
+                      <select
+                        value={settings.ollamaModel}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSettings((s) => ({ ...s, ollamaModel: val }));
+                          saveSetting("ollamaModel", val);
+                        }}
+                        className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                          isDarkMode
+                            ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                            : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                        }`}
+                      >
+                        {ollamaModels.length === 0 ? (
+                          <option value={settings.ollamaModel}>{settings.ollamaModel || "No models found"}</option>
+                        ) : (
+                          ollamaModels.map((model) => (
+                            <option key={model} value={model}>{model}</option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium opacity-70">Embedding Model (Relevance)</label>
+                      <select
+                        value={settings.ollamaEmbeddingModel}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSettings((s) => ({ ...s, ollamaEmbeddingModel: val }));
+                          saveSetting("ollamaEmbeddingModel", val);
+                        }}
+                        className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                          isDarkMode
+                            ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                            : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                        }`}
+                      >
+                        {ollamaModels.length === 0 ? (
+                          <option value={settings.ollamaEmbeddingModel}>{settings.ollamaEmbeddingModel || DEFAULT_EMBEDDING_MODEL}</option>
+                        ) : (
+                          ollamaModels.map((model) => (
+                            <option key={`embed-${model}`} value={model}>{model}</option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
+                  <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>LLM Provider Settings</p>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium opacity-70">LLM Provider</label>
+                      <select
+                        value={settings.llmProvider}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSettings((s) => ({ ...s, llmProvider: val }));
+                          saveSetting("llmProvider", val);
+                        }}
+                        className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                          isDarkMode
+                            ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                            : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                        }`}
+                      >
+                        <option value="ollama">Ollama (Local)</option>
+                        <option value="openai">OpenAI</option>
+                        <option value="claude">Claude (Anthropic)</option>
+                        <option value="gemini">Google Gemini</option>
+                      </select>
+                    </div>
+
+                    {settings.llmProvider === "ollama" && (
+                      <div>
+                        <label className="mb-1.5 block text-xs font-medium opacity-70">Ollama LLM Model</label>
                         <select
                           value={settings.ollamaModel}
                           onChange={(e) => {
@@ -1335,174 +1481,162 @@ function App(): React.JSX.Element {
                             <option value={settings.ollamaModel}>{settings.ollamaModel || "No models found"}</option>
                           ) : (
                             ollamaModels.map((model) => (
-                              <option key={model} value={model}>{model}</option>
+                              <option key={`provider-${model}`} value={model}>{model}</option>
                             ))
                           )}
                         </select>
                       </div>
-                    </>
-                  )}
+                    )}
 
-                  {/* OpenAI Settings */}
-                  {settings.llmProvider === "openai" && (
-                    <>
-                      <div>
-                        <label className="mb-1.5 block text-xs font-medium opacity-70">OpenAI API Key</label>
-                        <input
-                          type="password"
-                          placeholder="sk-..."
-                          value={settings.openaiApiKey}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setSettings((s) => ({ ...s, openaiApiKey: val }));
-                            saveSetting("openaiApiKey", val);
-                          }}
-                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                            isDarkMode
-                              ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                              : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
-                          }`}
-                        />
-                      </div>
-
-                      <div className={`rounded-xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
-                        <div className="mb-2">
-                          <label className="text-xs font-medium opacity-70">OpenAI Model</label>
+                    {settings.llmProvider === "openai" && (
+                      <>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium opacity-70">OpenAI API Key</label>
+                          <input
+                            type="password"
+                            placeholder="sk-..."
+                            value={settings.openaiApiKey}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSettings((s) => ({ ...s, openaiApiKey: val }));
+                              saveSetting("openaiApiKey", val);
+                            }}
+                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                              isDarkMode
+                                ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                                : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+                            }`}
+                          />
                         </div>
-                        <select
-                          value={settings.openaiModel}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setSettings((s) => ({ ...s, openaiModel: val }));
-                            saveSetting("openaiModel", val);
-                          }}
-                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                            isDarkMode
-                              ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                              : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                          }`}
-                        >
-                          {OPENAI_MODELS.map((model) => (
-                            <option key={model} value={model}>{model}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </>
-                  )}
-
-                  {/* Claude Settings */}
-                  {settings.llmProvider === "claude" && (
-                    <>
-                      <div>
-                        <label className="mb-1.5 block text-xs font-medium opacity-70">Claude API Key</label>
-                        <input
-                          type="password"
-                          placeholder="sk-ant-..."
-                          value={settings.claudeApiKey}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setSettings((s) => ({ ...s, claudeApiKey: val }));
-                            saveSetting("claudeApiKey", val);
-                          }}
-                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                            isDarkMode
-                              ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                              : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
-                          }`}
-                        />
-                      </div>
-
-                      <div className={`rounded-xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
-                        <div className="mb-2">
-                          <label className="text-xs font-medium opacity-70">Claude Model</label>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium opacity-70">OpenAI Model</label>
+                          <select
+                            value={settings.openaiModel}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSettings((s) => ({ ...s, openaiModel: val }));
+                              saveSetting("openaiModel", val);
+                            }}
+                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                              isDarkMode
+                                ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                                : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                            }`}
+                          >
+                            {OPENAI_MODELS.map((model) => (
+                              <option key={model} value={model}>{model}</option>
+                            ))}
+                          </select>
                         </div>
-                        <select
-                          value={settings.claudeModel}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setSettings((s) => ({ ...s, claudeModel: val }));
-                            saveSetting("claudeModel", val);
-                          }}
-                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                            isDarkMode
-                              ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                              : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                          }`}
-                        >
-                          {CLAUDE_MODELS.map((model) => (
-                            <option key={model} value={model}>{model}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </>
-                  )}
+                      </>
+                    )}
 
-                  {/* Gemini Settings */}
-                  {settings.llmProvider === "gemini" && (
-                    <>
-                      <div>
-                        <label className="mb-1.5 block text-xs font-medium opacity-70">Google Gemini API Key</label>
-                        <input
-                          type="password"
-                          placeholder="AIza..."
-                          value={settings.geminiApiKey}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setSettings((s) => ({ ...s, geminiApiKey: val }));
-                            saveSetting("geminiApiKey", val);
-                          }}
-                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                            isDarkMode
-                              ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                              : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
-                          }`}
-                        />
-                      </div>
-
-                      <div className={`rounded-xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
-                        <div className="mb-2">
-                          <label className="text-xs font-medium opacity-70">Gemini Model</label>
+                    {settings.llmProvider === "claude" && (
+                      <>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium opacity-70">Claude API Key</label>
+                          <input
+                            type="password"
+                            placeholder="sk-ant-..."
+                            value={settings.claudeApiKey}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSettings((s) => ({ ...s, claudeApiKey: val }));
+                              saveSetting("claudeApiKey", val);
+                            }}
+                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                              isDarkMode
+                                ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                                : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+                            }`}
+                          />
                         </div>
-                        <select
-                          value={settings.geminiModel}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setSettings((s) => ({ ...s, geminiModel: val }));
-                            saveSetting("geminiModel", val);
-                          }}
-                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                            isDarkMode
-                              ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                              : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                          }`}
-                        >
-                          {GEMINI_MODELS.map((model) => (
-                            <option key={model} value={model}>{model}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </>
-                  )}
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium opacity-70">Claude Model</label>
+                          <select
+                            value={settings.claudeModel}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSettings((s) => ({ ...s, claudeModel: val }));
+                              saveSetting("claudeModel", val);
+                            }}
+                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                              isDarkMode
+                                ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                                : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                            }`}
+                          >
+                            {CLAUDE_MODELS.map((model) => (
+                              <option key={model} value={model}>{model}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </>
+                    )}
 
-                  <div>
-                    <label className="mb-1.5 block text-xs font-medium opacity-70">SerpAPI Key</label>
-                    <input
-                      type="password"
-                      placeholder="Enter your SerpAPI key…"
-                      value={settings.serpApiKey}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setSettings((s) => ({ ...s, serpApiKey: val }));
-                        saveSetting("serpApiKey", val);
-                      }}
-                      className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                        isDarkMode
-                          ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                          : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
-                      }`}
-                    />
+                    {settings.llmProvider === "gemini" && (
+                      <>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium opacity-70">Google Gemini API Key</label>
+                          <input
+                            type="password"
+                            placeholder="AIza..."
+                            value={settings.geminiApiKey}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSettings((s) => ({ ...s, geminiApiKey: val }));
+                              saveSetting("geminiApiKey", val);
+                            }}
+                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                              isDarkMode
+                                ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                                : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+                            }`}
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium opacity-70">Gemini Model</label>
+                          <select
+                            value={settings.geminiModel}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSettings((s) => ({ ...s, geminiModel: val }));
+                              saveSetting("geminiModel", val);
+                            }}
+                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                              isDarkMode
+                                ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                                : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                            }`}
+                          >
+                            {GEMINI_MODELS.map((model) => (
+                              <option key={model} value={model}>{model}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
+              </div>
+
+              <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
+                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Serp API Key</p>
+                <input
+                  type="password"
+                  placeholder="Enter your SerpAPI key..."
+                  value={settings.serpApiKey}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSettings((s) => ({ ...s, serpApiKey: val }));
+                    saveSetting("serpApiKey", val);
+                  }}
+                  className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                    isDarkMode
+                      ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                      : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+                  }`}
+                />
               </div>
 
               {/* Danger Zone */}
@@ -1685,19 +1819,7 @@ function App(): React.JSX.Element {
                 </ReactMarkdown>
               </div>
 
-              <div className={`space-y-6 text-lg leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-700"}`}>
-                <button
-                  type="button"
-                  disabled={reprocessingArticleId === selectedArticle.id}
-                  onClick={() => void reprocessArticle(selectedArticle)}
-                  className={`inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors ${
-                    isDarkMode
-                      ? "bg-zinc-800 text-zinc-100 hover:bg-zinc-700"
-                      : "bg-zinc-200 text-zinc-900 hover:bg-zinc-300"
-                  } disabled:cursor-not-allowed disabled:opacity-50`}
-                >
-                  {reprocessingArticleId === selectedArticle.id ? "Re-processing..." : "Re-process this card"}
-                </button>
+              <div className={`flex flex-col items-start gap-4 text-lg leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-700"}`}>
                 {selectedArticle.url && (
                   <button
                     onClick={() => invoke("open_url", { url: selectedArticle.url })}
@@ -1710,6 +1832,18 @@ function App(): React.JSX.Element {
                     Go to original page
                   </button>
                 )}
+                <button
+                  type="button"
+                  disabled={reprocessingArticleId === selectedArticle.id}
+                  onClick={() => void reprocessArticle(selectedArticle)}
+                  className={`inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors ${
+                    isDarkMode
+                      ? "bg-zinc-800 text-zinc-100 hover:bg-zinc-700"
+                      : "bg-zinc-200 text-zinc-900 hover:bg-zinc-300"
+                  } disabled:cursor-not-allowed disabled:opacity-50`}
+                >
+                  {reprocessingArticleId === selectedArticle.id ? "Re-processing..." : "Re-process this card"}
+                </button>
               </div>
             </div>
           </article>
