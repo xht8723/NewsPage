@@ -1,4 +1,4 @@
-use crate::db::{get_unenriched_articles_by_category, list_unenriched_categories, mark_enriched, upsert_article};
+use crate::db::{get_article_by_id, get_unenriched_articles_by_category, list_unenriched_categories, mark_enriched, upsert_article};
 use crate::news_item::NewsItem;
 use crate::serp_parser::{list_supported_topics, scrape_serp_topics, scrape_serp_topics_with_api_key};
 use crate::ollama_read::fetch_article_text;
@@ -23,7 +23,7 @@ pub type CleanedArticle = NewsItem;
 
 const DEFAULT_OLLAMA_ADDRESS: &str = "http://127.0.0.1:11434";
 const DEFAULT_OLLAMA_MODEL: &str = "qwen2.5:3b";
-const ARTICLE_PROCESS_TIMEOUT_SECS: u64 = 15;
+const ARTICLE_PROCESS_TIMEOUT_SECS: u64 = 30;
 
 #[derive(serde::Deserialize)]
 struct OllamaTagsResponse {
@@ -654,6 +654,199 @@ async fn start_all_action(
 }
 
 #[tauri::command]
+async fn reprocess_article(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    article_id: String,
+    llm_provider: Option<String>,
+    openai_api_key: Option<String>,
+    claude_api_key: Option<String>,
+    gemini_api_key: Option<String>,
+    openai_model: Option<String>,
+    claude_model: Option<String>,
+    gemini_model: Option<String>,
+    ollama_address: Option<String>,
+    ollama_model: Option<String>,
+) -> Result<NewsItem, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data directory: {}", e))?;
+    let image_cache_dir = app_data_dir.join("img_cache");
+    std::fs::create_dir_all(&image_cache_dir)
+        .map_err(|e| format!("Failed to create image cache directory: {}", e))?;
+
+    let settings_path = app_data_dir.join("settings.json");
+    let settings_map: HashMap<String, String> = std::fs::read_to_string(&settings_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+
+    let saved_ollama_address = settings_map
+        .get("ollamaAddress")
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_OLLAMA_ADDRESS.to_string());
+    let saved_ollama_model = settings_map
+        .get("ollamaModel")
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_string());
+    let saved_llm_provider = settings_map
+        .get("llmProvider")
+        .cloned()
+        .unwrap_or_else(|| "ollama".to_string());
+    let saved_openai_api_key = settings_map
+        .get("openaiApiKey")
+        .cloned()
+        .unwrap_or_default();
+    let saved_claude_api_key = settings_map
+        .get("claudeApiKey")
+        .cloned()
+        .unwrap_or_default();
+    let saved_gemini_api_key = settings_map
+        .get("geminiApiKey")
+        .cloned()
+        .unwrap_or_default();
+    let saved_openai_model = settings_map
+        .get("openaiModel")
+        .cloned()
+        .unwrap_or_else(|| "gpt-5.4-mini".to_string());
+    let saved_claude_model = settings_map
+        .get("claudeModel")
+        .cloned()
+        .unwrap_or_else(|| "claude-sonnet-4-6".to_string());
+    let saved_gemini_model = settings_map
+        .get("geminiModel")
+        .cloned()
+        .unwrap_or_else(|| "gemini-2.5-flash".to_string());
+
+    let ollama_address = ollama_address
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_ollama_address);
+    let ollama_model = ollama_model
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_ollama_model);
+    let llm_provider = llm_provider
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_llm_provider);
+    let openai_api_key = openai_api_key
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_openai_api_key);
+    let claude_api_key = claude_api_key
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_claude_api_key);
+    let gemini_api_key = gemini_api_key
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_gemini_api_key);
+    let openai_model = openai_model
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_openai_model);
+    let claude_model = claude_model
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_claude_model);
+    let gemini_model = gemini_model
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_gemini_model);
+
+    let selected_provider = platform_llm::LLMProvider::from_str(&llm_provider);
+    let llm_config = match selected_provider {
+        platform_llm::LLMProvider::Ollama => platform_llm::LLMConfig {
+            provider: selected_provider,
+            api_key: None,
+            endpoint: Some(ollama_address),
+            model: ollama_model,
+        },
+        platform_llm::LLMProvider::OpenAI => platform_llm::LLMConfig {
+            provider: selected_provider,
+            api_key: Some(openai_api_key),
+            endpoint: None,
+            model: openai_model,
+        },
+        platform_llm::LLMProvider::Claude => platform_llm::LLMConfig {
+            provider: selected_provider,
+            api_key: Some(claude_api_key),
+            endpoint: None,
+            model: claude_model,
+        },
+        platform_llm::LLMProvider::Gemini => platform_llm::LLMConfig {
+            provider: selected_provider,
+            api_key: Some(gemini_api_key),
+            endpoint: None,
+            model: gemini_model,
+        },
+    };
+    let llm = platform_llm::create_provider(&llm_config)?;
+
+    let item = get_article_by_id(&state.db, &article_id)
+        .await
+        .map_err(|e| format!("DB read error: {}", e))?
+        .ok_or_else(|| format!("Article not found: {}", article_id))?;
+
+    let llm_ref = llm.as_ref();
+    let text = tokio::time::timeout(
+        Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
+        fetch_article_text(&item.url),
+    )
+    .await
+    .map_err(|_| format!("Timed out fetching article text after {}s", ARTICLE_PROCESS_TIMEOUT_SECS))?
+    .map_err(|e| format!("Failed to fetch article text: {}", e))?;
+
+    let (tags, snippet, ai_summary) = tokio::time::timeout(
+        Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
+        llm_ref.enrich(&item.title, &text),
+    )
+    .await
+    .map_err(|_| format!("Timed out enriching article after {}s", ARTICLE_PROCESS_TIMEOUT_SECS))??;
+
+    let mut enriched = item;
+    enriched.og_content = text;
+    enriched.tags = tags;
+    enriched.snippet = snippet;
+    enriched.ai_summary = ai_summary;
+
+    if !enriched.thumbnail.trim().is_empty() {
+        match cache_thumbnail(&image_cache_dir, &enriched.id, &enriched.thumbnail).await {
+            Ok(cached_path) => {
+                enriched.thumbnail = cached_path;
+            }
+            Err(err) => {
+                println!("Thumbnail cache failed for {}: {}", enriched.id, err);
+            }
+        }
+    }
+
+    enriched.is_enriched = true;
+    upsert_article(&state.db, &enriched)
+        .await
+        .map_err(|e| format!("DB upsert error: {}", e))?;
+    mark_enriched(&state.db, &enriched.id)
+        .await
+        .map_err(|e| format!("mark_enriched error: {}", e))?;
+
+    let event = EnrichedNewsUpdatedEvent {
+        id: enriched.id.clone(),
+        category: enriched.category.clone(),
+        date: enriched.date.clone(),
+        current: 1,
+        total: 1,
+        enriched_count: 1,
+        emitted_at_utc: Utc::now().to_rfc3339(),
+    };
+    app.emit("enriched-news-updated", &event)
+        .map_err(|e| format!("Event emit error: {}", e))?;
+
+    Ok(enriched)
+}
+
+#[tauri::command]
 async fn list_provider_models(provider: String, api_key: Option<String>, endpoint: Option<String>) -> Result<Vec<String>, String> {
     let llm_provider = platform_llm::LLMProvider::from_str(&provider);
     let config = platform_llm::LLMConfig {
@@ -728,6 +921,7 @@ pub fn run() {
             list_provider_models,
             test_provider_connection,
             get_provider_options,
+            reprocess_article,
             open_url,
             save_setting,
             load_settings,

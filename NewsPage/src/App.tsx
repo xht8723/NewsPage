@@ -18,6 +18,7 @@ import {
   Settings,
   SlidersHorizontal,
 } from "lucide-react";
+import annFavicon from "./assets/favicon.ico";
 import "./App.css";
 
 const TOPIC_CATEGORIES = [
@@ -46,6 +47,8 @@ interface NewsArticle {
   content: string;
   url: string;
   thumbnailUrl: string;
+  sourceName: string;
+  sourceIconUrl: string;
   date: string;
   timestamp: number;
 }
@@ -79,6 +82,12 @@ interface UserSettings {
   geminiApiKey: string;
   geminiModel: string;
   serpApiKey: string;
+}
+
+interface CardContextMenuState {
+  article: NewsArticle;
+  x: number;
+  y: number;
 }
 
 type OllamaConnectionState = "unknown" | "ok" | "fail";
@@ -148,6 +157,29 @@ function resolveThumbnailSrc(thumbnail: string): string {
   }
 }
 
+function resolveSourceIcon(sourceName: string, sourceIcon: string): string {
+  const normalizedSourceName = sourceName.trim().toLowerCase();
+  const normalizedSourceIcon = sourceIcon.trim();
+
+  if (normalizedSourceName === "ann" || normalizedSourceIcon.replace(/\\/g, "/").endsWith("src/assets/favicon.ico")) {
+    return annFavicon;
+  }
+
+  if (!normalizedSourceIcon) {
+    return "";
+  }
+
+  if (/^https?:\/\//i.test(normalizedSourceIcon)) {
+    return normalizedSourceIcon;
+  }
+
+  try {
+    return convertFileSrc(normalizedSourceIcon.replace(/\\/g, "/"));
+  } catch {
+    return "";
+  }
+}
+
 function getProviderLabel(provider: string): string {
   const normalized = provider.trim().toLowerCase();
   if (normalized === "openai") {
@@ -175,6 +207,8 @@ function mapBackendNewsItem(item: BackendNewsItem): NewsArticle {
     content: item.og_content || item.ai_summary || item.snippet || "Content unavailable.",
     url: item.url || "",
     thumbnailUrl: resolveThumbnailSrc(item.thumbnail),
+    sourceName: item.source_name || "Unknown source",
+    sourceIconUrl: resolveSourceIcon(item.source_name, item.source_icon),
     date: getUtcDateKey(item.date),
     timestamp: Number.isNaN(parsedTimestamp) ? Date.now() : parsedTimestamp,
   };
@@ -195,6 +229,8 @@ function App(): React.JSX.Element {
   const refreshTimeoutRef = useRef<number | null>(null);
   const [enrichmentProgress, setEnrichmentProgress] = useState<{ current: number; total: number; enriched: number } | null>(null);
   const [enrichmentError, setEnrichmentError] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<CardContextMenuState | null>(null);
+  const [reprocessingArticleId, setReprocessingArticleId] = useState<string | null>(null);
   const todayString = formatDateLocal(new Date());
   const canGoToNextDay = selectedDate < todayString;
 
@@ -343,13 +379,7 @@ function App(): React.JSX.Element {
   }, [fetchEnrichedNews]);
 
   const generateNews = async () => {
-    setLoading(true);
-    setEnrichmentProgress({ current: 0, total: 0, enriched: 0 });
-    setEnrichmentError(null);
-    console.log("🚀 Starting enrichment pipeline...");
-    invoke("start_all_action", {
-      limit: settings.newsLimit,
-      cooldownHours: settings.scrapeCooldownHours,
+    const llmArgs = {
       llmProvider: settings.llmProvider,
       openaiApiKey: settings.openaiApiKey,
       claudeApiKey: settings.claudeApiKey,
@@ -359,6 +389,16 @@ function App(): React.JSX.Element {
       geminiModel: settings.geminiModel,
       ollamaAddress: settings.ollamaAddress,
       ollamaModel: settings.ollamaModel,
+    };
+
+    setLoading(true);
+    setEnrichmentProgress({ current: 0, total: 0, enriched: 0 });
+    setEnrichmentError(null);
+    console.log("🚀 Starting enrichment pipeline...");
+    invoke("start_all_action", {
+      limit: settings.newsLimit,
+      cooldownHours: settings.scrapeCooldownHours,
+      ...llmArgs,
     })
       .then(() => {
         console.log("✅ Enrichment pipeline completed!");
@@ -368,6 +408,41 @@ function App(): React.JSX.Element {
         setLoading(false);
       });
   };
+
+  const reprocessArticle = useCallback(async (article: NewsArticle) => {
+    if (reprocessingArticleId !== null) {
+      return;
+    }
+
+    setReprocessingArticleId(article.id);
+    setEnrichmentError(null);
+
+    try {
+      const updatedItem = await invoke<BackendNewsItem>("reprocess_article", {
+        articleId: article.id,
+        llmProvider: settings.llmProvider,
+        openaiApiKey: settings.openaiApiKey,
+        claudeApiKey: settings.claudeApiKey,
+        geminiApiKey: settings.geminiApiKey,
+        openaiModel: settings.openaiModel,
+        claudeModel: settings.claudeModel,
+        geminiModel: settings.geminiModel,
+        ollamaAddress: settings.ollamaAddress,
+        ollamaModel: settings.ollamaModel,
+      });
+
+      const mapped = mapBackendNewsItem(updatedItem);
+      setNews((current) => current.map((item) => (item.id === mapped.id ? mapped : item)));
+      setSelectedArticle((current) => (current && current.id === mapped.id ? mapped : current));
+      await fetchEnrichedNews(true, true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setEnrichmentError(message);
+    } finally {
+      setReprocessingArticleId(null);
+      setContextMenu(null);
+    }
+  }, [fetchEnrichedNews, reprocessingArticleId, settings]);
 
   const availableCategories = useMemo(
     () => ["All", ...TOPIC_CATEGORIES.filter((category) => visibleCategories[category])] as Category[],
@@ -455,7 +530,12 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     const handleContextMenu = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("[data-card-context-menu='true']")) {
+        return;
+      }
       event.preventDefault();
+      setContextMenu(null);
     };
 
     document.addEventListener("contextmenu", handleContextMenu);
@@ -464,6 +544,31 @@ function App(): React.JSX.Element {
       document.removeEventListener("contextmenu", handleContextMenu);
     };
   }, []);
+
+  useEffect(() => {
+    if (!contextMenu) {
+      return;
+    }
+
+    const closeMenu = () => setContextMenu(null);
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setContextMenu(null);
+      }
+    };
+
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("resize", closeMenu);
+    document.addEventListener("click", closeMenu);
+    document.addEventListener("keydown", onEscape);
+
+    return () => {
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("resize", closeMenu);
+      document.removeEventListener("click", closeMenu);
+      document.removeEventListener("keydown", onEscape);
+    };
+  }, [contextMenu]);
 
   useEffect(() => {
     const coarsePointerQuery = window.matchMedia("(pointer: coarse)");
@@ -750,7 +855,12 @@ function App(): React.JSX.Element {
               {filteredNews.map((item) => (
                 <div
                   key={item.id}
+                  data-card-context-menu="true"
                   onClick={() => setSelectedArticle(item)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    setContextMenu({ article: item, x: event.clientX, y: event.clientY });
+                  }}
                   className={`group cursor-pointer rounded-2xl border transition-all hover:shadow-lg ${
                     isDarkMode ? "border-zinc-800 bg-zinc-900 hover:border-zinc-600" : "border-zinc-200 bg-white hover:border-zinc-300"
                   } ${layout === "list" ? "flex flex-col gap-4 p-4 md:flex-row" : "flex flex-col"}`}
@@ -792,12 +902,29 @@ function App(): React.JSX.Element {
                       {item.title}
                     </h3>
                     <p className={`mb-5 text-sm leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-600"}`}>{item.snippet}</p>
-                    <div
-                      className={`mt-auto flex items-center text-[10px] font-black uppercase tracking-widest opacity-60 transition-opacity group-hover:opacity-100 ${
-                        isDarkMode ? "text-zinc-400" : "text-zinc-900"
-                      }`}
-                    >
-                      Open Brief <ChevronRight size={12} className="ml-1" />
+                    <div className="mt-auto flex items-center justify-between gap-3">
+                      <div className={`flex min-w-0 items-center gap-2 text-[10px] font-black uppercase tracking-widest ${
+                        isDarkMode ? "text-zinc-500" : "text-zinc-600"
+                      }`}>
+                        {item.sourceIconUrl ? (
+                          <img
+                            src={item.sourceIconUrl}
+                            alt={`${item.sourceName} icon`}
+                            className="h-4 w-4 rounded-sm object-contain"
+                            onError={(e) => {
+                              e.currentTarget.style.display = "none";
+                            }}
+                          />
+                        ) : null}
+                        <span className="truncate">{item.sourceName}</span>
+                      </div>
+                      <div
+                        className={`flex items-center text-[10px] font-black uppercase tracking-widest opacity-60 transition-opacity group-hover:opacity-100 ${
+                          isDarkMode ? "text-zinc-400" : "text-zinc-900"
+                        }`}
+                      >
+                        Open Brief <ChevronRight size={12} className="ml-1" />
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -855,6 +982,30 @@ function App(): React.JSX.Element {
           </div>
         </div>
       </main>
+
+      {contextMenu && (
+        <div className="fixed inset-0 z-40" onClick={() => setContextMenu(null)}>
+          <div
+            className={`absolute min-w-[220px] rounded-xl border p-2 shadow-2xl ${
+              isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-200" : "border-zinc-300 bg-white text-zinc-900"
+            }`}
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              disabled={reprocessingArticleId === contextMenu.article.id}
+              onClick={() => void reprocessArticle(contextMenu.article)}
+              className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-bold transition-colors ${
+                isDarkMode ? "hover:bg-zinc-800" : "hover:bg-zinc-100"
+              } disabled:cursor-not-allowed disabled:opacity-50`}
+            >
+              <span>{reprocessingArticleId === contextMenu.article.id ? "Re-processing..." : "Re-process this card"}</span>
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {showSettings && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -1340,6 +1491,21 @@ function App(): React.JSX.Element {
                 <h2 className={`text-3xl font-black leading-tight md:text-5xl ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>
                   {selectedArticle.title}
                 </h2>
+                <div className={`mt-4 flex items-center gap-3 text-xs font-black uppercase tracking-widest ${
+                  isDarkMode ? "text-zinc-500" : "text-zinc-600"
+                }`}>
+                  {selectedArticle.sourceIconUrl ? (
+                    <img
+                      src={selectedArticle.sourceIconUrl}
+                      alt={`${selectedArticle.sourceName} icon`}
+                      className="h-5 w-5 rounded-sm object-contain"
+                      onError={(e) => {
+                        e.currentTarget.style.display = "none";
+                      }}
+                    />
+                  ) : null}
+                  <span>{selectedArticle.sourceName}</span>
+                </div>
                 <div className="mt-4 flex flex-wrap gap-2">
                   {selectedArticle.tags.map((tag, tagIndex) => (
                     <span key={`${selectedArticle.id}-detail-tag-${tagIndex}`} className="rounded-full bg-zinc-500/20 px-3 py-1 text-[10px] font-bold uppercase tracking-widest opacity-70">
@@ -1372,6 +1538,18 @@ function App(): React.JSX.Element {
               </div>
 
               <div className={`space-y-6 text-lg leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-700"}`}>
+                <button
+                  type="button"
+                  disabled={reprocessingArticleId === selectedArticle.id}
+                  onClick={() => void reprocessArticle(selectedArticle)}
+                  className={`inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors ${
+                    isDarkMode
+                      ? "bg-zinc-800 text-zinc-100 hover:bg-zinc-700"
+                      : "bg-zinc-200 text-zinc-900 hover:bg-zinc-300"
+                  } disabled:cursor-not-allowed disabled:opacity-50`}
+                >
+                  {reprocessingArticleId === selectedArticle.id ? "Re-processing..." : "Re-process this card"}
+                </button>
                 {selectedArticle.url && (
                   <button
                     onClick={() => invoke("open_url", { url: selectedArticle.url })}
@@ -1381,7 +1559,7 @@ function App(): React.JSX.Element {
                         : "bg-zinc-200 text-zinc-900 hover:bg-zinc-300"
                     }`}
                   >
-                    Open Original Article
+                    Go to original page
                   </button>
                 )}
               </div>

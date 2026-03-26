@@ -7,6 +7,8 @@ use crate::news_item::NewsItem;
 const ANN_URL: &str = "https://www.animenewsnetwork.com/";
 const ANN_NEWS_URL: &str = "https://www.animenewsnetwork.com/news/?topic=anime";
 const DEFAULT_ANN_ITEM_LIMIT: usize = 100;
+const ANN_SOURCE_NAME: &str = "ANN";
+const ANN_SOURCE_ICON: &str = "src/assets/favicon.ico";
 
 pub type AnnNewsItem = NewsItem;
 
@@ -163,8 +165,8 @@ pub fn extract_news_item_fields(item_html: &str) -> Option<AnnNewsItem> {
         title,
         url,
         date,
-        source_name: String::new(),
-        source_icon: String::new(),
+        source_name: ANN_SOURCE_NAME.to_string(),
+        source_icon: ANN_SOURCE_ICON.to_string(),
         authors: Vec::new(),
         thumbnail,
         tags: Vec::new(),
@@ -199,8 +201,8 @@ mod tests {
             title: title.to_string(),
             url: url.to_string(),
             date: date.to_string(),
-            source_name: String::new(),
-            source_icon: String::new(),
+            source_name: ANN_SOURCE_NAME.to_string(),
+            source_icon: ANN_SOURCE_ICON.to_string(),
             authors: Vec::new(),
             thumbnail: String::new(),
             tags: Vec::new(),
