@@ -3,9 +3,8 @@ use crate::news_item::{NewsItem, RankedNewsItem};
 use crate::serp_parser::{list_supported_topics, scrape_serp_topics, scrape_serp_topics_with_api_key};
 use crate::ollama_read::fetch_article_text;
 use chrono::{DateTime, Local, Utc};
-use reqwest::Url;
 use sqlx::sqlite::SqlitePool;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -35,23 +34,6 @@ struct OllamaTagsResponse {
 #[derive(serde::Deserialize)]
 struct OllamaModelInfo {
     name: String,
-}
-
-fn normalize_ollama_base_url(address: &str) -> Result<String, String> {
-    let trimmed = address.trim();
-    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        trimmed.to_string()
-    } else {
-        format!("http://{}", trimmed)
-    };
-    let parsed = Url::parse(&with_scheme)
-        .map_err(|e| format!("Invalid Ollama address '{}': {}", address, e))?;
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| "Ollama address is missing host".to_string())?;
-    let scheme = parsed.scheme();
-    let port = parsed.port_or_known_default().unwrap_or(11434);
-    Ok(format!("{}://{}:{}", scheme, host, port))
 }
 
 async fn verify_llm_provider_handshake(
@@ -153,6 +135,137 @@ async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str
     Ok(file_path.to_string_lossy().to_string())
 }
 
+async fn enrich_media_and_embedding(
+    db_pool: &SqlitePool,
+    image_cache_dir: &Path,
+    enriched: &mut NewsItem,
+    ollama_address: &str,
+    ollama_embedding_model: &str,
+) {
+    if !enriched.thumbnail.trim().is_empty() {
+        match cache_thumbnail(image_cache_dir, &enriched.id, &enriched.thumbnail).await {
+            Ok(cached_path) => {
+                enriched.thumbnail = cached_path;
+            }
+            Err(err) => {
+                println!("Thumbnail cache failed for {}: {}", enriched.id, err);
+            }
+        }
+    }
+
+    // Generate and store embedding (soft failure — missing embedding degrades gracefully).
+    let embed_text = format!("{} {} {}", enriched.title, enriched.tags.join(" "), enriched.snippet);
+    match platform_llm::get_ollama_embedding(ollama_address, &embed_text, Some(ollama_embedding_model)).await {
+        Ok(vec) => {
+            if let Err(e) = db::save_embedding(db_pool, &enriched.id, &vec).await {
+                println!("Embedding save failed for {}: {}", enriched.id, e);
+            }
+        }
+        Err(e) => {
+            println!("Embedding generation skipped for '{}': {}", enriched.title, e);
+        }
+    }
+}
+
+async fn fetch_and_enrich_article(
+    llm: &dyn platform_llm::LLMProviderImpl,
+    item: &NewsItem,
+) -> Result<(String, Vec<String>, String, String), String> {
+    let text = fetch_article_text(&item.url).await?;
+    let (tags, snippet, ai_summary) = llm.enrich(&item.title, &text).await?;
+    Ok((text, tags, snippet, ai_summary))
+}
+
+async fn persist_enriched_article(db_pool: &SqlitePool, enriched: &NewsItem) -> Result<(), String> {
+    upsert_article(db_pool, enriched)
+        .await
+        .map_err(|e| format!("DB upsert error: {}", e))?;
+    mark_enriched(db_pool, &enriched.id)
+        .await
+        .map_err(|e| format!("mark_enriched error: {}", e))?;
+    Ok(())
+}
+
+async fn fetch_and_enrich_article_with_timeouts(
+    llm: &dyn platform_llm::LLMProviderImpl,
+    item: &NewsItem,
+) -> Result<(String, Vec<String>, String, String), String> {
+    let text = tokio::time::timeout(
+        Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
+        fetch_article_text(&item.url),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "Timed out fetching article text after {}s",
+            ARTICLE_PROCESS_TIMEOUT_SECS
+        )
+    })?
+    .map_err(|e| format!("Failed to fetch article text: {}", e))?;
+
+    let (tags, snippet, ai_summary) = tokio::time::timeout(
+        Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
+        llm.enrich(&item.title, &text),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "Timed out enriching article after {}s",
+            ARTICLE_PROCESS_TIMEOUT_SECS
+        )
+    })??;
+
+    Ok((text, tags, snippet, ai_summary))
+}
+
+fn apply_enrichment_payload(
+    mut item: NewsItem,
+    text: String,
+    tags: Vec<String>,
+    snippet: String,
+    ai_summary: String,
+    overwrite_existing: bool,
+) -> NewsItem {
+    if overwrite_existing || item.og_content.trim().is_empty() {
+        item.og_content = text;
+    }
+    if overwrite_existing || item.tags.is_empty() {
+        item.tags = tags;
+    }
+    if overwrite_existing || item.snippet.trim().is_empty() {
+        item.snippet = snippet;
+    }
+    if overwrite_existing || item.ai_summary.trim().is_empty() {
+        item.ai_summary = ai_summary;
+    }
+
+    item
+}
+
+fn emit_enriched_news_updated(
+    app: &tauri::AppHandle,
+    enriched: &NewsItem,
+    current: usize,
+    total: usize,
+    enriched_count: usize,
+) -> Result<(), String> {
+    let event = EnrichedNewsUpdatedEvent {
+        id: enriched.id.clone(),
+        category: enriched.category.clone(),
+        date: enriched.date.clone(),
+        current,
+        total,
+        enriched_count,
+        emitted_at_utc: Utc::now().to_rfc3339(),
+    };
+    println!(
+        "[Event] enriched-news-updated: current={}, total={}, enriched={}",
+        event.current, event.total, event.enriched_count
+    );
+    app.emit("enriched-news-updated", &event)
+        .map_err(|e| format!("Event emit error: {}", e))
+}
+
 /// Cosine similarity between two equally-sized vectors.
 /// Returns 0.0 for zero vectors or empty inputs.
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
@@ -186,6 +299,400 @@ struct AppState {
     db: SqlitePool,
     last_scrape: Mutex<Option<SystemTime>>,
     preference_embedding_cache: Mutex<HashMap<String, Vec<f32>>>,
+}
+
+#[derive(Default)]
+struct LlmOverrideArgs {
+    llm_provider: Option<String>,
+    openai_api_key: Option<String>,
+    claude_api_key: Option<String>,
+    gemini_api_key: Option<String>,
+    openai_model: Option<String>,
+    claude_model: Option<String>,
+    gemini_model: Option<String>,
+    ollama_address: Option<String>,
+    ollama_model: Option<String>,
+    ollama_embedding_model: Option<String>,
+}
+
+struct ResolvedLlmSettings {
+    llm_provider: String,
+    openai_api_key: String,
+    claude_api_key: String,
+    gemini_api_key: String,
+    openai_model: String,
+    claude_model: String,
+    gemini_model: String,
+    ollama_address: String,
+    ollama_model: String,
+    ollama_embedding_model: String,
+    serp_api_key: String,
+}
+
+struct RuntimeLlmContext {
+    image_cache_dir: PathBuf,
+    settings_path: PathBuf,
+    resolved: ResolvedLlmSettings,
+}
+
+fn read_settings_map(settings_path: &Path) -> HashMap<String, String> {
+    std::fs::read_to_string(settings_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn resolve_runtime_llm_context(
+    app: &tauri::AppHandle,
+    overrides: LlmOverrideArgs,
+) -> Result<RuntimeLlmContext, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data directory: {}", e))?;
+
+    let image_cache_dir = app_data_dir.join("img_cache");
+    std::fs::create_dir_all(&image_cache_dir)
+        .map_err(|e| format!("Failed to create image cache directory: {}", e))?;
+
+    let settings_path = app_data_dir.join("settings.json");
+    let settings_map = read_settings_map(&settings_path);
+    let resolved = resolve_llm_settings(&settings_map, overrides);
+
+    Ok(RuntimeLlmContext {
+        image_cache_dir,
+        settings_path,
+        resolved,
+    })
+}
+
+fn resolve_setting_value(value: Option<String>, fallback: String) -> String {
+    value
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(fallback)
+}
+
+fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOverrideArgs) -> ResolvedLlmSettings {
+    let saved_ollama_address = settings_map
+        .get("ollamaAddress")
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_OLLAMA_ADDRESS.to_string());
+    let saved_ollama_model = settings_map
+        .get("ollamaModel")
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_string());
+    let saved_ollama_embedding_model = settings_map
+        .get("ollamaEmbeddingModel")
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_OLLAMA_EMBEDDING_MODEL.to_string());
+    let saved_llm_provider = settings_map
+        .get("llmProvider")
+        .cloned()
+        .unwrap_or_else(|| "ollama".to_string());
+    let saved_openai_api_key = settings_map
+        .get("openaiApiKey")
+        .cloned()
+        .unwrap_or_default();
+    let saved_claude_api_key = settings_map
+        .get("claudeApiKey")
+        .cloned()
+        .unwrap_or_default();
+    let saved_gemini_api_key = settings_map
+        .get("geminiApiKey")
+        .cloned()
+        .unwrap_or_default();
+    let saved_openai_model = settings_map
+        .get("openaiModel")
+        .cloned()
+        .unwrap_or_else(|| "gpt-5.4-mini".to_string());
+    let saved_claude_model = settings_map
+        .get("claudeModel")
+        .cloned()
+        .unwrap_or_else(|| "claude-sonnet-4-6".to_string());
+    let saved_gemini_model = settings_map
+        .get("geminiModel")
+        .cloned()
+        .unwrap_or_else(|| "gemini-2.5-flash".to_string());
+    let saved_serp_api_key = settings_map
+        .get("serpApiKey")
+        .cloned()
+        .unwrap_or_default();
+
+    ResolvedLlmSettings {
+        llm_provider: resolve_setting_value(overrides.llm_provider, saved_llm_provider),
+        openai_api_key: resolve_setting_value(overrides.openai_api_key, saved_openai_api_key),
+        claude_api_key: resolve_setting_value(overrides.claude_api_key, saved_claude_api_key),
+        gemini_api_key: resolve_setting_value(overrides.gemini_api_key, saved_gemini_api_key),
+        openai_model: resolve_setting_value(overrides.openai_model, saved_openai_model),
+        claude_model: resolve_setting_value(overrides.claude_model, saved_claude_model),
+        gemini_model: resolve_setting_value(overrides.gemini_model, saved_gemini_model),
+        ollama_address: resolve_setting_value(overrides.ollama_address, saved_ollama_address),
+        ollama_model: resolve_setting_value(overrides.ollama_model, saved_ollama_model),
+        ollama_embedding_model: resolve_setting_value(
+            overrides.ollama_embedding_model,
+            saved_ollama_embedding_model,
+        ),
+        serp_api_key: saved_serp_api_key.trim().to_string(),
+    }
+}
+
+fn build_llm_config(settings: &ResolvedLlmSettings) -> platform_llm::LLMConfig {
+    let selected_provider = platform_llm::LLMProvider::from_str(&settings.llm_provider);
+
+    match selected_provider {
+        platform_llm::LLMProvider::Ollama => platform_llm::LLMConfig {
+            provider: selected_provider,
+            api_key: None,
+            endpoint: Some(settings.ollama_address.clone()),
+            model: settings.ollama_model.clone(),
+        },
+        platform_llm::LLMProvider::OpenAI => platform_llm::LLMConfig {
+            provider: selected_provider,
+            api_key: Some(settings.openai_api_key.clone()),
+            endpoint: None,
+            model: settings.openai_model.clone(),
+        },
+        platform_llm::LLMProvider::Claude => platform_llm::LLMConfig {
+            provider: selected_provider,
+            api_key: Some(settings.claude_api_key.clone()),
+            endpoint: None,
+            model: settings.claude_model.clone(),
+        },
+        platform_llm::LLMProvider::Gemini => platform_llm::LLMConfig {
+            provider: selected_provider,
+            api_key: Some(settings.gemini_api_key.clone()),
+            endpoint: None,
+            model: settings.gemini_model.clone(),
+        },
+    }
+}
+
+async fn create_provider_from_resolved(
+    settings: &ResolvedLlmSettings,
+    verify_handshake: bool,
+) -> Result<(platform_llm::LLMConfig, Box<dyn platform_llm::LLMProviderImpl>), String> {
+    let llm_config = build_llm_config(settings);
+    let llm = platform_llm::create_provider(&llm_config)?;
+
+    if verify_handshake {
+        verify_llm_provider_handshake(&settings.llm_provider, llm.as_ref(), &llm_config).await?;
+    }
+
+    Ok((llm_config, llm))
+}
+
+fn should_run_scrape(last_scrape: Option<SystemTime>, cooldown_hours: u64) -> bool {
+    match last_scrape {
+        Some(t) => {
+            cooldown_hours == 0
+                || t.elapsed().unwrap_or(Duration::ZERO)
+                    >= Duration::from_secs(cooldown_hours * 3600)
+        }
+        None => true,
+    }
+}
+
+fn persist_last_scrape(settings_path: &Path, now: SystemTime) {
+    let epoch = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let mut map = read_settings_map(settings_path);
+    map.insert("last_scrape_epoch".to_string(), epoch.to_string());
+    if let Ok(json) = serde_json::to_string_pretty(&map) {
+        let _ = std::fs::write(settings_path, json);
+    }
+}
+
+async fn run_scrape_stage(
+    state: &AppState,
+    resolved: &ResolvedLlmSettings,
+    cooldown_hours: u64,
+    settings_path: &Path,
+) -> Result<(), String> {
+    let last_scrape = *state.last_scrape.lock().unwrap();
+    if !should_run_scrape(last_scrape, cooldown_hours) {
+        let elapsed_min = last_scrape
+            .and_then(|t| t.elapsed().ok())
+            .map(|d| d.as_secs() / 60)
+            .unwrap_or(0);
+        println!(
+            "Skipping web scrape — last scrape was {}min ago (cooldown: {}h). Processing DB only.",
+            elapsed_min,
+            cooldown_hours
+        );
+        return Ok(());
+    }
+
+    let ann_items = ann_scraper::scrape_ann(None).await?;
+    println!("Fetched {} items from ANN", ann_items.len());
+    for item in &ann_items {
+        upsert_article(&state.db, item)
+            .await
+            .map_err(|e| format!("DB upsert error: {}", e))?;
+    }
+
+    if resolved.serp_api_key.is_empty() {
+        println!("Skipping SERP scrape — missing SerpAPI key in settings.");
+    } else {
+        let serp_items =
+            scrape_serp_topics_with_api_key(&[], &[], None, Some(&resolved.serp_api_key)).await?;
+        println!("Fetched {} items from SERP", serp_items.len());
+        for item in &serp_items {
+            upsert_article(&state.db, item)
+                .await
+                .map_err(|e| format!("DB upsert error: {}", e))?;
+        }
+    }
+
+    let now = SystemTime::now();
+    *state.last_scrape.lock().unwrap() = Some(now);
+    persist_last_scrape(settings_path, now);
+    Ok(())
+}
+
+async fn collect_items_to_enrich(state: &AppState, per_category_limit: i64) -> Result<Vec<NewsItem>, String> {
+    let categories = list_unenriched_categories(&state.db)
+        .await
+        .map_err(|e| format!("DB category read error: {}", e))?;
+
+    let mut items_to_enrich = Vec::new();
+    for category in categories {
+        let mut category_items = get_unenriched_articles_by_category(
+            &state.db,
+            &category,
+            per_category_limit,
+        )
+        .await
+        .map_err(|e| format!("DB read error for category '{}': {}", category, e))?;
+        items_to_enrich.append(&mut category_items);
+    }
+
+    Ok(items_to_enrich)
+}
+
+struct EnrichmentStageResult {
+    total: usize,
+    enriched_count: usize,
+    first_error: Option<String>,
+}
+
+async fn run_enrichment_stage(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    llm: &dyn platform_llm::LLMProviderImpl,
+    image_cache_dir: &Path,
+    settings: &ResolvedLlmSettings,
+    per_category_limit: i64,
+    items_to_enrich: Vec<NewsItem>,
+) -> Result<EnrichmentStageResult, String> {
+    let total = items_to_enrich.len();
+    println!(
+        "Enriching {} unenriched items this run (up to {} per category)",
+        total,
+        per_category_limit
+    );
+
+    let mut enriched_count = 0;
+    let mut first_error: Option<String> = None;
+
+    for (index, item) in items_to_enrich.into_iter().enumerate() {
+        let fallback_item = item.clone();
+        let enrich_result = tokio::time::timeout(
+            Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
+            async {
+                let (text, tags, snippet, ai_summary) = fetch_and_enrich_article(llm, &item).await?;
+                Ok::<NewsItem, String>(apply_enrichment_payload(
+                    item,
+                    text,
+                    tags,
+                    snippet,
+                    ai_summary,
+                    false,
+                ))
+            },
+        )
+        .await;
+
+        match enrich_result {
+            Ok(Ok(mut enriched)) => {
+                enrich_media_and_embedding(
+                    &state.db,
+                    image_cache_dir,
+                    &mut enriched,
+                    &settings.ollama_address,
+                    &settings.ollama_embedding_model,
+                )
+                .await;
+
+                enriched.is_enriched = true;
+                persist_enriched_article(&state.db, &enriched).await?;
+                enriched_count += 1;
+
+                emit_enriched_news_updated(app, &enriched, index + 1, total, enriched_count)?;
+                println!("Enriched: {}", enriched.title);
+            }
+            Ok(Err(err)) => {
+                println!("Failed to enrich item: {}", err);
+                mark_enriched(&state.db, &fallback_item.id)
+                    .await
+                    .map_err(|e| format!("mark_enriched fallback error: {}", e))?;
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+            }
+            Err(_) => {
+                let timeout_err = format!(
+                    "Timed out processing article '{}' after {}s",
+                    fallback_item.title, ARTICLE_PROCESS_TIMEOUT_SECS
+                );
+                println!("Failed to enrich item: {}", timeout_err);
+                mark_enriched(&state.db, &fallback_item.id)
+                    .await
+                    .map_err(|e| format!("mark_enriched timeout fallback error: {}", e))?;
+                if first_error.is_none() {
+                    first_error = Some(timeout_err);
+                }
+            }
+        }
+    }
+
+    Ok(EnrichmentStageResult {
+        total,
+        enriched_count,
+        first_error,
+    })
+}
+
+fn emit_enriched_news_sync_complete(
+    app: &tauri::AppHandle,
+    result: EnrichmentStageResult,
+) -> Result<(), String> {
+    let failed_count = result.total.saturating_sub(result.enriched_count);
+    let error_sample = if failed_count > 0 && result.enriched_count == 0 {
+        result.first_error
+    } else {
+        None
+    };
+
+    let sync_event = EnrichedNewsSyncCompleteEvent {
+        total: result.total,
+        enriched_count: result.enriched_count,
+        failed_count,
+        error_sample,
+        emitted_at_utc: Utc::now().to_rfc3339(),
+    };
+
+    println!(
+        "[Event] Emitting enriched-news-sync-complete: total={}, enriched={}, failed={}",
+        sync_event.total, sync_event.enriched_count, sync_event.failed_count
+    );
+    app.emit("enriched-news-sync-complete", &sync_event)
+        .map_err(|e| format!("Event emit error: {}", e))?;
+
+    println!(
+        "Enrichment complete: {}/{} items enriched",
+        sync_event.enriched_count, sync_event.total
+    );
+    Ok(())
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -484,7 +991,7 @@ async fn purge_database(app: tauri::AppHandle, state: tauri::State<'_, AppState>
 
 #[tauri::command]
 async fn test_ollama_connection(address: String) -> Result<bool, String> {
-    let base = normalize_ollama_base_url(&address)?;
+    let base = platform_llm::normalize_ollama_base_url(&address)?;
     let url = format!("{}/api/tags", base);
     let response = reqwest::get(url)
         .await
@@ -498,7 +1005,7 @@ async fn test_ollama_connection(address: String) -> Result<bool, String> {
 
 #[tauri::command]
 async fn list_ollama_models(address: String) -> Result<Vec<String>, String> {
-    let base = normalize_ollama_base_url(&address)?;
+    let base = platform_llm::normalize_ollama_base_url(&address)?;
     let url = format!("{}/api/tags", base);
     let response = reqwest::get(url)
         .await
@@ -553,330 +1060,49 @@ async fn start_all_action(
     ollama_model: Option<String>,
     ollama_embedding_model: Option<String>,
 ) -> Result<(), String> {
-    let limit = limit.clamp(1, 100) as i64;
-    println!("Starting full pipeline action (per-category limit={})…", limit);
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data directory: {}", e))?;
-    let image_cache_dir = app_data_dir.join("img_cache");
-    std::fs::create_dir_all(&image_cache_dir)
-        .map_err(|e| format!("Failed to create image cache directory: {}", e))?;
-    let settings_path = app_data_dir.join("settings.json");
-    let settings_map: HashMap<String, String> = std::fs::read_to_string(&settings_path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default();
-    let saved_ollama_address = settings_map
-        .get("ollamaAddress")
-        .cloned()
-        .unwrap_or_else(|| DEFAULT_OLLAMA_ADDRESS.to_string());
-    let saved_ollama_model = settings_map
-        .get("ollamaModel")
-        .cloned()
-        .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_string());
-    let saved_ollama_embedding_model = settings_map
-        .get("ollamaEmbeddingModel")
-        .cloned()
-        .unwrap_or_else(|| DEFAULT_OLLAMA_EMBEDDING_MODEL.to_string());
-    let saved_llm_provider = settings_map
-        .get("llmProvider")
-        .cloned()
-        .unwrap_or_else(|| "ollama".to_string());
-    let saved_openai_api_key = settings_map
-        .get("openaiApiKey")
-        .cloned()
-        .unwrap_or_default();
-    let saved_claude_api_key = settings_map
-        .get("claudeApiKey")
-        .cloned()
-        .unwrap_or_default();
-    let saved_gemini_api_key = settings_map
-        .get("geminiApiKey")
-        .cloned()
-        .unwrap_or_default();
-    let saved_openai_model = settings_map
-        .get("openaiModel")
-        .cloned()
-        .unwrap_or_else(|| "gpt-5.4-mini".to_string());
-    let saved_claude_model = settings_map
-        .get("claudeModel")
-        .cloned()
-        .unwrap_or_else(|| "claude-sonnet-4-6".to_string());
-    let saved_gemini_model = settings_map
-        .get("geminiModel")
-        .cloned()
-        .unwrap_or_else(|| "gemini-2.5-flash".to_string());
-    let saved_serp_api_key = settings_map
-        .get("serpApiKey")
-        .cloned()
-        .unwrap_or_default();
-    let ollama_address = ollama_address
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_ollama_address);
-    let ollama_model = ollama_model
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_ollama_model);
-    let ollama_embedding_model = ollama_embedding_model
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_ollama_embedding_model);
-    let llm_provider = llm_provider
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_llm_provider);
-    let openai_api_key = openai_api_key
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_openai_api_key);
-    let claude_api_key = claude_api_key
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_claude_api_key);
-    let gemini_api_key = gemini_api_key
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_gemini_api_key);
-    let openai_model = openai_model
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_openai_model);
-    let claude_model = claude_model
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_claude_model);
-    let gemini_model = gemini_model
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_gemini_model);
-    let serp_api_key = saved_serp_api_key.trim().to_string();
+    let per_category_limit = limit.clamp(1, 100) as i64;
+    println!(
+        "Starting full pipeline action (per-category limit={})…",
+        per_category_limit
+    );
+    let runtime = resolve_runtime_llm_context(
+        &app,
+        LlmOverrideArgs {
+            llm_provider,
+            openai_api_key,
+            claude_api_key,
+            gemini_api_key,
+            openai_model,
+            claude_model,
+            gemini_model,
+            ollama_address,
+            ollama_model,
+            ollama_embedding_model,
+        },
+    )?;
 
-    let selected_provider = platform_llm::LLMProvider::from_str(&llm_provider);
-    let llm_config = match selected_provider {
-        platform_llm::LLMProvider::Ollama => platform_llm::LLMConfig {
-            provider: selected_provider.clone(),
-            api_key: None,
-            endpoint: Some(ollama_address.clone()),
-            model: ollama_model.clone(),
-        },
-        platform_llm::LLMProvider::OpenAI => platform_llm::LLMConfig {
-            provider: selected_provider.clone(),
-            api_key: Some(openai_api_key.clone()),
-            endpoint: None,
-            model: openai_model.clone(),
-        },
-        platform_llm::LLMProvider::Claude => platform_llm::LLMConfig {
-            provider: selected_provider.clone(),
-            api_key: Some(claude_api_key.clone()),
-            endpoint: None,
-            model: claude_model.clone(),
-        },
-        platform_llm::LLMProvider::Gemini => platform_llm::LLMConfig {
-            provider: selected_provider.clone(),
-            api_key: Some(gemini_api_key.clone()),
-            endpoint: None,
-            model: gemini_model.clone(),
-        },
-    };
-    let llm = platform_llm::create_provider(&llm_config)?;
-    verify_llm_provider_handshake(&llm_provider, llm.as_ref(), &llm_config).await?;
+    let (llm_config, llm) = create_provider_from_resolved(&runtime.resolved, true).await?;
     println!(
         "Using LLM provider '{}' with model '{}'",
-        llm_provider,
+        runtime.resolved.llm_provider,
         llm_config.model
     );
 
-    // Time gate: skip web scraping if last scrape was within the cooldown window.
-    // This reduces the risk of IP banning from repeated intensive scraping.
-    let should_scrape = {
-        let last = state.last_scrape.lock().unwrap();
-        match *last {
-            Some(t) => cooldown_hours == 0 || t.elapsed().unwrap_or(Duration::ZERO) >= Duration::from_secs(cooldown_hours * 3600),
-            None => true,
-        }
-    };
+    run_scrape_stage(&state, &runtime.resolved, cooldown_hours, &runtime.settings_path).await?;
 
-    if should_scrape {
-        let ann_items = ann_scraper::scrape_ann(None).await?;
-        println!("Fetched {} items from ANN", ann_items.len());
-        for item in &ann_items {
-            upsert_article(&state.db, item)
-                .await
-                .map_err(|e| format!("DB upsert error: {}", e))?;
-        }
+    let items_to_enrich = collect_items_to_enrich(&state, per_category_limit).await?;
+    let result = run_enrichment_stage(
+        &app,
+        &state,
+        llm.as_ref(),
+        &runtime.image_cache_dir,
+        &runtime.resolved,
+        per_category_limit,
+        items_to_enrich,
+    )
+    .await?;
 
-        if serp_api_key.is_empty() {
-            println!("Skipping SERP scrape — missing SerpAPI key in settings.");
-        } else {
-            let serp_items = scrape_serp_topics_with_api_key(&[], &[], None, Some(&serp_api_key)).await?;
-            println!("Fetched {} items from SERP", serp_items.len());
-            for item in &serp_items {
-                upsert_article(&state.db, item)
-                    .await
-                    .map_err(|e| format!("DB upsert error: {}", e))?;
-            }
-        }
-
-        let now = SystemTime::now();
-        *state.last_scrape.lock().unwrap() = Some(now);
-        let epoch = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-        let mut map: HashMap<String, String> = std::fs::read_to_string(&settings_path)
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default();
-        map.insert("last_scrape_epoch".to_string(), epoch.to_string());
-        if let Ok(json) = serde_json::to_string_pretty(&map) {
-            let _ = std::fs::write(&settings_path, json);
-        }
-    } else {
-        let elapsed_min = state.last_scrape.lock().unwrap()
-            .and_then(|t| t.elapsed().ok())
-            .map(|d| d.as_secs() / 60)
-            .unwrap_or(0);
-        println!(
-            "Skipping web scrape — last scrape was {}min ago (cooldown: {}h). Processing DB only.",
-            elapsed_min,
-            cooldown_hours
-        );
-    }
-
-    // Pick top N newest unenriched articles per category.
-    let categories = list_unenriched_categories(&state.db)
-        .await
-        .map_err(|e| format!("DB category read error: {}", e))?;
-
-    let mut items_to_enrich: Vec<NewsItem> = Vec::new();
-    for category in categories {
-        let mut category_items = get_unenriched_articles_by_category(&state.db, &category, limit)
-            .await
-            .map_err(|e| format!("DB read error for category '{}': {}", category, e))?;
-        items_to_enrich.append(&mut category_items);
-    }
-
-    let total = items_to_enrich.len();
-    println!("Enriching {} unenriched items this run (up to {} per category)", total, limit);
-    let mut enriched_count = 0;
-    let mut first_error: Option<String> = None;
-
-    for (index, item) in items_to_enrich.into_iter().enumerate() {
-        let fallback_item = item.clone();
-        let llm_ref = llm.as_ref();
-        let enrich_result = tokio::time::timeout(
-            Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
-            async {
-                let text = fetch_article_text(&item.url).await?;
-                let (tags, snippet, ai_summary) = llm_ref.enrich(&item.title, &text).await?;
-
-                let mut enriched = item;
-                if enriched.og_content.trim().is_empty() {
-                    enriched.og_content = text;
-                }
-                if enriched.tags.is_empty() {
-                    enriched.tags = tags;
-                }
-                if enriched.snippet.trim().is_empty() {
-                    enriched.snippet = snippet;
-                }
-                if enriched.ai_summary.trim().is_empty() {
-                    enriched.ai_summary = ai_summary;
-                }
-
-                Ok::<NewsItem, String>(enriched)
-            },
-        )
-        .await;
-
-        match enrich_result {
-            Ok(Ok(mut enriched)) => {
-                if !enriched.thumbnail.trim().is_empty() {
-                    match cache_thumbnail(&image_cache_dir, &enriched.id, &enriched.thumbnail).await {
-                        Ok(cached_path) => { enriched.thumbnail = cached_path; }
-                        Err(err) => { println!("Thumbnail cache failed for {}: {}", enriched.id, err); }
-                    }
-                }
-
-                // Generate and store embedding (soft failure — missing embedding degrades gracefully).
-                let embed_text = format!("{} {} {}", enriched.title, enriched.tags.join(" "), enriched.snippet);
-                match platform_llm::get_ollama_embedding(&ollama_address, &embed_text, Some(&ollama_embedding_model)).await {
-                    Ok(vec) => {
-                        if let Err(e) = db::save_embedding(&state.db, &enriched.id, &vec).await {
-                            println!("Embedding save failed for {}: {}", enriched.id, e);
-                        }
-                    }
-                    Err(e) => {
-                        println!("Embedding generation skipped for '{}': {}", enriched.title, e);
-                    }
-                }
-
-                enriched.is_enriched = true;
-                upsert_article(&state.db, &enriched)
-                    .await
-                    .map_err(|e| format!("DB upsert error: {}", e))?;
-                mark_enriched(&state.db, &enriched.id)
-                    .await
-                    .map_err(|e| format!("mark_enriched error: {}", e))?;
-                enriched_count += 1;
-
-                let event = EnrichedNewsUpdatedEvent {
-                    id: enriched.id.clone(),
-                    category: enriched.category.clone(),
-                    date: enriched.date.clone(),
-                    current: index + 1,
-                    total,
-                    enriched_count,
-                    emitted_at_utc: Utc::now().to_rfc3339(),
-                };
-                println!("[Event] enriched-news-updated: current={}, total={}, enriched={}", event.current, event.total, event.enriched_count);
-                app.emit("enriched-news-updated", &event)
-                    .map_err(|e| format!("Event emit error: {}", e))?;
-                println!("Enriched: {}", enriched.title);
-            }
-            Ok(Err(err)) => {
-                println!("Failed to enrich item: {}", err);
-                // Even if extraction/enrichment fails, surface the scraped item in the UI.
-                mark_enriched(&state.db, &fallback_item.id)
-                    .await
-                    .map_err(|e| format!("mark_enriched fallback error: {}", e))?;
-                if first_error.is_none() {
-                    first_error = Some(err);
-                }
-            }
-            Err(_) => {
-                let timeout_err = format!(
-                    "Timed out processing article '{}' after {}s",
-                    fallback_item.title,
-                    ARTICLE_PROCESS_TIMEOUT_SECS
-                );
-                println!("Failed to enrich item: {}", timeout_err);
-                // Timed-out items should also be surfaced in the UI with available metadata.
-                mark_enriched(&state.db, &fallback_item.id)
-                    .await
-                    .map_err(|e| format!("mark_enriched timeout fallback error: {}", e))?;
-                if first_error.is_none() {
-                    first_error = Some(timeout_err);
-                }
-            }
-        }
-    }
-
-    let failed_count = total.saturating_sub(enriched_count);
-    let error_sample = if failed_count > 0 && enriched_count == 0 { first_error } else { None };
-    let sync_event = EnrichedNewsSyncCompleteEvent {
-        total,
-        enriched_count,
-        failed_count,
-        error_sample,
-        emitted_at_utc: Utc::now().to_rfc3339(),
-    };
-    
-    println!("[Event] Emitting enriched-news-sync-complete: total={}, enriched={}, failed={}", sync_event.total, sync_event.enriched_count, sync_event.failed_count);
-    app.emit("enriched-news-sync-complete", &sync_event)
-        .map_err(|e| format!("Event emit error: {}", e))?;
-
-    println!("Enrichment complete: {}/{} items enriched", enriched_count, total);
-    Ok(())
+    emit_enriched_news_sync_complete(&app, result)
 }
 
 #[tauri::command]
@@ -895,201 +1121,47 @@ async fn reprocess_article(
     ollama_model: Option<String>,
     ollama_embedding_model: Option<String>,
 ) -> Result<NewsItem, String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data directory: {}", e))?;
-    let image_cache_dir = app_data_dir.join("img_cache");
-    std::fs::create_dir_all(&image_cache_dir)
-        .map_err(|e| format!("Failed to create image cache directory: {}", e))?;
-
-    let settings_path = app_data_dir.join("settings.json");
-    let settings_map: HashMap<String, String> = std::fs::read_to_string(&settings_path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default();
-
-    let saved_ollama_address = settings_map
-        .get("ollamaAddress")
-        .cloned()
-        .unwrap_or_else(|| DEFAULT_OLLAMA_ADDRESS.to_string());
-    let saved_ollama_model = settings_map
-        .get("ollamaModel")
-        .cloned()
-        .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_string());
-    let saved_ollama_embedding_model = settings_map
-        .get("ollamaEmbeddingModel")
-        .cloned()
-        .unwrap_or_else(|| DEFAULT_OLLAMA_EMBEDDING_MODEL.to_string());
-    let saved_llm_provider = settings_map
-        .get("llmProvider")
-        .cloned()
-        .unwrap_or_else(|| "ollama".to_string());
-    let saved_openai_api_key = settings_map
-        .get("openaiApiKey")
-        .cloned()
-        .unwrap_or_default();
-    let saved_claude_api_key = settings_map
-        .get("claudeApiKey")
-        .cloned()
-        .unwrap_or_default();
-    let saved_gemini_api_key = settings_map
-        .get("geminiApiKey")
-        .cloned()
-        .unwrap_or_default();
-    let saved_openai_model = settings_map
-        .get("openaiModel")
-        .cloned()
-        .unwrap_or_else(|| "gpt-5.4-mini".to_string());
-    let saved_claude_model = settings_map
-        .get("claudeModel")
-        .cloned()
-        .unwrap_or_else(|| "claude-sonnet-4-6".to_string());
-    let saved_gemini_model = settings_map
-        .get("geminiModel")
-        .cloned()
-        .unwrap_or_else(|| "gemini-2.5-flash".to_string());
-
-    let ollama_address = ollama_address
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_ollama_address);
-    let ollama_model = ollama_model
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_ollama_model);
-    let ollama_embedding_model = ollama_embedding_model
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_ollama_embedding_model);
-    let llm_provider = llm_provider
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_llm_provider);
-    let openai_api_key = openai_api_key
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_openai_api_key);
-    let claude_api_key = claude_api_key
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_claude_api_key);
-    let gemini_api_key = gemini_api_key
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_gemini_api_key);
-    let openai_model = openai_model
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_openai_model);
-    let claude_model = claude_model
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_claude_model);
-    let gemini_model = gemini_model
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(saved_gemini_model);
-
-    let selected_provider = platform_llm::LLMProvider::from_str(&llm_provider);
-    let llm_config = match selected_provider {
-        platform_llm::LLMProvider::Ollama => platform_llm::LLMConfig {
-            provider: selected_provider,
-            api_key: None,
-            endpoint: Some(ollama_address.clone()),
-            model: ollama_model,
+    let runtime = resolve_runtime_llm_context(
+        &app,
+        LlmOverrideArgs {
+            llm_provider,
+            openai_api_key,
+            claude_api_key,
+            gemini_api_key,
+            openai_model,
+            claude_model,
+            gemini_model,
+            ollama_address,
+            ollama_model,
+            ollama_embedding_model,
         },
-        platform_llm::LLMProvider::OpenAI => platform_llm::LLMConfig {
-            provider: selected_provider,
-            api_key: Some(openai_api_key),
-            endpoint: None,
-            model: openai_model,
-        },
-        platform_llm::LLMProvider::Claude => platform_llm::LLMConfig {
-            provider: selected_provider,
-            api_key: Some(claude_api_key),
-            endpoint: None,
-            model: claude_model,
-        },
-        platform_llm::LLMProvider::Gemini => platform_llm::LLMConfig {
-            provider: selected_provider,
-            api_key: Some(gemini_api_key),
-            endpoint: None,
-            model: gemini_model,
-        },
-    };
-    let llm = platform_llm::create_provider(&llm_config)?;
+    )?;
+
+    let (_llm_config, llm) = create_provider_from_resolved(&runtime.resolved, false).await?;
 
     let item = get_article_by_id(&state.db, &article_id)
         .await
         .map_err(|e| format!("DB read error: {}", e))?
         .ok_or_else(|| format!("Article not found: {}", article_id))?;
 
-    let llm_ref = llm.as_ref();
-    let text = tokio::time::timeout(
-        Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
-        fetch_article_text(&item.url),
+    let (text, tags, snippet, ai_summary) =
+        fetch_and_enrich_article_with_timeouts(llm.as_ref(), &item).await?;
+
+    let mut enriched = apply_enrichment_payload(item, text, tags, snippet, ai_summary, true);
+
+    enrich_media_and_embedding(
+        &state.db,
+        &runtime.image_cache_dir,
+        &mut enriched,
+        &runtime.resolved.ollama_address,
+        &runtime.resolved.ollama_embedding_model,
     )
-    .await
-    .map_err(|_| format!("Timed out fetching article text after {}s", ARTICLE_PROCESS_TIMEOUT_SECS))?
-    .map_err(|e| format!("Failed to fetch article text: {}", e))?;
-
-    let (tags, snippet, ai_summary) = tokio::time::timeout(
-        Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
-        llm_ref.enrich(&item.title, &text),
-    )
-    .await
-    .map_err(|_| format!("Timed out enriching article after {}s", ARTICLE_PROCESS_TIMEOUT_SECS))??;
-
-    let mut enriched = item;
-    enriched.og_content = text;
-    enriched.tags = tags;
-    enriched.snippet = snippet;
-    enriched.ai_summary = ai_summary;
-
-    if !enriched.thumbnail.trim().is_empty() {
-        match cache_thumbnail(&image_cache_dir, &enriched.id, &enriched.thumbnail).await {
-            Ok(cached_path) => {
-                enriched.thumbnail = cached_path;
-            }
-            Err(err) => {
-                println!("Thumbnail cache failed for {}: {}", enriched.id, err);
-            }
-        }
-    }
-
-    // Generate and store embedding (soft failure).
-    let embed_text = format!("{} {} {}", enriched.title, enriched.tags.join(" "), enriched.snippet);
-    match platform_llm::get_ollama_embedding(&ollama_address, &embed_text, Some(&ollama_embedding_model)).await {
-        Ok(vec) => {
-            if let Err(e) = db::save_embedding(&state.db, &enriched.id, &vec).await {
-                println!("Embedding save failed for {}: {}", enriched.id, e);
-            }
-        }
-        Err(e) => {
-            println!("Embedding generation skipped for '{}': {}", enriched.title, e);
-        }
-    }
+    .await;
 
     enriched.is_enriched = true;
-    upsert_article(&state.db, &enriched)
-        .await
-        .map_err(|e| format!("DB upsert error: {}", e))?;
-    mark_enriched(&state.db, &enriched.id)
-        .await
-        .map_err(|e| format!("mark_enriched error: {}", e))?;
+    persist_enriched_article(&state.db, &enriched).await?;
 
-    let event = EnrichedNewsUpdatedEvent {
-        id: enriched.id.clone(),
-        category: enriched.category.clone(),
-        date: enriched.date.clone(),
-        current: 1,
-        total: 1,
-        enriched_count: 1,
-        emitted_at_utc: Utc::now().to_rfc3339(),
-    };
-    app.emit("enriched-news-updated", &event)
-        .map_err(|e| format!("Event emit error: {}", e))?;
+    emit_enriched_news_updated(&app, &enriched, 1, 1, 1)?;
 
     Ok(enriched)
 }
@@ -1207,6 +1279,109 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod helper_tests {
+    use super::*;
+
+    fn sample_news_item() -> NewsItem {
+        NewsItem {
+            id: "id-1".to_string(),
+            title: "Sample title".to_string(),
+            url: "https://example.com/a".to_string(),
+            date: "2026-03-26T00:00:00Z".to_string(),
+            source_name: "Source".to_string(),
+            source_icon: "".to_string(),
+            authors: vec![],
+            thumbnail: "".to_string(),
+            tags: vec![],
+            category: "world".to_string(),
+            ai_summary: "".to_string(),
+            og_content: "".to_string(),
+            snippet: "".to_string(),
+            is_enriched: false,
+        }
+    }
+
+    #[test]
+    fn resolve_llm_settings_prefers_non_empty_overrides() {
+        let mut map = HashMap::new();
+        map.insert("llmProvider".to_string(), "ollama".to_string());
+        map.insert("openaiApiKey".to_string(), "saved-openai".to_string());
+        map.insert("ollamaAddress".to_string(), "http://127.0.0.1:11434".to_string());
+
+        let resolved = resolve_llm_settings(
+            &map,
+            LlmOverrideArgs {
+                llm_provider: Some("openai".to_string()),
+                openai_api_key: Some("override-openai".to_string()),
+                ollama_address: Some("  ".to_string()),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(resolved.llm_provider, "openai");
+        assert_eq!(resolved.openai_api_key, "override-openai");
+        // Empty override should keep saved value.
+        assert_eq!(resolved.ollama_address, "http://127.0.0.1:11434");
+    }
+
+    #[test]
+    fn apply_enrichment_payload_respects_overwrite_flag() {
+        let base = sample_news_item();
+
+        let enriched_non_overwrite = apply_enrichment_payload(
+            base.clone(),
+            "fresh content".to_string(),
+            vec!["tag1".to_string()],
+            "fresh snippet".to_string(),
+            "fresh summary".to_string(),
+            false,
+        );
+
+        assert_eq!(enriched_non_overwrite.og_content, "fresh content");
+        assert_eq!(enriched_non_overwrite.tags, vec!["tag1".to_string()]);
+
+        let mut already_filled = base;
+        already_filled.og_content = "existing content".to_string();
+        already_filled.tags = vec!["existing-tag".to_string()];
+        already_filled.snippet = "existing snippet".to_string();
+        already_filled.ai_summary = "existing summary".to_string();
+
+        let enriched_keep_existing = apply_enrichment_payload(
+            already_filled.clone(),
+            "new content".to_string(),
+            vec!["new-tag".to_string()],
+            "new snippet".to_string(),
+            "new summary".to_string(),
+            false,
+        );
+
+        assert_eq!(enriched_keep_existing.og_content, "existing content");
+        assert_eq!(enriched_keep_existing.tags, vec!["existing-tag".to_string()]);
+
+        let enriched_force_overwrite = apply_enrichment_payload(
+            already_filled,
+            "new content".to_string(),
+            vec!["new-tag".to_string()],
+            "new snippet".to_string(),
+            "new summary".to_string(),
+            true,
+        );
+
+        assert_eq!(enriched_force_overwrite.og_content, "new content");
+        assert_eq!(enriched_force_overwrite.tags, vec!["new-tag".to_string()]);
+    }
+
+    #[test]
+    fn should_run_scrape_handles_cooldown_rules() {
+        assert!(should_run_scrape(None, 12));
+
+        let thirty_minutes_ago = SystemTime::now() - Duration::from_secs(30 * 60);
+        assert!(!should_run_scrape(Some(thirty_minutes_ago), 1));
+        assert!(should_run_scrape(Some(thirty_minutes_ago), 0));
+    }
 }
 
 #[cfg(test)]

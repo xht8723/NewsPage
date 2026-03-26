@@ -1,6 +1,5 @@
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
-use std::collections::HashMap;
 use std::str::FromStr;
 
 use crate::news_item::NewsItem;
@@ -211,36 +210,6 @@ sqlx::query(
 .execute(pool)
 .await?;
 Ok(())
-}
-
-/// Return newest unenriched articles ordered by date descending,
-/// capped to `limit` items per category while preserving overall recency.
-pub async fn get_unenriched_articles(pool: &SqlitePool, limit: i64) -> Result<Vec<NewsItem>, sqlx::Error> {
-let rows = sqlx::query(
-"SELECT id, title, url, date, source_name, source_icon, authors,
-        thumbnail, tags, category, ai_summary, og_content, snippet, is_enriched
- FROM news
- WHERE is_enriched = 0
- ORDER BY date DESC",
-)
-.fetch_all(pool)
-.await?;
-
-let mut counts_by_category: HashMap<String, i64> = HashMap::new();
-let mut items = Vec::new();
-
-for row in &rows {
-let item = row_to_news_item(row);
-let current_count = *counts_by_category.get(&item.category).unwrap_or(&0);
-if current_count >= limit {
-continue;
-}
-
-counts_by_category.insert(item.category.clone(), current_count + 1);
-items.push(item);
-}
-
-Ok(items)
 }
 
 pub async fn list_unenriched_categories(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {

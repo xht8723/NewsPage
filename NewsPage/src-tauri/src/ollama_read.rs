@@ -1,31 +1,11 @@
 use ollama_rs::generation::completion::request::GenerationRequest;
 use ollama_rs::Ollama;
-use reqwest::Url;
 use trafilatura::{extract, Options};
 use crate::news_item::NewsItem;
+use crate::platform_llm::parse_ollama_host_port;
 
 const DEFAULT_MODEL: &str = "qwen2.5:3b";
 const DEFAULT_OLLAMA_ADDRESS: &str = "http://127.0.0.1:11434";
-
-fn parse_ollama_address(address: &str) -> Result<(String, u16), String> {
-	let trimmed = address.trim();
-	let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-		trimmed.to_string()
-	} else {
-		format!("http://{}", trimmed)
-	};
-
-	let parsed = Url::parse(&with_scheme)
-		.map_err(|e| format!("Invalid Ollama address '{}': {}", address, e))?;
-	let host = parsed
-		.host_str()
-		.ok_or_else(|| "Ollama address is missing host".to_string())?
-		.to_string();
-	let scheme = parsed.scheme().to_string();
-	let port = parsed.port_or_known_default().unwrap_or(11434);
-	// Include the scheme so ollama-rs can construct a valid absolute URL
-	Ok((format!("{}://{}", scheme, host), port))
-}
 
 /// Fetches the raw HTML at `url` and uses trafilatura to extract the main article text.
 pub async fn fetch_article_text(url: &str) -> Result<String, String> {
@@ -55,7 +35,7 @@ async fn run_ollama_prompts(
 	if model.is_empty() {
 		return Err("Ollama model cannot be empty".to_string());
 	}
-	let (host, port) = parse_ollama_address(address)?;
+	let (host, port) = parse_ollama_host_port(address)?;
 	let ollama = Ollama::new(host, port);
 
 	// --- Prompt 1: Tags ---

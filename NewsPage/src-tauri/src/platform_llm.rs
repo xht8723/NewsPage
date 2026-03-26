@@ -1,5 +1,39 @@
 use async_trait::async_trait;
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
+
+pub fn normalize_ollama_base_url(address: &str) -> Result<String, String> {
+    let trimmed = address.trim();
+    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{}", trimmed)
+    };
+
+    let parsed = Url::parse(&with_scheme)
+        .map_err(|e| format!("Invalid Ollama address '{}': {}", address, e))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "Ollama address is missing host".to_string())?;
+    let scheme = parsed.scheme();
+    let port = parsed.port_or_known_default().unwrap_or(11434);
+
+    Ok(format!("{}://{}:{}", scheme, host, port))
+}
+
+pub fn parse_ollama_host_port(address: &str) -> Result<(String, u16), String> {
+    let base = normalize_ollama_base_url(address)?;
+    let parsed = Url::parse(&base)
+        .map_err(|e| format!("Invalid Ollama address '{}': {}", address, e))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "Ollama address is missing host".to_string())?
+        .to_string();
+    let scheme = parsed.scheme().to_string();
+    let port = parsed.port_or_known_default().unwrap_or(11434);
+
+    Ok((format!("{}://{}", scheme, host), port))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum LLMProvider {
@@ -201,25 +235,7 @@ impl LLMProviderImpl for OllamaProvider {
 
 impl OllamaProvider {
     fn parse_address(&self) -> Result<(String, u16), String> {
-        use reqwest::Url;
-
-        let trimmed = self.address.trim();
-        let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-            trimmed.to_string()
-        } else {
-            format!("http://{}", trimmed)
-        };
-
-        let parsed = Url::parse(&with_scheme)
-            .map_err(|e| format!("Invalid address '{}': {}", trimmed, e))?;
-        let host = parsed
-            .host_str()
-            .ok_or_else(|| "Address is missing host".to_string())?
-            .to_string();
-        let scheme = parsed.scheme().to_string();
-        let port = parsed.port_or_known_default().unwrap_or(11434);
-
-        Ok((format!("{}://{}", scheme, host), port))
+        parse_ollama_host_port(&self.address)
     }
 }
 
@@ -449,7 +465,8 @@ impl LLMProviderImpl for ClaudeProvider {
 
         #[derive(Deserialize)]
         struct TextBlock {
-            r#type: String,
+            #[serde(rename = "type")]
+            _type: String,
             text: String,
         }
 

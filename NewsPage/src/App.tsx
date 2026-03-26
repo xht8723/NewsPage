@@ -1,13 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
-  LayoutGrid,
-  LayoutList,
-  CreditCard,
   Calendar,
-  ArrowLeft,
   Moon,
   Sun,
   Newspaper,
@@ -18,213 +13,32 @@ import {
   Settings,
   SlidersHorizontal,
 } from "lucide-react";
-import annFavicon from "./assets/favicon.ico";
+import {
+  CATEGORIES,
+  TOPIC_CATEGORIES,
+  DEFAULT_EMBEDDING_MODEL,
+  DEFAULT_VISIBLE_CATEGORIES,
+  type Category,
+  type TopicCategory,
+  type LayoutMode,
+  type OllamaConnectionState,
+} from "./constants/news";
+import type { NewsArticle, BackendNewsItem, UserSettings, CardContextMenuState } from "./types/news";
+import { mapBackendNewsItem } from "./utils/newsMapper";
+import { formatDateLocal, offsetDateString, getProviderLabel } from "./utils/newsMeta";
+import { buildLLMArgs, getSelectedApiKey, getSelectedEndpoint, getSelectedModel } from "./utils/llmConfig";
+import { useEnrichedNews } from "./hooks/useEnrichedNews";
+import { useDebouncedSettingSaver } from "./hooks/useDebouncedSettingSaver";
+import { PreferencePanel } from "./components/PreferencePanel";
+import { ArticleCard } from "./components/ArticleCard";
+import { LayoutSwitcher } from "./components/LayoutSwitcher";
+import { CardContextMenu } from "./components/CardContextMenu";
+import { SettingsModal } from "./components/SettingsModal";
+import { ArticleDetailModal } from "./components/ArticleDetailModal";
+import { CalendarModal } from "./components/CalendarModal";
 import "./App.css";
 
-const TOPIC_CATEGORIES = [
-  "World",
-  "Gaming",
-  "Anime",
-  "Technology",
-  "Science",
-  "Business",
-  "Entertainment",
-] as const;
-
-const CATEGORIES = ["All", ...TOPIC_CATEGORIES] as const;
-
-type Category = (typeof CATEGORIES)[number];
-type TopicCategory = (typeof TOPIC_CATEGORIES)[number];
-type LayoutMode = "grid" | "card" | "list";
-
-interface NewsArticle {
-  id: string;
-  category: TopicCategory;
-  tags: string[];
-  title: string;
-  snippet: string;
-  aiSummary: string;
-  content: string;
-  url: string;
-  thumbnailUrl: string;
-  sourceName: string;
-  sourceIconUrl: string;
-  date: string;
-  timestamp: number;
-  preferenceScore: number;
-}
-
-interface BackendNewsItem {
-  id: string;
-  title: string;
-  url: string;
-  date: string;
-  source_name: string;
-  source_icon: string;
-  authors: string[];
-  thumbnail: string;
-  tags: string[];
-  category: string;
-  ai_summary: string;
-  og_content: string;
-  snippet: string;
-  preference_score?: number;
-}
-
-interface UserSettings {
-  newsLimit: number;
-  scrapeCooldownHours: number;
-  llmProvider: string; // "ollama" | "openai" | "claude" | "gemini"
-  ollamaAddress: string;
-  ollamaModel: string;
-  ollamaEmbeddingModel: string;
-  openaiApiKey: string;
-  openaiModel: string;
-  claudeApiKey: string;
-  claudeModel: string;
-  geminiApiKey: string;
-  geminiModel: string;
-  serpApiKey: string;
-  likedConcepts: string;
-  dislikedConcepts: string;
-  sortMode: string; // "date" | "score"
-}
-
-interface CardContextMenuState {
-  article: NewsArticle;
-  x: number;
-  y: number;
-}
-
-type OllamaConnectionState = "unknown" | "ok" | "fail";
-
-const DEFAULT_VISIBLE_CATEGORIES: Record<TopicCategory, boolean> = {
-  World: true,
-  Gaming: true,
-  Anime: true,
-  Technology: true,
-  Science: true,
-  Business: true,
-  Entertainment: true,
-};
-
-const OPENAI_MODELS = ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"] as const;
-const CLAUDE_MODELS = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6"] as const;
-const GEMINI_MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-flash-preview"] as const;
-const DEFAULT_EMBEDDING_MODEL = "nomic-embed-text";
-const RELEVANCE_UNAVAILABLE_TOKEN = "RELEVANCE_OLLAMA_UNAVAILABLE";
-
-function formatDateLocal(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function offsetDateString(dateString: string, days: number): string {
-  const nextDate = new Date(`${dateString}T00:00:00`);
-  nextDate.setDate(nextDate.getDate() + days);
-  return formatDateLocal(nextDate);
-}
-
-function getUtcDateKey(dateValue: string): string {
-  const parsed = Date.parse(dateValue);
-  if (!Number.isNaN(parsed)) {
-    return formatDateLocal(new Date(parsed));
-  }
-
-  return dateValue.slice(0, 10);
-}
-
-function toTopicCategory(value: string): TopicCategory {
-  const normalized = value.trim().toLowerCase();
-  const found = TOPIC_CATEGORIES.find((category) => category.toLowerCase() === normalized);
-  return found ?? "World";
-}
-
-function resolveThumbnailSrc(thumbnail: string): string {
-  const fallback = "https://placehold.co/640x360/27272a/a1a1aa?text=News";
-  const value = thumbnail.trim();
-  if (!value) {
-    return fallback;
-  }
-
-  if (/^(asset|tauri|file):/i.test(value)) {
-    return value;
-  }
-
-  if (/^https?:\/\//i.test(value)) {
-    return value;
-  }
-
-  try {
-    const normalizedPath = value.replace(/\\/g, "/");
-    return convertFileSrc(normalizedPath);
-  } catch {
-    return fallback;
-  }
-}
-
-function resolveSourceIcon(sourceName: string, sourceIcon: string): string {
-  const normalizedSourceName = sourceName.trim().toLowerCase();
-  const normalizedSourceIcon = sourceIcon.trim();
-
-  if (normalizedSourceName === "ann" || normalizedSourceIcon.replace(/\\/g, "/").endsWith("src/assets/favicon.ico")) {
-    return annFavicon;
-  }
-
-  if (!normalizedSourceIcon) {
-    return "";
-  }
-
-  if (/^https?:\/\//i.test(normalizedSourceIcon)) {
-    return normalizedSourceIcon;
-  }
-
-  try {
-    return convertFileSrc(normalizedSourceIcon.replace(/\\/g, "/"));
-  } catch {
-    return "";
-  }
-}
-
-function getProviderLabel(provider: string): string {
-  const normalized = provider.trim().toLowerCase();
-  if (normalized === "openai") {
-    return "OpenAI";
-  }
-  if (normalized === "claude") {
-    return "Claude";
-  }
-  if (normalized === "gemini") {
-    return "Gemini";
-  }
-  return "Ollama";
-}
-
-function mapBackendNewsItem(item: BackendNewsItem): NewsArticle {
-  const parsedTimestamp = Date.parse(item.date);
-  const normalizedTags = item.tags.length > 0 ? item.tags : [item.source_name || "Update"];
-  return {
-    id: item.id,
-    category: toTopicCategory(item.category),
-    tags: normalizedTags,
-    title: item.title,
-    snippet: item.snippet || "",
-    aiSummary: item.ai_summary || "",
-    content: item.og_content || item.ai_summary || item.snippet || "Content unavailable.",
-    url: item.url || "",
-    thumbnailUrl: resolveThumbnailSrc(item.thumbnail),
-    sourceName: item.source_name || "Unknown source",
-    sourceIconUrl: resolveSourceIcon(item.source_name, item.source_icon),
-    date: getUtcDateKey(item.date),
-    timestamp: Number.isNaN(parsedTimestamp) ? Date.now() : parsedTimestamp,
-    preferenceScore: item.preference_score ?? 0,
-  };
-}
-
 function App(): React.JSX.Element {
-  const [news, setNews] = useState<NewsArticle[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<Category>("All");
   const [layout, setLayout] = useState<LayoutMode>("card");
@@ -236,7 +50,6 @@ function App(): React.JSX.Element {
   const [selectedArticle, setSelectedArticle] = useState<NewsArticle | null>(null);
   const [visibleCategories, setVisibleCategories] = useState<Record<TopicCategory, boolean>>(DEFAULT_VISIBLE_CATEGORIES);
   const refreshTimeoutRef = useRef<number | null>(null);
-  const fetchCounterRef = useRef(0);
   const [enrichmentProgress, setEnrichmentProgress] = useState<{ current: number; total: number; enriched: number } | null>(null);
   const [enrichmentError, setEnrichmentError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<CardContextMenuState | null>(null);
@@ -270,7 +83,7 @@ function App(): React.JSX.Element {
   const [purgeConfirmStep, setPurgeConfirmStep] = useState<0 | 1 | 2>(0);
   const [isPurging, setIsPurging] = useState(false);
   const [showLayoutSwitcher, setShowLayoutSwitcher] = useState(true);
-  const settingsSaveTimeoutRef = useRef<number | null>(null);
+  const saveSetting = useDebouncedSettingSaver(500);
 
   // Load persisted settings on mount
   useEffect(() => {
@@ -317,16 +130,6 @@ function App(): React.JSX.Element {
         }
       })
       .catch(() => { /* first launch — no settings file yet */ });
-  }, []);
-
-  // Persist a single setting key with debounce for text inputs
-  const saveSetting = useCallback((key: string, value: string) => {
-    if (settingsSaveTimeoutRef.current !== null) {
-      window.clearTimeout(settingsSaveTimeoutRef.current);
-    }
-    settingsSaveTimeoutRef.current = window.setTimeout(() => {
-      void invoke("save_setting", { key, value });
-    }, 500);
   }, []);
 
   const disableRelevanceSort = useCallback((reason: string) => {
@@ -381,49 +184,12 @@ function App(): React.JSX.Element {
     }
   }, [disableRelevanceSort, saveSetting]);
 
-  const fetchEnrichedNews = useCallback(async (filterByDate: boolean = true, preserveOnEmpty: boolean = false) => {
-    const thisFetch = ++fetchCounterRef.current;
-    const categoryArg = selectedCategory === "All" ? null : selectedCategory.toLowerCase();
-    const liked = settings.likedConcepts
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const disliked = settings.dislikedConcepts
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    try {
-      const rows = await invoke<BackendNewsItem[]>("get_enriched_news", {
-        category: categoryArg,
-        date: filterByDate ? selectedDate : null,
-        limit: 500,
-        offset: 0,
-        sortBy: settings.sortMode,
-        likedConcepts: liked,
-        dislikedConcepts: disliked,
-        ollamaAddress: settings.ollamaAddress,
-        ollamaEmbeddingModel: settings.ollamaEmbeddingModel,
-      });
-
-      const mapped = rows.map(mapBackendNewsItem);
-      if (thisFetch !== fetchCounterRef.current) {
-        // A newer fetch has been dispatched; discard these stale results.
-        return;
-      }
-      setNews((prev) => {
-        if (preserveOnEmpty && mapped.length === 0 && prev.length > 0) {
-          return prev;
-        }
-        return mapped;
-      });
-    } catch (error) {
-      if (settings.sortMode === "score" && String(error).includes(RELEVANCE_UNAVAILABLE_TOKEN)) {
-        disableRelevanceSort("backend reported relevance unavailable");
-      }
-      // During in-flight enrichment, keep the current list stable if relevance refresh fails.
-      console.warn("Skipping transient news refresh error:", error);
-    }
-  }, [selectedCategory, selectedDate, settings.sortMode, settings.likedConcepts, settings.dislikedConcepts, settings.ollamaAddress, settings.ollamaEmbeddingModel, disableRelevanceSort]);
+  const { news, setNews, fetchEnrichedNews } = useEnrichedNews({
+    selectedCategory,
+    selectedDate,
+    settings,
+    disableRelevanceSort,
+  });
 
   const scheduleRefresh = useCallback((filterByDate: boolean) => {
     if (refreshTimeoutRef.current !== null) {
@@ -437,38 +203,10 @@ function App(): React.JSX.Element {
   }, [fetchEnrichedNews]);
 
   const generateNews = async () => {
-    const llmArgs = {
-      llmProvider: settings.llmProvider,
-      openaiApiKey: settings.openaiApiKey,
-      claudeApiKey: settings.claudeApiKey,
-      geminiApiKey: settings.geminiApiKey,
-      openaiModel: settings.openaiModel,
-      claudeModel: settings.claudeModel,
-      geminiModel: settings.geminiModel,
-      ollamaAddress: settings.ollamaAddress,
-      ollamaModel: settings.ollamaModel,
-      ollamaEmbeddingModel: settings.ollamaEmbeddingModel,
-    };
-
-    const selectedModel =
-      settings.llmProvider === "openai"
-        ? settings.openaiModel
-        : settings.llmProvider === "claude"
-          ? settings.claudeModel
-          : settings.llmProvider === "gemini"
-            ? settings.geminiModel
-            : settings.ollamaModel;
-
-    const selectedApiKey =
-      settings.llmProvider === "openai"
-        ? settings.openaiApiKey
-        : settings.llmProvider === "claude"
-          ? settings.claudeApiKey
-          : settings.llmProvider === "gemini"
-            ? settings.geminiApiKey
-            : "";
-
-    const selectedEndpoint = settings.llmProvider === "ollama" ? settings.ollamaAddress : "";
+    const llmArgs = buildLLMArgs(settings);
+    const selectedModel = getSelectedModel(settings);
+    const selectedApiKey = getSelectedApiKey(settings);
+    const selectedEndpoint = getSelectedEndpoint(settings);
 
     setLoading(true);
     setEnrichmentProgress(null);
@@ -777,97 +515,6 @@ function App(): React.JSX.Element {
     return dateFiltered.filter((item) => item.category === selectedCategory);
   }, [news, selectedCategory, selectedDate, visibleCategories, settings.sortMode]);
 
-  const getTagColor = (category: NewsArticle["category"]) => {
-    const colors: Record<NewsArticle["category"], string> = {
-      World: "bg-sky-500/90",
-      Gaming: "bg-violet-500/90",
-      Anime: "bg-pink-500/90",
-      Technology: "bg-indigo-500/90",
-      Science: "bg-amber-500/90",
-      Business: "bg-emerald-500/90",
-      Entertainment: "bg-fuchsia-500/90",
-    };
-    return colors[category] || "bg-zinc-500";
-  };
-
-  const renderPreferencePanel = (className = "") => (
-    <div className={`rounded-2xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/50" : "border-zinc-200 bg-white"} ${className}`.trim()}>
-      <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Feed Ranking</p>
-      <div className={`flex items-center gap-0.5 rounded-full border p-1 text-[10px] font-black uppercase tracking-widest ${
-        isDarkMode ? "border-zinc-800 bg-zinc-900" : "border-zinc-200 bg-zinc-50"
-      }`}>
-        <button
-          onClick={() => setSortMode("date")}
-          className={`flex-1 rounded-full px-3 py-1.5 transition-all ${
-            settings.sortMode === "date"
-              ? isDarkMode
-                ? "bg-zinc-200 text-zinc-900 shadow"
-                : "bg-zinc-800 text-white shadow"
-              : isDarkMode
-                ? "text-zinc-500 hover:text-zinc-300"
-                : "text-zinc-500 hover:text-zinc-700"
-          }`}
-        >
-          Date
-        </button>
-        <button
-          onClick={() => setSortMode("score")}
-          className={`flex-1 rounded-full px-3 py-1.5 transition-all ${
-            settings.sortMode === "score"
-              ? isDarkMode
-                ? "bg-zinc-200 text-zinc-900 shadow"
-                : "bg-zinc-800 text-white shadow"
-              : isDarkMode
-                ? "text-zinc-500 hover:text-zinc-300"
-                : "text-zinc-500 hover:text-zinc-700"
-          }`}
-        >
-          Relevance
-        </button>
-      </div>
-
-      <div
-        className={`grid overflow-hidden transition-[grid-template-rows,opacity,margin] duration-300 ease-out ${
-          isRelevanceMode ? "mt-3 grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0 pointer-events-none"
-        }`}
-      >
-        <div className="min-h-0 space-y-3">
-          <div>
-            <label className="mb-1.5 block text-xs font-medium opacity-70">Topics I enjoy</label>
-            <input
-              type="text"
-              placeholder="indie games, retro hardware, game preservation"
-              value={settings.likedConcepts}
-              onChange={(e) => setPreferenceConcepts("likedConcepts", e.target.value)}
-              className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                isDarkMode
-                  ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                  : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
-              }`}
-            />
-          </div>
-          <div>
-            <label className="mb-1.5 block text-xs font-medium opacity-70">Topics to avoid</label>
-            <input
-              type="text"
-              placeholder="mobile games, NFTs, battle royale"
-              value={settings.dislikedConcepts}
-              onChange={(e) => setPreferenceConcepts("dislikedConcepts", e.target.value)}
-              className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                isDarkMode
-                  ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                  : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
-              }`}
-            />
-          </div>
-          <p className={`text-xs ${isDarkMode ? "text-zinc-600" : "text-zinc-400"}`}>
-            Requires nomic-embed-text in Ollama for relevance scoring.
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-
   return (
     <div className={`min-h-screen transition-colors duration-300 ${isDarkMode ? "bg-zinc-950 text-zinc-400" : "bg-zinc-100 text-zinc-800"}`}>
       <aside className={`fixed left-0 top-0 z-20 hidden h-full w-64 flex-col border-r transition-colors md:flex ${isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-zinc-50 border-zinc-200"}`}>
@@ -949,7 +596,15 @@ function App(): React.JSX.Element {
         </nav>
 
         <div className="space-y-4 border-t border-inherit p-4">
-          {renderPreferencePanel()}
+          <PreferencePanel
+            isDarkMode={isDarkMode}
+            sortMode={settings.sortMode}
+            isRelevanceMode={isRelevanceMode}
+            likedConcepts={settings.likedConcepts}
+            dislikedConcepts={settings.dislikedConcepts}
+            onSetSortMode={setSortMode}
+            onSetPreferenceConcepts={setPreferenceConcepts}
+          />
           <button
             onClick={() => setShowCalendar(true)}
             className={`w-full rounded-xl border px-3 py-3 transition-all ${
@@ -1065,7 +720,15 @@ function App(): React.JSX.Element {
         </header>
 
         <div className="mb-6 md:hidden">
-          {renderPreferencePanel()}
+          <PreferencePanel
+            isDarkMode={isDarkMode}
+            sortMode={settings.sortMode}
+            isRelevanceMode={isRelevanceMode}
+            likedConcepts={settings.likedConcepts}
+            dislikedConcepts={settings.dislikedConcepts}
+            onSetSortMode={setSortMode}
+            onSetPreferenceConcepts={setPreferenceConcepts}
+          />
         </div>
 
         <section className={`news-scroll min-h-0 flex-1 overflow-y-auto pb-24 pr-1 ${isDarkMode ? "news-scroll-dark" : "news-scroll-light"}`}>
@@ -1086,801 +749,87 @@ function App(): React.JSX.Element {
               `}
             >
               {filteredNews.map((item) => (
-                <div
+                <ArticleCard
                   key={item.id}
-                  data-card-context-menu="true"
-                  onClick={() => setSelectedArticle(item)}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    setContextMenu({ article: item, x: event.clientX, y: event.clientY });
+                  item={item}
+                  layout={layout}
+                  isDarkMode={isDarkMode}
+                  sortMode={settings.sortMode}
+                  onSelect={setSelectedArticle}
+                  onOpenContextMenu={(article, x, y) => {
+                    setContextMenu({ article, x, y });
                   }}
-                  className={`group cursor-pointer rounded-2xl border transition-all hover:shadow-lg ${
-                    isDarkMode ? "border-zinc-800 bg-zinc-900 hover:border-zinc-600" : "border-zinc-200 bg-white hover:border-zinc-300"
-                  } ${layout === "list" ? "flex flex-col gap-4 p-4 md:flex-row" : "flex flex-col"}`}
-                >
-                  <div
-                    className={`${
-                      layout === "list" ? "h-44 w-full md:h-auto md:w-56 md:flex-shrink-0" : "h-44 w-full"
-                    } overflow-hidden rounded-xl`}
-                  >
-                    <img
-                      src={item.thumbnailUrl}
-                      alt={`${item.title} thumbnail`}
-                      loading="lazy"
-                      className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                      onError={(e) => {
-                        e.currentTarget.onerror = null;
-                        e.currentTarget.src = "https://placehold.co/640x360/27272a/a1a1aa?text=News";
-                      }}
-                    />
-                  </div>
-                  <div className={`p-6 ${layout === "list" ? "md:py-2" : ""} flex flex-1 flex-col`}>
-                    <div className="mb-4 flex items-center gap-2">
-                      <span className={`rounded px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-white shadow-sm ${getTagColor(item.category)}`}>
-                        {item.category}
-                      </span>
-                      {settings.sortMode === "score" && item.preferenceScore !== 0 && (
-                        <span
-                          title={`Relevance score: ${item.preferenceScore.toFixed(3)}`}
-                          className={`ml-auto rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-widest ${
-                            item.preferenceScore > 0
-                              ? isDarkMode ? "bg-emerald-500/20 text-emerald-400" : "bg-emerald-100 text-emerald-700"
-                              : isDarkMode ? "bg-red-500/20 text-red-400" : "bg-red-100 text-red-700"
-                          }`}
-                        >
-                          {item.preferenceScore > 0 ? "+" : ""}{(item.preferenceScore * 100).toFixed(0)}%
-                        </span>
-                      )}
-                    </div>
-                    <div className="mb-4 flex flex-wrap gap-1.5">
-                      {item.tags.map((tag, tagIndex) => (
-                        <span key={`${item.id}-tag-${tagIndex}`} className="rounded bg-zinc-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-zinc-500">
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                    <h3
-                      className={`text-lg mb-3 font-bold leading-tight transition-colors ${
-                        isDarkMode ? "text-zinc-100 group-hover:text-white" : "text-zinc-900"
-                      }`}
-                    >
-                      {item.title}
-                    </h3>
-                    <p className={`mb-5 text-sm leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-600"}`}>{item.snippet}</p>
-                    <div className="mt-auto flex items-center justify-between gap-3">
-                      <div className={`flex min-w-0 items-center gap-2 text-[10px] font-black uppercase tracking-widest ${
-                        isDarkMode ? "text-zinc-500" : "text-zinc-600"
-                      }`}>
-                        {item.sourceIconUrl ? (
-                          <img
-                            src={item.sourceIconUrl}
-                            alt={`${item.sourceName} icon`}
-                            className="h-4 w-4 rounded-sm object-contain"
-                            onError={(e) => {
-                              e.currentTarget.style.display = "none";
-                            }}
-                          />
-                        ) : null}
-                        <span className="truncate">{item.sourceName}</span>
-                      </div>
-                      <div
-                        className={`flex items-center text-[10px] font-black uppercase tracking-widest opacity-60 transition-opacity group-hover:opacity-100 ${
-                          isDarkMode ? "text-zinc-400" : "text-zinc-900"
-                        }`}
-                      >
-                        Open Brief <ChevronRight size={12} className="ml-1" />
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                />
               ))}
             </div>
           )}
         </section>
 
-        <div
-          className={`fixed bottom-8 left-1/2 z-30 -translate-x-1/2 transition-all duration-200 md:left-[calc(50%+128px)] ${
-            showLayoutSwitcher ? "opacity-100" : "pointer-events-none translate-y-3 opacity-0"
-          }`}
-        >
-          <div
-            className={`flex items-center gap-1 rounded-full border p-1 shadow-xl backdrop-blur-lg ${
-              isDarkMode ? "border-zinc-700 bg-zinc-900/80 text-zinc-400" : "border-zinc-300 bg-white/80 text-zinc-600"
-            }`}
-          >
-            <button
-              onClick={() => setLayout("grid")}
-              className={`rounded-full p-2.5 transition-all ${
-                layout === "grid"
-                  ? isDarkMode
-                    ? "bg-zinc-100 text-black shadow-md"
-                    : "bg-zinc-800 text-white shadow-md"
-                  : "hover:bg-zinc-500/10"
-              }`}
-            >
-              <LayoutGrid size={16} />
-            </button>
-            <button
-              onClick={() => setLayout("card")}
-              className={`rounded-full p-2.5 transition-all ${
-                layout === "card"
-                  ? isDarkMode
-                    ? "bg-zinc-100 text-black shadow-md"
-                    : "bg-zinc-800 text-white shadow-md"
-                  : "hover:bg-zinc-500/10"
-              }`}
-            >
-              <CreditCard size={16} />
-            </button>
-            <button
-              onClick={() => setLayout("list")}
-              className={`rounded-full p-2.5 transition-all ${
-                layout === "list"
-                  ? isDarkMode
-                    ? "bg-zinc-100 text-black shadow-md"
-                    : "bg-zinc-800 text-white shadow-md"
-                  : "hover:bg-zinc-500/10"
-              }`}
-            >
-              <LayoutList size={16} />
-            </button>
-          </div>
-        </div>
+        <LayoutSwitcher show={showLayoutSwitcher} isDarkMode={isDarkMode} layout={layout} onSetLayout={setLayout} />
       </main>
 
       {contextMenu && (
-        <div className="fixed inset-0 z-40" onClick={() => setContextMenu(null)}>
-          <div
-            className={`absolute min-w-[220px] rounded-xl border p-2 shadow-2xl ${
-              isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-200" : "border-zinc-300 bg-white text-zinc-900"
-            }`}
-            style={{ left: contextMenu.x, top: contextMenu.y }}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <button
-              type="button"
-              disabled={reprocessingArticleId === contextMenu.article.id}
-              onClick={() => void reprocessArticle(contextMenu.article)}
-              className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-bold transition-colors ${
-                isDarkMode ? "hover:bg-zinc-800" : "hover:bg-zinc-100"
-              } disabled:cursor-not-allowed disabled:opacity-50`}
-            >
-              <span>{reprocessingArticleId === contextMenu.article.id ? "Re-processing..." : "Re-process this card"}</span>
-              <ChevronRight size={14} />
-            </button>
-          </div>
-        </div>
+        <CardContextMenu
+          contextMenu={contextMenu}
+          isDarkMode={isDarkMode}
+          reprocessingArticleId={reprocessingArticleId}
+          onClose={() => setContextMenu(null)}
+          onReprocess={(articleId) => {
+            const article = news.find((item) => item.id === articleId);
+            if (article) {
+              void reprocessArticle(article);
+            }
+          }}
+        />
       )}
 
-      {showSettings && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => { setShowSettings(false); setPurgeConfirmStep(0); }} />
-          <div
-            className={`relative w-full max-w-6xl overflow-hidden rounded-3xl border shadow-2xl ${
-              isDarkMode ? "border-zinc-800 bg-zinc-900 text-zinc-300" : "border-zinc-200 bg-white text-zinc-800"
-            }`}
-          >
-            <div
-              className={`flex items-center justify-between border-b p-6 ${
-                isDarkMode ? "border-zinc-800 bg-zinc-950/50" : "border-zinc-100 bg-zinc-50"
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <Settings size={18} className="text-zinc-500" />
-                <h3 className="text-base font-bold uppercase tracking-widest">Preferences</h3>
-              </div>
-              <button onClick={() => { setShowSettings(false); setPurgeConfirmStep(0); }} className="hover:opacity-50">
-                <X size={18} />
-              </button>
-            </div>
-            <div className="max-h-[calc(100vh-10rem)] space-y-6 overflow-y-auto p-6">
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-                <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
-                  <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>General Settings</p>
-                  <div className="space-y-3">
-                    <div>
-                      <label className="mb-1.5 block text-xs font-medium opacity-70">Number of news pulled per category</label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={50}
-                        value={settings.newsLimit}
-                        onChange={(e) => {
-                          const val = Math.min(50, Math.max(1, Number(e.target.value)));
-                          setSettings((s) => ({ ...s, newsLimit: val }));
-                          saveSetting("newsLimit", String(val));
-                        }}
-                        className={`w-full rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
-                          isDarkMode
-                            ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                            : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                        }`}
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-xs font-medium opacity-70">Scrape cooldown (hours)</label>
-                      <p className="mb-1.5 text-xs opacity-50">Min time between website scrapes. 0 = always scrape.</p>
-                      <input
-                        type="number"
-                        min={0}
-                        max={24}
-                        value={settings.scrapeCooldownHours}
-                        onChange={(e) => {
-                          const val = Math.min(24, Math.max(0, Number(e.target.value)));
-                          setSettings((s) => ({ ...s, scrapeCooldownHours: val }));
-                          saveSetting("scrapeCooldownHours", String(val));
-                        }}
-                        className={`w-full rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
-                          isDarkMode
-                            ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                            : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                        }`}
-                      />
-                    </div>
-                  </div>
-                </div>
+      <SettingsModal
+        showSettings={showSettings}
+        isDarkMode={isDarkMode}
+        settings={settings}
+        setSettings={setSettings}
+        saveSetting={saveSetting}
+        ollamaConnectionState={ollamaConnectionState}
+        setOllamaConnectionState={setOllamaConnectionState}
+        isTestingOllama={isTestingOllama}
+        testOllamaConnection={testOllamaConnection}
+        ollamaModels={ollamaModels}
+        isRefreshingModels={isRefreshingModels}
+        refreshOllamaModels={refreshOllamaModels}
+        purgeConfirmStep={purgeConfirmStep}
+        setPurgeConfirmStep={setPurgeConfirmStep}
+        isPurging={isPurging}
+        setIsPurging={setIsPurging}
+        onPurgeDatabase={async () => {
+          await invoke("purge_database");
+          setNews([]);
+        }}
+        onClose={() => {
+          setShowSettings(false);
+          setPurgeConfirmStep(0);
+        }}
+      />
 
-                <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
-                  <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Ollama Settings</p>
-                  <div className="space-y-3">
-                    <div>
-                      <div className="mb-2 flex items-center justify-between gap-2">
-                        <label className="text-xs font-medium opacity-70">Endpoint Address</label>
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`h-2.5 w-2.5 rounded-full ${
-                              ollamaConnectionState === "ok"
-                                ? "bg-emerald-500"
-                                : ollamaConnectionState === "fail"
-                                  ? "bg-red-500"
-                                  : "bg-zinc-500"
-                            }`}
-                            title={ollamaConnectionState === "ok" ? "Connected" : ollamaConnectionState === "fail" ? "Connection failed" : "Not tested"}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => void testOllamaConnection(settings.ollamaAddress)}
-                            disabled={isTestingOllama}
-                            className={`rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
-                              isDarkMode
-                                ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                                : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                            } disabled:opacity-50`}
-                          >
-                            {isTestingOllama ? "Testing..." : "Test Connection"}
-                          </button>
-                        </div>
-                      </div>
-                      <input
-                        type="text"
-                        placeholder="http://127.0.0.1:11434"
-                        value={settings.ollamaAddress}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setSettings((s) => ({ ...s, ollamaAddress: val }));
-                          setOllamaConnectionState("unknown");
-                          saveSetting("ollamaAddress", val);
-                        }}
-                        className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                          isDarkMode
-                            ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                            : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
-                        }`}
-                      />
-                    </div>
+      <ArticleDetailModal
+        selectedArticle={selectedArticle}
+        isDarkMode={isDarkMode}
+        reprocessingArticleId={reprocessingArticleId}
+        onClose={() => setSelectedArticle(null)}
+        onOpenUrl={(url) => {
+          void invoke("open_url", { url });
+        }}
+        onReprocessArticle={(article) => {
+          void reprocessArticle(article);
+        }}
+      />
 
-                    <div>
-                      <div className="mb-2 flex items-center justify-between gap-2">
-                        <label className="text-xs font-medium opacity-70">Ollama LLM Model</label>
-                        <button
-                          type="button"
-                          onClick={() => void refreshOllamaModels(settings.ollamaAddress, settings.ollamaModel)}
-                          disabled={isRefreshingModels}
-                          className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
-                            isDarkMode
-                              ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                          } disabled:opacity-50`}
-                        >
-                          <RefreshCw size={12} className={isRefreshingModels ? "animate-spin" : ""} />
-                          Refresh
-                        </button>
-                      </div>
-                      <select
-                        value={settings.ollamaModel}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setSettings((s) => ({ ...s, ollamaModel: val }));
-                          saveSetting("ollamaModel", val);
-                        }}
-                        className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                          isDarkMode
-                            ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                            : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                        }`}
-                      >
-                        {ollamaModels.length === 0 ? (
-                          <option value={settings.ollamaModel}>{settings.ollamaModel || "No models found"}</option>
-                        ) : (
-                          ollamaModels.map((model) => (
-                            <option key={model} value={model}>{model}</option>
-                          ))
-                        )}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="mb-1.5 block text-xs font-medium opacity-70">Embedding Model (Relevance)</label>
-                      <select
-                        value={settings.ollamaEmbeddingModel}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setSettings((s) => ({ ...s, ollamaEmbeddingModel: val }));
-                          saveSetting("ollamaEmbeddingModel", val);
-                        }}
-                        className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                          isDarkMode
-                            ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                            : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                        }`}
-                      >
-                        {ollamaModels.length === 0 ? (
-                          <option value={settings.ollamaEmbeddingModel}>{settings.ollamaEmbeddingModel || DEFAULT_EMBEDDING_MODEL}</option>
-                        ) : (
-                          ollamaModels.map((model) => (
-                            <option key={`embed-${model}`} value={model}>{model}</option>
-                          ))
-                        )}
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
-                  <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>LLM Provider Settings</p>
-                  <div className="space-y-3">
-                    <div>
-                      <label className="mb-1.5 block text-xs font-medium opacity-70">LLM Provider</label>
-                      <select
-                        value={settings.llmProvider}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setSettings((s) => ({ ...s, llmProvider: val }));
-                          saveSetting("llmProvider", val);
-                        }}
-                        className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                          isDarkMode
-                            ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                            : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                        }`}
-                      >
-                        <option value="ollama">Ollama (Local)</option>
-                        <option value="openai">OpenAI</option>
-                        <option value="claude">Claude (Anthropic)</option>
-                        <option value="gemini">Google Gemini</option>
-                      </select>
-                    </div>
-
-                    {settings.llmProvider === "ollama" && (
-                      <div>
-                        <label className="mb-1.5 block text-xs font-medium opacity-70">Ollama LLM Model</label>
-                        <select
-                          value={settings.ollamaModel}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setSettings((s) => ({ ...s, ollamaModel: val }));
-                            saveSetting("ollamaModel", val);
-                          }}
-                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                            isDarkMode
-                              ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                              : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                          }`}
-                        >
-                          {ollamaModels.length === 0 ? (
-                            <option value={settings.ollamaModel}>{settings.ollamaModel || "No models found"}</option>
-                          ) : (
-                            ollamaModels.map((model) => (
-                              <option key={`provider-${model}`} value={model}>{model}</option>
-                            ))
-                          )}
-                        </select>
-                      </div>
-                    )}
-
-                    {settings.llmProvider === "openai" && (
-                      <>
-                        <div>
-                          <label className="mb-1.5 block text-xs font-medium opacity-70">OpenAI API Key</label>
-                          <input
-                            type="password"
-                            placeholder="sk-..."
-                            value={settings.openaiApiKey}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setSettings((s) => ({ ...s, openaiApiKey: val }));
-                              saveSetting("openaiApiKey", val);
-                            }}
-                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                              isDarkMode
-                                ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                                : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
-                            }`}
-                          />
-                        </div>
-                        <div>
-                          <label className="mb-1.5 block text-xs font-medium opacity-70">OpenAI Model</label>
-                          <select
-                            value={settings.openaiModel}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setSettings((s) => ({ ...s, openaiModel: val }));
-                              saveSetting("openaiModel", val);
-                            }}
-                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                              isDarkMode
-                                ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                                : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                            }`}
-                          >
-                            {OPENAI_MODELS.map((model) => (
-                              <option key={model} value={model}>{model}</option>
-                            ))}
-                          </select>
-                        </div>
-                      </>
-                    )}
-
-                    {settings.llmProvider === "claude" && (
-                      <>
-                        <div>
-                          <label className="mb-1.5 block text-xs font-medium opacity-70">Claude API Key</label>
-                          <input
-                            type="password"
-                            placeholder="sk-ant-..."
-                            value={settings.claudeApiKey}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setSettings((s) => ({ ...s, claudeApiKey: val }));
-                              saveSetting("claudeApiKey", val);
-                            }}
-                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                              isDarkMode
-                                ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                                : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
-                            }`}
-                          />
-                        </div>
-                        <div>
-                          <label className="mb-1.5 block text-xs font-medium opacity-70">Claude Model</label>
-                          <select
-                            value={settings.claudeModel}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setSettings((s) => ({ ...s, claudeModel: val }));
-                              saveSetting("claudeModel", val);
-                            }}
-                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                              isDarkMode
-                                ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                                : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                            }`}
-                          >
-                            {CLAUDE_MODELS.map((model) => (
-                              <option key={model} value={model}>{model}</option>
-                            ))}
-                          </select>
-                        </div>
-                      </>
-                    )}
-
-                    {settings.llmProvider === "gemini" && (
-                      <>
-                        <div>
-                          <label className="mb-1.5 block text-xs font-medium opacity-70">Google Gemini API Key</label>
-                          <input
-                            type="password"
-                            placeholder="AIza..."
-                            value={settings.geminiApiKey}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setSettings((s) => ({ ...s, geminiApiKey: val }));
-                              saveSetting("geminiApiKey", val);
-                            }}
-                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                              isDarkMode
-                                ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                                : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
-                            }`}
-                          />
-                        </div>
-                        <div>
-                          <label className="mb-1.5 block text-xs font-medium opacity-70">Gemini Model</label>
-                          <select
-                            value={settings.geminiModel}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setSettings((s) => ({ ...s, geminiModel: val }));
-                              saveSetting("geminiModel", val);
-                            }}
-                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                              isDarkMode
-                                ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                                : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                            }`}
-                          >
-                            {GEMINI_MODELS.map((model) => (
-                              <option key={model} value={model}>{model}</option>
-                            ))}
-                          </select>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
-                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Serp API Key</p>
-                <input
-                  type="password"
-                  placeholder="Enter your SerpAPI key..."
-                  value={settings.serpApiKey}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setSettings((s) => ({ ...s, serpApiKey: val }));
-                    saveSetting("serpApiKey", val);
-                  }}
-                  className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                    isDarkMode
-                      ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                      : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
-                  }`}
-                />
-              </div>
-
-              {/* Danger Zone */}
-              <div>
-                <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-red-500">Danger Zone</p>
-                <div className={`rounded-xl border border-red-500/30 p-4 ${isDarkMode ? "bg-red-950/20" : "bg-red-50"}`}>
-                  <p className="mb-1 text-sm font-semibold">Purge Database</p>
-                  <p className={`mb-4 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
-                    Permanently deletes all news articles and cached thumbnails. This cannot be undone.
-                  </p>
-
-                  {purgeConfirmStep === 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setPurgeConfirmStep(1)}
-                      className="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-red-700"
-                    >
-                      Purge Database
-                    </button>
-                  )}
-
-                  {purgeConfirmStep === 1 && (
-                    <div className="space-y-3">
-                      <p className="text-xs font-semibold text-red-500">Are you sure? All data will be lost.</p>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setPurgeConfirmStep(2)}
-                          className="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-red-700"
-                        >
-                          Yes, continue
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPurgeConfirmStep(0)}
-                          className={`rounded-lg border px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
-                            isDarkMode
-                              ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                          }`}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {purgeConfirmStep === 2 && (
-                    <div className="space-y-3">
-                      <p className="text-xs font-semibold text-red-500">Final confirmation — this will delete everything permanently.</p>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          disabled={isPurging}
-                          onClick={async () => {
-                            setIsPurging(true);
-                            try {
-                              await invoke("purge_database");
-                              setNews([]);
-                            } catch (err) {
-                              console.error("Purge failed:", err);
-                            } finally {
-                              setIsPurging(false);
-                              setPurgeConfirmStep(0);
-                              setShowSettings(false);
-                            }
-                          }}
-                          className="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-red-700 disabled:opacity-50"
-                        >
-                          {isPurging ? "Purging..." : "Yes, delete everything"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPurgeConfirmStep(0)}
-                          disabled={isPurging}
-                          className={`rounded-lg border px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
-                            isDarkMode
-                              ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                          } disabled:opacity-50`}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {selectedArticle && (
-        <div className={`fixed inset-0 z-50 overflow-y-auto ${isDarkMode ? "bg-zinc-950 text-zinc-300" : "bg-zinc-100 text-zinc-800"}`}>
-          <div
-            className={`sticky top-0 z-10 flex items-center border-b px-4 py-4 md:px-8 ${
-              isDarkMode ? "border-zinc-800 bg-zinc-950/95" : "border-zinc-200 bg-zinc-100/95"
-            } backdrop-blur-md`}
-          >
-            <button
-              onClick={() => setSelectedArticle(null)}
-              className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-black uppercase tracking-widest transition-colors ${
-                isDarkMode ? "border-zinc-700 text-zinc-200 hover:bg-zinc-800" : "border-zinc-300 text-zinc-800 hover:bg-white"
-              }`}
-            >
-              <ArrowLeft size={14} />
-              Return
-            </button>
-          </div>
-
-          <article className="pb-16">
-            <div className="h-64 w-full md:h-[30rem]">
-              <img
-                src={selectedArticle.thumbnailUrl}
-                alt={`${selectedArticle.title} thumbnail`}
-                className="h-full w-full object-cover"
-                onError={(e) => {
-                  e.currentTarget.onerror = null;
-                  e.currentTarget.src = "https://placehold.co/1200x640/27272a/a1a1aa?text=News";
-                }}
-              />
-            </div>
-
-            <div className="mx-auto w-full max-w-5xl space-y-8 px-4 pt-8 md:px-8">
-              <div>
-                <span
-                  className={`mb-4 inline-block rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest text-white shadow-sm ${getTagColor(
-                    selectedArticle.category,
-                  )}`}
-                >
-                  {selectedArticle.category}
-                </span>
-                <h2 className={`text-3xl font-black leading-tight md:text-5xl ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>
-                  {selectedArticle.title}
-                </h2>
-                <div className={`mt-4 flex items-center gap-3 text-xs font-black uppercase tracking-widest ${
-                  isDarkMode ? "text-zinc-500" : "text-zinc-600"
-                }`}>
-                  {selectedArticle.sourceIconUrl ? (
-                    <img
-                      src={selectedArticle.sourceIconUrl}
-                      alt={`${selectedArticle.sourceName} icon`}
-                      className="h-5 w-5 rounded-sm object-contain"
-                      onError={(e) => {
-                        e.currentTarget.style.display = "none";
-                      }}
-                    />
-                  ) : null}
-                  <span>{selectedArticle.sourceName}</span>
-                </div>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {selectedArticle.tags.map((tag, tagIndex) => (
-                    <span key={`${selectedArticle.id}-detail-tag-${tagIndex}`} className="rounded-full bg-zinc-500/20 px-3 py-1 text-[10px] font-bold uppercase tracking-widest opacity-70">
-                      {tag}
-                    </span>
-                  ))}
-                  <span className="rounded-full bg-zinc-500/20 px-3 py-1 text-[10px] font-bold uppercase tracking-widest opacity-70">{selectedArticle.date}</span>
-                </div>
-              </div>
-
-              <div className={`rounded-2xl border-l-4 p-6 ${isDarkMode ? "border-zinc-400 bg-zinc-900" : "border-zinc-800 bg-white"}`}>
-                <ReactMarkdown
-                  components={{
-                    ul: ({ children }) => (
-                      <ul className={`space-y-2 text-lg leading-relaxed ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{children}</ul>
-                    ),
-                    li: ({ children }) => (
-                      <li className="flex gap-2">
-                        <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${isDarkMode ? "bg-zinc-400" : "bg-zinc-600"}`} />
-                        <span>{children}</span>
-                      </li>
-                    ),
-                    p: ({ children }) => (
-                      <p className={`text-lg leading-relaxed ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{children}</p>
-                    ),
-                  }}
-                >
-                  {selectedArticle.aiSummary}
-                </ReactMarkdown>
-              </div>
-
-              <div className={`flex flex-col items-start gap-4 text-lg leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-700"}`}>
-                {selectedArticle.url && (
-                  <button
-                    onClick={() => invoke("open_url", { url: selectedArticle.url })}
-                    className={`inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors ${
-                      isDarkMode
-                        ? "bg-zinc-700 text-zinc-100 hover:bg-zinc-600"
-                        : "bg-zinc-200 text-zinc-900 hover:bg-zinc-300"
-                    }`}
-                  >
-                    Go to original page
-                  </button>
-                )}
-                <button
-                  type="button"
-                  disabled={reprocessingArticleId === selectedArticle.id}
-                  onClick={() => void reprocessArticle(selectedArticle)}
-                  className={`inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors ${
-                    isDarkMode
-                      ? "bg-zinc-800 text-zinc-100 hover:bg-zinc-700"
-                      : "bg-zinc-200 text-zinc-900 hover:bg-zinc-300"
-                  } disabled:cursor-not-allowed disabled:opacity-50`}
-                >
-                  {reprocessingArticleId === selectedArticle.id ? "Re-processing..." : "Re-process this card"}
-                </button>
-              </div>
-            </div>
-          </article>
-        </div>
-      )}
-
-      {showCalendar && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setShowCalendar(false)} />
-          <div
-            className={`relative w-full max-w-sm rounded-3xl border p-8 shadow-2xl ${
-              isDarkMode ? "border-zinc-800 bg-zinc-900" : "border-zinc-200 bg-white"
-            }`}
-          >
-            <h3 className="mb-6 text-sm font-black uppercase tracking-widest opacity-60">Jump to Date</h3>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => {
-                setSelectedDate(e.target.value);
-                setShowCalendar(false);
-              }}
-              className={`w-full rounded-xl border p-4 text-sm font-bold outline-none transition-all focus:ring-2 focus:ring-zinc-500 ${
-                isDarkMode ? "border-zinc-700 bg-zinc-800 text-white" : "border-zinc-200 bg-zinc-50 text-black"
-              }`}
-            />
-            <button
-              onClick={() => setShowCalendar(false)}
-              className={`mt-6 w-full rounded-xl py-4 text-xs font-black uppercase tracking-widest transition-all ${
-                isDarkMode ? "bg-zinc-200 text-zinc-900 hover:bg-white" : "bg-zinc-800 text-white hover:bg-zinc-900"
-              }`}
-            >
-              Confirm
-            </button>
-          </div>
-        </div>
-      )}
+      <CalendarModal
+        showCalendar={showCalendar}
+        isDarkMode={isDarkMode}
+        selectedDate={selectedDate}
+        onSelectDate={setSelectedDate}
+        onClose={() => setShowCalendar(false)}
+      />
     </div>
   );
 }
