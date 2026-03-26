@@ -175,6 +175,12 @@ pub fn parse_serp_api_value(payload: &Value) -> Result<Vec<SerpNewsItem>, String
 	parse_serp_api_result(&raw)
 }
 
+fn parse_serp_api_value_for_topic(payload: &Value, topic: &str) -> Result<Vec<SerpNewsItem>, String> {
+	let raw = serde_json::to_string(payload)
+		.map_err(|e| format!("Failed to serialize SerpAPI value: {}", e))?;
+	parse_serp_api_result_for_category(&raw, topic)
+}
+
 fn parse_serp_timestamp(date: &str) -> Option<i64> {
 	DateTime::parse_from_rfc3339(date)
 		.ok()
@@ -201,7 +207,7 @@ fn truncate_serp_news_items(items: &mut Vec<SerpNewsItem>, limit: Option<usize>)
 
 async fn collect_serp_items(query: &str, api_key: Option<&str>) -> Result<Vec<SerpNewsItem>, String> {
 	let response = get_serp_search_results_with_api_key(query, api_key).await?;
-	parse_serp_api_value(&response)
+	parse_serp_api_value_for_topic(&response, query)
 }
 
 pub async fn scrape_serp(query: &str, limit: Option<usize>) -> Result<Vec<SerpNewsItem>, String> {
@@ -329,19 +335,31 @@ pub fn parse_serp_api_result(payload: &str) -> Result<Vec<SerpNewsItem>, String>
 		serde_json::from_str(payload).map_err(|e| format!("Failed to parse SerpAPI JSON: {}", e))?;
 
 	let category = normalize_category(&parsed.title);
+	build_serp_items(parsed, &category)
+}
+
+fn parse_serp_api_result_for_category(payload: &str, category: &str) -> Result<Vec<SerpNewsItem>, String> {
+	let parsed: SerpApiResponse =
+		serde_json::from_str(payload).map_err(|e| format!("Failed to parse SerpAPI JSON: {}", e))?;
+
+	let normalized_category = normalize_topic_name(category);
+	build_serp_items(parsed, &normalized_category)
+}
+
+fn build_serp_items(parsed: SerpApiResponse, category: &str) -> Result<Vec<SerpNewsItem>, String> {
 	let mut output: Vec<SerpNewsItem> = Vec::new();
 	let mut seen_ids: HashSet<String> = HashSet::new();
 
 	for entry in &parsed.news_results {
 		if let Some(highlight) = &entry.highlight {
-			push_item_if_unique(&mut output, &mut seen_ids, highlight, &category);
+			push_item_if_unique(&mut output, &mut seen_ids, highlight, category);
 		}
 
 		for story in &entry.stories {
-			push_item_if_unique(&mut output, &mut seen_ids, story, &category);
+			push_item_if_unique(&mut output, &mut seen_ids, story, category);
 		}
 
-		push_item_if_unique(&mut output, &mut seen_ids, entry, &category);
+		push_item_if_unique(&mut output, &mut seen_ids, entry, category);
 	}
 
 	Ok(output)

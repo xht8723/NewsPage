@@ -69,8 +69,15 @@ interface BackendNewsItem {
 interface UserSettings {
   newsLimit: number;
   scrapeCooldownHours: number;
+  llmProvider: string; // "ollama" | "openai" | "claude" | "gemini"
   ollamaAddress: string;
   ollamaModel: string;
+  openaiApiKey: string;
+  openaiModel: string;
+  claudeApiKey: string;
+  claudeModel: string;
+  geminiApiKey: string;
+  geminiModel: string;
   serpApiKey: string;
 }
 
@@ -85,6 +92,10 @@ const DEFAULT_VISIBLE_CATEGORIES: Record<TopicCategory, boolean> = {
   Business: true,
   Entertainment: true,
 };
+
+const OPENAI_MODELS = ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"] as const;
+const CLAUDE_MODELS = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6"] as const;
+const GEMINI_MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-flash-preview"] as const;
 
 function formatDateLocal(date: Date): string {
   const year = date.getFullYear();
@@ -102,7 +113,7 @@ function offsetDateString(dateString: string, days: number): string {
 function getUtcDateKey(dateValue: string): string {
   const parsed = Date.parse(dateValue);
   if (!Number.isNaN(parsed)) {
-    return new Date(parsed).toISOString().slice(0, 10);
+    return formatDateLocal(new Date(parsed));
   }
 
   return dateValue.slice(0, 10);
@@ -135,6 +146,20 @@ function resolveThumbnailSrc(thumbnail: string): string {
   } catch {
     return fallback;
   }
+}
+
+function getProviderLabel(provider: string): string {
+  const normalized = provider.trim().toLowerCase();
+  if (normalized === "openai") {
+    return "OpenAI";
+  }
+  if (normalized === "claude") {
+    return "Claude";
+  }
+  if (normalized === "gemini") {
+    return "Gemini";
+  }
+  return "Ollama";
 }
 
 function mapBackendNewsItem(item: BackendNewsItem): NewsArticle {
@@ -176,8 +201,15 @@ function App(): React.JSX.Element {
   const [settings, setSettings] = useState<UserSettings>({
     newsLimit: 5,
     scrapeCooldownHours: 2,
+    llmProvider: "ollama",
     ollamaAddress: "http://127.0.0.1:11434",
     ollamaModel: "qwen2.5:3b",
+    openaiApiKey: "",
+    openaiModel: "gpt-5.4-mini",
+    claudeApiKey: "",
+    claudeModel: "claude-sonnet-4-6",
+    geminiApiKey: "",
+    geminiModel: "gemini-2.5-flash",
     serpApiKey: "",
   });
   const [ollamaConnectionState, setOllamaConnectionState] = useState<OllamaConnectionState>("unknown");
@@ -197,8 +229,15 @@ function App(): React.JSX.Element {
           ...prev,
           newsLimit: saved.newsLimit ? Math.min(50, Math.max(1, Number(saved.newsLimit))) : prev.newsLimit,
           scrapeCooldownHours: saved.scrapeCooldownHours ? Math.min(24, Math.max(0, Number(saved.scrapeCooldownHours))) : prev.scrapeCooldownHours,
+          llmProvider: saved.llmProvider?.trim() ? saved.llmProvider : prev.llmProvider,
           ollamaAddress: saved.ollamaAddress?.trim() ? saved.ollamaAddress : prev.ollamaAddress,
           ollamaModel: saved.ollamaModel?.trim() ? saved.ollamaModel : prev.ollamaModel,
+          openaiApiKey: saved.openaiApiKey ?? prev.openaiApiKey,
+          openaiModel: saved.openaiModel?.trim() ? saved.openaiModel : prev.openaiModel,
+          claudeApiKey: saved.claudeApiKey ?? prev.claudeApiKey,
+          claudeModel: saved.claudeModel?.trim() ? saved.claudeModel : prev.claudeModel,
+          geminiApiKey: saved.geminiApiKey ?? prev.geminiApiKey,
+          geminiModel: saved.geminiModel?.trim() ? saved.geminiModel : prev.geminiModel,
           serpApiKey: saved.serpApiKey ?? prev.serpApiKey,
         }));
         if (saved.selectedCategory && (CATEGORIES as readonly string[]).includes(saved.selectedCategory)) {
@@ -311,6 +350,13 @@ function App(): React.JSX.Element {
     invoke("start_all_action", {
       limit: settings.newsLimit,
       cooldownHours: settings.scrapeCooldownHours,
+      llmProvider: settings.llmProvider,
+      openaiApiKey: settings.openaiApiKey,
+      claudeApiKey: settings.claudeApiKey,
+      geminiApiKey: settings.geminiApiKey,
+      openaiModel: settings.openaiModel,
+      claudeModel: settings.claudeModel,
+      geminiModel: settings.geminiModel,
       ollamaAddress: settings.ollamaAddress,
       ollamaModel: settings.ollamaModel,
     })
@@ -639,7 +685,7 @@ function App(): React.JSX.Element {
                   }`}
                 >
                   <span className="inline-block h-2.5 w-2.5 rounded-full bg-red-500" />
-                  Ollama error — {enrichmentError}
+                  {getProviderLabel(settings.llmProvider)} error — {enrichmentError}
                 </span>
               ) : enrichmentProgress ? (
                 <span
@@ -884,75 +930,15 @@ function App(): React.JSX.Element {
               <div>
                 <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>API Settings</p>
                 <div className="space-y-3">
-                  <div className={`rounded-xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
-                    <div className="mb-3 flex items-center justify-between gap-2">
-                      <label className="text-xs font-medium opacity-70">Ollama Connection Address</label>
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`h-2.5 w-2.5 rounded-full ${
-                            ollamaConnectionState === "ok"
-                              ? "bg-emerald-500"
-                              : ollamaConnectionState === "fail"
-                                ? "bg-red-500"
-                                : "bg-zinc-500"
-                          }`}
-                          title={ollamaConnectionState === "ok" ? "Connected" : ollamaConnectionState === "fail" ? "Connection failed" : "Not tested"}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => void testOllamaConnection(settings.ollamaAddress)}
-                          disabled={isTestingOllama}
-                          className={`rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
-                            isDarkMode
-                              ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                          } disabled:opacity-50`}
-                        >
-                          {isTestingOllama ? "Testing..." : "Test Connection"}
-                        </button>
-                      </div>
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="http://127.0.0.1:11434"
-                      value={settings.ollamaAddress}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setSettings((s) => ({ ...s, ollamaAddress: val }));
-                        setOllamaConnectionState("unknown");
-                        saveSetting("ollamaAddress", val);
-                      }}
-                      className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                        isDarkMode
-                          ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                          : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
-                      }`}
-                    />
-                  </div>
-
-                  <div className={`rounded-xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <label className="text-xs font-medium opacity-70">Ollama Model</label>
-                      <button
-                        type="button"
-                        onClick={() => void refreshOllamaModels(settings.ollamaAddress)}
-                        disabled={isRefreshingModels}
-                        className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
-                          isDarkMode
-                            ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                            : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                        } disabled:opacity-50`}
-                      >
-                        <RefreshCw size={12} className={isRefreshingModels ? "animate-spin" : ""} />
-                        Refresh
-                      </button>
-                    </div>
+                  {/* LLM Provider Selection */}
+                  <div>
+                    <label className="mb-2 block text-xs font-medium opacity-70">LLM Provider</label>
                     <select
-                      value={settings.ollamaModel}
+                      value={settings.llmProvider}
                       onChange={(e) => {
                         const val = e.target.value;
-                        setSettings((s) => ({ ...s, ollamaModel: val }));
-                        saveSetting("ollamaModel", val);
+                        setSettings((s) => ({ ...s, llmProvider: val }));
+                        saveSetting("llmProvider", val);
                       }}
                       className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
                         isDarkMode
@@ -960,15 +946,244 @@ function App(): React.JSX.Element {
                           : "border-zinc-300 bg-zinc-100 text-zinc-900"
                       }`}
                     >
-                      {ollamaModels.length === 0 ? (
-                        <option value={settings.ollamaModel}>{settings.ollamaModel || "No models found"}</option>
-                      ) : (
-                        ollamaModels.map((model) => (
-                          <option key={model} value={model}>{model}</option>
-                        ))
-                      )}
+                      <option value="ollama">Ollama (Local)</option>
+                      <option value="openai">OpenAI</option>
+                      <option value="claude">Claude (Anthropic)</option>
+                      <option value="gemini">Google Gemini</option>
                     </select>
                   </div>
+
+                  {/* Ollama Settings */}
+                  {settings.llmProvider === "ollama" && (
+                    <>
+                      <div className={`rounded-xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
+                        <div className="mb-3 flex items-center justify-between gap-2">
+                          <label className="text-xs font-medium opacity-70">Ollama Connection Address</label>
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`h-2.5 w-2.5 rounded-full ${
+                                ollamaConnectionState === "ok"
+                                  ? "bg-emerald-500"
+                                  : ollamaConnectionState === "fail"
+                                    ? "bg-red-500"
+                                    : "bg-zinc-500"
+                              }`}
+                              title={ollamaConnectionState === "ok" ? "Connected" : ollamaConnectionState === "fail" ? "Connection failed" : "Not tested"}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => void testOllamaConnection(settings.ollamaAddress)}
+                              disabled={isTestingOllama}
+                              className={`rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                                isDarkMode
+                                  ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                                  : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                              } disabled:opacity-50`}
+                            >
+                              {isTestingOllama ? "Testing..." : "Test Connection"}
+                            </button>
+                          </div>
+                        </div>
+                        <input
+                          type="text"
+                          placeholder="http://127.0.0.1:11434"
+                          value={settings.ollamaAddress}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSettings((s) => ({ ...s, ollamaAddress: val }));
+                            setOllamaConnectionState("unknown");
+                            saveSetting("ollamaAddress", val);
+                          }}
+                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                            isDarkMode
+                              ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                              : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+                          }`}
+                        />
+                      </div>
+
+                      <div className={`rounded-xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <label className="text-xs font-medium opacity-70">Ollama Model</label>
+                          <button
+                            type="button"
+                            onClick={() => void refreshOllamaModels(settings.ollamaAddress)}
+                            disabled={isRefreshingModels}
+                            className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                              isDarkMode
+                                ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                                : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                            } disabled:opacity-50`}
+                          >
+                            <RefreshCw size={12} className={isRefreshingModels ? "animate-spin" : ""} />
+                            Refresh
+                          </button>
+                        </div>
+                        <select
+                          value={settings.ollamaModel}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSettings((s) => ({ ...s, ollamaModel: val }));
+                            saveSetting("ollamaModel", val);
+                          }}
+                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                            isDarkMode
+                              ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                              : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                          }`}
+                        >
+                          {ollamaModels.length === 0 ? (
+                            <option value={settings.ollamaModel}>{settings.ollamaModel || "No models found"}</option>
+                          ) : (
+                            ollamaModels.map((model) => (
+                              <option key={model} value={model}>{model}</option>
+                            ))
+                          )}
+                        </select>
+                      </div>
+                    </>
+                  )}
+
+                  {/* OpenAI Settings */}
+                  {settings.llmProvider === "openai" && (
+                    <>
+                      <div>
+                        <label className="mb-1.5 block text-xs font-medium opacity-70">OpenAI API Key</label>
+                        <input
+                          type="password"
+                          placeholder="sk-..."
+                          value={settings.openaiApiKey}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSettings((s) => ({ ...s, openaiApiKey: val }));
+                            saveSetting("openaiApiKey", val);
+                          }}
+                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                            isDarkMode
+                              ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                              : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+                          }`}
+                        />
+                      </div>
+
+                      <div className={`rounded-xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
+                        <div className="mb-2">
+                          <label className="text-xs font-medium opacity-70">OpenAI Model</label>
+                        </div>
+                        <select
+                          value={settings.openaiModel}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSettings((s) => ({ ...s, openaiModel: val }));
+                            saveSetting("openaiModel", val);
+                          }}
+                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                            isDarkMode
+                              ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                              : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                          }`}
+                        >
+                          {OPENAI_MODELS.map((model) => (
+                            <option key={model} value={model}>{model}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Claude Settings */}
+                  {settings.llmProvider === "claude" && (
+                    <>
+                      <div>
+                        <label className="mb-1.5 block text-xs font-medium opacity-70">Claude API Key</label>
+                        <input
+                          type="password"
+                          placeholder="sk-ant-..."
+                          value={settings.claudeApiKey}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSettings((s) => ({ ...s, claudeApiKey: val }));
+                            saveSetting("claudeApiKey", val);
+                          }}
+                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                            isDarkMode
+                              ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                              : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+                          }`}
+                        />
+                      </div>
+
+                      <div className={`rounded-xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
+                        <div className="mb-2">
+                          <label className="text-xs font-medium opacity-70">Claude Model</label>
+                        </div>
+                        <select
+                          value={settings.claudeModel}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSettings((s) => ({ ...s, claudeModel: val }));
+                            saveSetting("claudeModel", val);
+                          }}
+                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                            isDarkMode
+                              ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                              : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                          }`}
+                        >
+                          {CLAUDE_MODELS.map((model) => (
+                            <option key={model} value={model}>{model}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Gemini Settings */}
+                  {settings.llmProvider === "gemini" && (
+                    <>
+                      <div>
+                        <label className="mb-1.5 block text-xs font-medium opacity-70">Google Gemini API Key</label>
+                        <input
+                          type="password"
+                          placeholder="AIza..."
+                          value={settings.geminiApiKey}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSettings((s) => ({ ...s, geminiApiKey: val }));
+                            saveSetting("geminiApiKey", val);
+                          }}
+                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                            isDarkMode
+                              ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                              : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+                          }`}
+                        />
+                      </div>
+
+                      <div className={`rounded-xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
+                        <div className="mb-2">
+                          <label className="text-xs font-medium opacity-70">Gemini Model</label>
+                        </div>
+                        <select
+                          value={settings.geminiModel}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSettings((s) => ({ ...s, geminiModel: val }));
+                            saveSetting("geminiModel", val);
+                          }}
+                          className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                            isDarkMode
+                              ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                              : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                          }`}
+                        >
+                          {GEMINI_MODELS.map((model) => (
+                            <option key={model} value={model}>{model}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </>
+                  )}
 
                   <div>
                     <label className="mb-1.5 block text-xs font-medium opacity-70">SerpAPI Key</label>

@@ -24,6 +24,7 @@ serde_json = "1"
 reqwest = { version = "0.12.5", features = ["json"] }
 tokio = { version = "1.38.0", features = ["full"] }
 ollama-rs = { version = "0.2.0", features = ["tokio"] }
+async-trait = "0.1"
 dotenv = "0.15"
 serpapi-search-rust="0.1.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }

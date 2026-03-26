@@ -1,8 +1,8 @@
-use crate::db::{get_unenriched_articles, mark_enriched, upsert_article};
+use crate::db::{get_unenriched_articles_by_category, list_unenriched_categories, mark_enriched, upsert_article};
 use crate::news_item::NewsItem;
 use crate::serp_parser::{list_supported_topics, scrape_serp_topics, scrape_serp_topics_with_api_key};
-use crate::ollama_read::enrich_news_item_with_config;
-use chrono::{DateTime, Utc};
+use crate::ollama_read::fetch_article_text;
+use chrono::{DateTime, Local, Utc};
 use reqwest::Url;
 use sqlx::sqlite::SqlitePool;
 use std::path::Path;
@@ -17,6 +17,7 @@ pub mod id_generator;
 pub mod news_item;
 pub mod ollama_read;
 pub mod serp_parser;
+pub mod platform_llm;
 
 pub type CleanedArticle = NewsItem;
 
@@ -150,7 +151,7 @@ struct EnrichedNewsSyncCompleteEvent {
 
 fn is_on_utc_day(date_value: &str, target_utc_day: &str) -> bool {
     if let Ok(parsed) = DateTime::parse_from_rfc3339(date_value) {
-        return parsed.with_timezone(&Utc).date_naive().to_string() == target_utc_day;
+        return parsed.with_timezone(&Local).date_naive().to_string() == target_utc_day;
     }
 
     date_value.get(..10) == Some(target_utc_day)
@@ -338,11 +339,18 @@ async fn start_all_action(
     state: tauri::State<'_, AppState>,
     limit: usize,
     cooldown_hours: u64,
+    llm_provider: Option<String>,
+    openai_api_key: Option<String>,
+    claude_api_key: Option<String>,
+    gemini_api_key: Option<String>,
+    openai_model: Option<String>,
+    claude_model: Option<String>,
+    gemini_model: Option<String>,
     ollama_address: Option<String>,
     ollama_model: Option<String>,
 ) -> Result<(), String> {
-    let limit = limit.clamp(1, 50) as i64;
-    println!("Starting full pipeline action (limit={})…", limit);
+    let limit = limit.clamp(1, 100) as i64;
+    println!("Starting full pipeline action (per-category limit={})…", limit);
     let app_data_dir = app
         .path()
         .app_data_dir()
@@ -363,6 +371,34 @@ async fn start_all_action(
         .get("ollamaModel")
         .cloned()
         .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_string());
+    let saved_llm_provider = settings_map
+        .get("llmProvider")
+        .cloned()
+        .unwrap_or_else(|| "ollama".to_string());
+    let saved_openai_api_key = settings_map
+        .get("openaiApiKey")
+        .cloned()
+        .unwrap_or_default();
+    let saved_claude_api_key = settings_map
+        .get("claudeApiKey")
+        .cloned()
+        .unwrap_or_default();
+    let saved_gemini_api_key = settings_map
+        .get("geminiApiKey")
+        .cloned()
+        .unwrap_or_default();
+    let saved_openai_model = settings_map
+        .get("openaiModel")
+        .cloned()
+        .unwrap_or_else(|| "gpt-5.4-mini".to_string());
+    let saved_claude_model = settings_map
+        .get("claudeModel")
+        .cloned()
+        .unwrap_or_else(|| "claude-sonnet-4-6".to_string());
+    let saved_gemini_model = settings_map
+        .get("geminiModel")
+        .cloned()
+        .unwrap_or_else(|| "gemini-2.5-flash".to_string());
     let saved_serp_api_key = settings_map
         .get("serpApiKey")
         .cloned()
@@ -375,7 +411,69 @@ async fn start_all_action(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or(saved_ollama_model);
+    let llm_provider = llm_provider
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_llm_provider);
+    let openai_api_key = openai_api_key
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_openai_api_key);
+    let claude_api_key = claude_api_key
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_claude_api_key);
+    let gemini_api_key = gemini_api_key
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_gemini_api_key);
+    let openai_model = openai_model
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_openai_model);
+    let claude_model = claude_model
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_claude_model);
+    let gemini_model = gemini_model
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(saved_gemini_model);
     let serp_api_key = saved_serp_api_key.trim().to_string();
+
+    let selected_provider = platform_llm::LLMProvider::from_str(&llm_provider);
+    let llm_config = match selected_provider {
+        platform_llm::LLMProvider::Ollama => platform_llm::LLMConfig {
+            provider: selected_provider.clone(),
+            api_key: None,
+            endpoint: Some(ollama_address.clone()),
+            model: ollama_model.clone(),
+        },
+        platform_llm::LLMProvider::OpenAI => platform_llm::LLMConfig {
+            provider: selected_provider.clone(),
+            api_key: Some(openai_api_key.clone()),
+            endpoint: None,
+            model: openai_model.clone(),
+        },
+        platform_llm::LLMProvider::Claude => platform_llm::LLMConfig {
+            provider: selected_provider.clone(),
+            api_key: Some(claude_api_key.clone()),
+            endpoint: None,
+            model: claude_model.clone(),
+        },
+        platform_llm::LLMProvider::Gemini => platform_llm::LLMConfig {
+            provider: selected_provider.clone(),
+            api_key: Some(gemini_api_key.clone()),
+            endpoint: None,
+            model: gemini_model.clone(),
+        },
+    };
+    let llm = platform_llm::create_provider(&llm_config)?;
+    println!(
+        "Using LLM provider '{}' with model '{}'",
+        llm_provider,
+        llm_config.model
+    );
 
     // Time gate: skip web scraping if last scrape was within the cooldown window.
     // This reduces the risk of IP banning from repeated intensive scraping.
@@ -431,21 +529,49 @@ async fn start_all_action(
         );
     }
 
-    // Pick the newest articles that haven't been enriched yet.
-    let items_to_enrich = get_unenriched_articles(&state.db, limit)
+    // Pick top N newest unenriched articles per category.
+    let categories = list_unenriched_categories(&state.db)
         .await
-        .map_err(|e| format!("DB read error: {}", e))?;
+        .map_err(|e| format!("DB category read error: {}", e))?;
+
+    let mut items_to_enrich: Vec<NewsItem> = Vec::new();
+    for category in categories {
+        let mut category_items = get_unenriched_articles_by_category(&state.db, &category, limit)
+            .await
+            .map_err(|e| format!("DB read error for category '{}': {}", category, e))?;
+        items_to_enrich.append(&mut category_items);
+    }
 
     let total = items_to_enrich.len();
-    println!("Enriching {} unenriched items this run", total);
+    println!("Enriching {} unenriched items this run (up to {} per category)", total, limit);
     let mut enriched_count = 0;
     let mut first_error: Option<String> = None;
 
     for (index, item) in items_to_enrich.into_iter().enumerate() {
         let fallback_item = item.clone();
+        let llm_ref = llm.as_ref();
         let enrich_result = tokio::time::timeout(
             Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
-            enrich_news_item_with_config(item, Some(&ollama_address), Some(&ollama_model)),
+            async {
+                let text = fetch_article_text(&item.url).await?;
+                let (tags, snippet, ai_summary) = llm_ref.enrich(&item.title, &text).await?;
+
+                let mut enriched = item;
+                if enriched.og_content.trim().is_empty() {
+                    enriched.og_content = text;
+                }
+                if enriched.tags.is_empty() {
+                    enriched.tags = tags;
+                }
+                if enriched.snippet.trim().is_empty() {
+                    enriched.snippet = snippet;
+                }
+                if enriched.ai_summary.trim().is_empty() {
+                    enriched.ai_summary = ai_summary;
+                }
+
+                Ok::<NewsItem, String>(enriched)
+            },
         )
         .await;
 
@@ -527,6 +653,49 @@ async fn start_all_action(
     Ok(())
 }
 
+#[tauri::command]
+async fn list_provider_models(provider: String, api_key: Option<String>, endpoint: Option<String>) -> Result<Vec<String>, String> {
+    let llm_provider = platform_llm::LLMProvider::from_str(&provider);
+    let config = platform_llm::LLMConfig {
+        provider: llm_provider,
+        api_key: api_key.clone(),
+        endpoint: endpoint.clone(),
+        model: "default".to_string(),
+    };
+    
+    let llm = platform_llm::create_provider(&config)?;
+    llm.list_models().await
+}
+
+#[tauri::command]
+async fn test_provider_connection(provider: String, api_key: Option<String>, endpoint: Option<String>, model: Option<String>) -> Result<bool, String> {
+    let llm_provider = platform_llm::LLMProvider::from_str(&provider);
+    let config = platform_llm::LLMConfig {
+        provider: llm_provider,
+        api_key: api_key.clone(),
+        endpoint: endpoint.clone(),
+        model: model.unwrap_or_else(|| {
+            if provider == "ollama" {
+                "qwen2.5:3b".to_string()
+            } else if provider == "openai" {
+                "gpt-5.4-mini".to_string()
+            } else if provider == "claude" {
+                "claude-sonnet-4-6".to_string()
+            } else {
+                "gemini-2.5-flash".to_string()
+            }
+        }),
+    };
+    
+    let llm = platform_llm::create_provider(&config)?;
+    llm.test_connection().await
+}
+
+#[tauri::command]
+fn get_provider_options() -> Vec<&'static str> {
+    platform_llm::LLMProvider::options()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     dotenv::dotenv().ok();
@@ -556,6 +725,9 @@ pub fn run() {
             start_all_action,
             test_ollama_connection,
             list_ollama_models,
+            list_provider_models,
+            test_provider_connection,
+            get_provider_options,
             open_url,
             save_setting,
             load_settings,
