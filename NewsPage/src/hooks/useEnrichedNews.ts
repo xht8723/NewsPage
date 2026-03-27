@@ -82,6 +82,10 @@ export function useEnrichedNews(params: UseEnrichedNewsParams): {
         return mapped;
       });
     } catch (error) {
+      if (thisFetch !== fetchCounterRef.current) {
+        // Ignore stale failures from older requests; a newer fetch is already in flight.
+        return;
+      }
       if (shouldDisableRelevanceFromError(settings.sortMode, error)) {
         disableRelevanceSort("backend reported relevance unavailable");
       }

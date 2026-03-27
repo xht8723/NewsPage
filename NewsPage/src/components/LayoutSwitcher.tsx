@@ -18,7 +18,7 @@ export function LayoutSwitcher({ show, isDarkMode, layout, onSetLayout }: Layout
     >
       <div
         className={`flex items-center gap-1 rounded-full border p-1 shadow-xl backdrop-blur-lg ${
-          isDarkMode ? "border-zinc-700 bg-zinc-900/80 text-zinc-400" : "border-zinc-300 bg-white/80 text-zinc-600"
+          isDarkMode ? "border-zinc-700 bg-zinc-900/80 text-zinc-400" : "border-zinc-300 bg-zinc-150/90 text-zinc-600"
         }`}
       >
         <button

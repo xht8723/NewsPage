@@ -92,6 +92,7 @@ function App(): React.JSX.Element {
   const [showLayoutSwitcher, setShowLayoutSwitcher] = useState(true);
   const [showConfigPopup, setShowConfigPopup] = useState(false);
   const [configPopupMessage, setConfigPopupMessage] = useState("");
+  const [relevanceWarning, setRelevanceWarning] = useState<string | null>(null);
   const saveSetting = useDebouncedSettingSaver(500);
 
   // Load persisted settings on mount
@@ -165,15 +166,12 @@ function App(): React.JSX.Element {
   }, []);
 
   const disableRelevanceSort = useCallback((reason: string) => {
-    setSettings((current) => {
-      if (current.sortMode !== "score") {
-        return current;
-      }
-      console.info(`Disabling relevance sort: ${reason}`);
-      saveSetting("sortMode", "date");
-      return { ...current, sortMode: "date" };
-    });
-  }, [saveSetting]);
+    if (settings.sortMode !== "score") {
+      return;
+    }
+    console.info(`Relevance sort unavailable: ${reason}`);
+    setRelevanceWarning(reason);
+  }, [settings.sortMode]);
 
   const testOllamaConnection = useCallback(async (address: string) => {
     setIsTestingOllama(true);
@@ -261,6 +259,12 @@ function App(): React.JSX.Element {
     disableRelevanceSort,
   });
 
+  const fetchEnrichedNewsRef = useRef(fetchEnrichedNews);
+
+  useEffect(() => {
+    fetchEnrichedNewsRef.current = fetchEnrichedNews;
+  }, [fetchEnrichedNews]);
+
   const scheduleRefresh = useCallback((filterByDate: boolean) => {
     if (refreshTimeoutRef.current !== null) {
       window.clearTimeout(refreshTimeoutRef.current);
@@ -268,9 +272,9 @@ function App(): React.JSX.Element {
 
     refreshTimeoutRef.current = window.setTimeout(() => {
       // During incremental enrichment updates, avoid flashing the list empty on transient empty responses.
-      void fetchEnrichedNews(filterByDate, true);
+      void fetchEnrichedNewsRef.current(filterByDate, true);
     }, 300);
-  }, [fetchEnrichedNews]);
+  }, []);
 
   const generateNews = async () => {
     if (!settings.embeddingInitialized) {
@@ -293,6 +297,7 @@ function App(): React.JSX.Element {
     setLoading(true);
     setEnrichmentProgress(null);
     setEnrichmentError(null);
+    setRelevanceWarning(null);
 
     try {
       await invoke<boolean>("test_provider_connection", {
@@ -346,7 +351,7 @@ function App(): React.JSX.Element {
       const mapped = mapBackendNewsItem(updatedItem);
       setNews((current) => current.map((item) => (item.id === mapped.id ? mapped : item)));
       setSelectedArticle((current) => (current && current.id === mapped.id ? mapped : current));
-      await fetchEnrichedNews(true, true);
+      await fetchEnrichedNewsRef.current(true, true);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setEnrichmentError(message);
@@ -354,7 +359,7 @@ function App(): React.JSX.Element {
       setReprocessingArticleId(null);
       setContextMenu(null);
     }
-  }, [fetchEnrichedNews, reprocessingArticleId, settings]);
+  }, [reprocessingArticleId, settings]);
 
   const availableCategories = useMemo(
     () => ["All", ...TOPIC_CATEGORIES.filter((category) => visibleCategories[category])] as Category[],
@@ -396,7 +401,7 @@ function App(): React.JSX.Element {
             setEnrichmentError(null);
           }
           // Fetch with current date/category filter now that enrichment is done
-          void fetchEnrichedNews(true, true);
+          void fetchEnrichedNewsRef.current(true, true);
         });
         console.log("✅ Listener registered: enriched-news-sync-complete");
       } catch (error) {
@@ -418,7 +423,7 @@ function App(): React.JSX.Element {
         unlistenCompleted();
       }
     };
-  }, [scheduleRefresh, fetchEnrichedNews]);
+  }, [scheduleRefresh]);
 
   useEffect(() => {
     if (selectedCategory !== "All" && !visibleCategories[selectedCategory] && availableCategories.length > 0) {
@@ -552,6 +557,7 @@ function App(): React.JSX.Element {
 
   const setSortMode = (mode: "date" | "score") => {
     setSettings((current) => (current.sortMode === mode ? current : { ...current, sortMode: mode }));
+    setRelevanceWarning(null);
     saveSetting("sortMode", mode);
   };
 
@@ -594,11 +600,11 @@ function App(): React.JSX.Element {
   }, [news, selectedCategory, selectedDate, visibleCategories, settings.sortMode]);
 
   return (
-    <div className={`min-h-screen transition-colors duration-300 ${isDarkMode ? "bg-zinc-950 text-zinc-400" : "bg-zinc-100 text-zinc-800"}`}>
-      <aside className={`fixed left-0 top-0 z-20 hidden h-full w-64 flex-col border-r transition-colors md:flex ${isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-zinc-50 border-zinc-200"}`}>
+    <div className={`min-h-screen transition-colors duration-300 ${isDarkMode ? "bg-zinc-950 text-zinc-400" : "bg-white text-zinc-800"}`}>
+      <aside className={`fixed left-0 top-0 z-20 hidden h-full w-64 flex-col border-r transition-colors md:flex ${isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-zinc-100 border-zinc-200"}`}>
         <div className="flex items-center gap-3 border-b border-inherit p-6">
-          <div className={`${isDarkMode ? "bg-zinc-100 text-black" : "bg-zinc-800 text-white"} rounded-lg p-2 shadow-sm`}>
-            <Newspaper size={24} />
+          <div className={`${isDarkMode ? "bg-zinc-800 text-black" : "bg-zinc-150 text-white"} rounded-lg p-1 shadow-sm`}>
+            <img src="/icon.svg" alt="NewsPage logo" className="h-8 w-8 block scale-110" />
           </div>
           <h1 className={`text-xl font-bold tracking-tight ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>NewsPage</h1>
         </div>
@@ -618,7 +624,7 @@ function App(): React.JSX.Element {
           </div>
 
           {showCategoryManager && (
-            <div className={`mb-4 space-y-2 rounded-2xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/70" : "border-zinc-200 bg-white"}`}>
+            <div className={`mb-4 space-y-2 rounded-2xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/70" : "border-zinc-200 bg-zinc-150"}`}>
               {TOPIC_CATEGORIES.map((category) => {
                 const visibleCount = TOPIC_CATEGORIES.filter((item) => visibleCategories[item]).length;
                 const isLastVisible = visibleCategories[category] && visibleCount === 1;
@@ -632,10 +638,10 @@ function App(): React.JSX.Element {
                       visibleCategories[category]
                         ? isDarkMode
                           ? "bg-zinc-800 text-zinc-100"
-                          : "bg-zinc-100 text-zinc-900"
+                          : "bg-zinc-200 text-zinc-900"
                         : isDarkMode
                           ? "bg-zinc-900 text-zinc-500"
-                          : "bg-zinc-50 text-zinc-500"
+                          : "bg-zinc-150 text-zinc-500"
                     } ${isLastVisible ? "cursor-not-allowed opacity-50" : "hover:opacity-90"}`}
                   >
                     <span>{category}</span>
@@ -689,7 +695,7 @@ function App(): React.JSX.Element {
             className={`w-full rounded-xl border px-3 py-3 transition-all ${
               isDarkMode
                 ? "border-zinc-800 bg-zinc-950/50 text-zinc-400 hover:bg-zinc-800"
-                : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-200"
+                : "border-zinc-200 bg-zinc-150 text-zinc-600 hover:bg-zinc-200"
             } flex items-center gap-3`}
           >
             <Calendar size={18} />
@@ -704,7 +710,7 @@ function App(): React.JSX.Element {
               className={`rounded-xl border px-3 py-2 text-[10px] font-black uppercase tracking-widest transition-all ${
                 isDarkMode
                   ? "border-zinc-800 bg-zinc-950/50 text-zinc-300 hover:bg-zinc-800"
-                  : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-200"
+                  : "border-zinc-200 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
               }`}
             >
               Yesterday
@@ -715,7 +721,7 @@ function App(): React.JSX.Element {
                 className={`rounded-xl border px-3 py-2 text-[10px] font-black uppercase tracking-widest transition-all ${
                   isDarkMode
                     ? "border-zinc-800 bg-zinc-950/50 text-zinc-300 hover:bg-zinc-800"
-                    : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-200"
+                    : "border-zinc-200 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
                 }`}
               >
                 Next day
@@ -755,6 +761,27 @@ function App(): React.JSX.Element {
                     <X size={12} />
                   </button>
                 </span>
+              ) : relevanceWarning && settings.sortMode === "score" ? (
+                <span
+                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 font-semibold shadow-sm ${
+                    isDarkMode
+                      ? "border-amber-500/40 bg-amber-500/15 text-amber-300"
+                      : "border-amber-400 bg-amber-50 text-amber-800"
+                  }`}
+                >
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-amber-500" />
+                  Relevance temporarily unavailable — keeping your selected sort mode
+                  <button
+                    type="button"
+                    onClick={() => setRelevanceWarning(null)}
+                    aria-label="Dismiss warning"
+                    className={`ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full transition-colors ${
+                      isDarkMode ? "hover:bg-amber-500/20" : "hover:bg-amber-200"
+                    }`}
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
               ) : enrichmentProgress ? (
                 <span
                   className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 font-semibold shadow-sm ${
@@ -775,13 +802,13 @@ function App(): React.JSX.Element {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setShowSettings(true)}
-              className={`rounded-full border p-2 transition-colors ${isDarkMode ? "border-zinc-800 hover:bg-zinc-800" : "border-zinc-300 bg-white hover:bg-zinc-200"}`}
+              className={`rounded-full border p-2 transition-colors ${isDarkMode ? "border-zinc-800 hover:bg-zinc-800" : "border-zinc-300 bg-zinc-150 hover:bg-zinc-200"}`}
             >
               <Settings size={18} />
             </button>
             <button
               onClick={() => setIsDarkMode(!isDarkMode)}
-              className={`rounded-full border p-2 transition-colors ${isDarkMode ? "border-zinc-800 hover:bg-zinc-800" : "border-zinc-300 bg-white hover:bg-zinc-200"}`}
+              className={`rounded-full border p-2 transition-colors ${isDarkMode ? "border-zinc-800 hover:bg-zinc-800" : "border-zinc-300 bg-zinc-150 hover:bg-zinc-200"}`}
             >
               {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
             </button>
@@ -789,10 +816,10 @@ function App(): React.JSX.Element {
               onClick={generateNews}
               disabled={loading}
               className={`ml-2 flex items-center gap-2 rounded-full px-5 py-2.5 text-xs font-bold uppercase tracking-widest shadow-md transition-all ${
-                isDarkMode ? "bg-zinc-200 text-zinc-900 hover:bg-white" : "bg-zinc-800 text-white hover:bg-zinc-900"
+                isDarkMode ? "bg-zinc-300 text-zinc-900 hover:bg-amber-300" : "bg-white text-black hover:bg-zinc-300"
               } disabled:opacity-50`}
             >
-              {loading ? <RefreshCw className="animate-spin" size={16} /> : <Newspaper size={16} />}
+              {loading ? <RefreshCw className="animate-spin" size={16} /> : <img src="/icon.svg" alt="NewsPage logo" className="h-5 w-5 block" />}
               Get news!
             </button>
           </div>
@@ -931,7 +958,7 @@ function App(): React.JSX.Element {
           <div
             onClick={(e) => e.stopPropagation()}
             className={`w-full max-w-sm rounded-2xl border p-6 shadow-2xl ${
-              isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-100" : "border-zinc-300 bg-white text-zinc-900"
+              isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-100" : "border-zinc-300 bg-zinc-150 text-zinc-900"
             }`}
           >
             <p className={`mb-1 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>
@@ -946,7 +973,7 @@ function App(): React.JSX.Element {
                 className={`rounded-lg border px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
                   isDarkMode
                     ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                    : "border-zinc-300 bg-zinc-100 text-zinc-700 hover:bg-zinc-200"
+                    : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
                 }`}
               >
                 Dismiss

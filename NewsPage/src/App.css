@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+@layer utilities {
+	.bg-zinc-150 {
+		background-color: #ececef;
+	}
+}
+
 .hide-scrollbar {
 	-ms-overflow-style: none;
 	scrollbar-width: none;

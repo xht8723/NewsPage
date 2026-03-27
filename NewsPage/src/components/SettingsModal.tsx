@@ -81,12 +81,12 @@ export function SettingsModal({
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div
         className={`relative w-full max-w-6xl overflow-hidden rounded-3xl border shadow-2xl ${
-          isDarkMode ? "border-zinc-800 bg-zinc-900 text-zinc-300" : "border-zinc-200 bg-white text-zinc-800"
+          isDarkMode ? "border-zinc-800 bg-zinc-900 text-zinc-300" : "border-zinc-200 bg-zinc-150 text-zinc-800"
         }`}
       >
         <div
           className={`flex items-center justify-between border-b p-6 ${
-            isDarkMode ? "border-zinc-800 bg-zinc-950/50" : "border-zinc-100 bg-zinc-50"
+            isDarkMode ? "border-zinc-800 bg-zinc-950/50" : "border-zinc-200 bg-zinc-150"
           }`}
         >
           <div className="flex items-center gap-2">
@@ -99,7 +99,7 @@ export function SettingsModal({
         </div>
         <div className="max-h-[calc(100vh-10rem)] space-y-6 overflow-y-auto p-6">
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
+            <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
               <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>General Settings</p>
               <div className="space-y-3">
                 <div>
@@ -117,7 +117,7 @@ export function SettingsModal({
                     className={`w-full rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
                       isDarkMode
                         ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                        : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                        : "border-zinc-300 bg-zinc-200 text-zinc-900"
                     }`}
                   />
                 </div>
@@ -137,14 +137,14 @@ export function SettingsModal({
                     className={`w-full rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
                       isDarkMode
                         ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                        : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                        : "border-zinc-300 bg-zinc-200 text-zinc-900"
                     }`}
                   />
                 </div>
               </div>
             </div>
 
-            <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
+            <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
               <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Embedding Settings</p>
               <div className="space-y-3">
                 <div>
@@ -161,7 +161,7 @@ export function SettingsModal({
                     className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
                       isDarkMode
                         ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                        : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                        : "border-zinc-300 bg-zinc-200 text-zinc-900"
                     } ${embeddingSelectionLocked ? "opacity-60" : ""}`}
                   >
                     {localEmbeddingModels.map((model) => (
@@ -184,7 +184,7 @@ export function SettingsModal({
                       className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
                         isDarkMode
                           ? `border-zinc-700 bg-zinc-800 text-zinc-200 ${downloadButtonDisabled ? "" : "hover:bg-zinc-700"}`
-                          : `border-zinc-300 bg-white text-zinc-700 ${downloadButtonDisabled ? "" : "hover:bg-zinc-100"}`
+                          : `border-zinc-300 bg-zinc-150 text-zinc-700 ${downloadButtonDisabled ? "" : "hover:bg-zinc-200"}`
                       } shrink-0 disabled:opacity-50`}
                     >
                       <RefreshCw size={12} className={embeddingIsBusy ? "animate-spin" : ""} />
@@ -205,7 +205,7 @@ export function SettingsModal({
               </div>
             </div>
 
-            <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
+            <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
               <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>LLM Provider Settings</p>
               <div className="space-y-3">
                 <div>
@@ -220,7 +220,7 @@ export function SettingsModal({
                     className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
                       isDarkMode
                         ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                        : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                        : "border-zinc-300 bg-zinc-200 text-zinc-900"
                     }`}
                   >
                     <option value="ollama">Ollama (Local)</option>
@@ -253,7 +253,7 @@ export function SettingsModal({
                             className={`rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
                               isDarkMode
                                 ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                                : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                                : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
                             } disabled:opacity-50`}
                           >
                             {isTestingOllama ? "Testing..." : "Test Connection"}
@@ -273,7 +273,7 @@ export function SettingsModal({
                         className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
                           isDarkMode
                             ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                            : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+                            : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
                         }`}
                       />
                     </div>
@@ -287,7 +287,7 @@ export function SettingsModal({
                           className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
                             isDarkMode
                               ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                              : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
                           } disabled:opacity-50`}
                         >
                           <RefreshCw size={12} className={isRefreshingModels ? "animate-spin" : ""} />
@@ -304,7 +304,7 @@ export function SettingsModal({
                         className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
                           isDarkMode
                             ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                            : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                            : "border-zinc-300 bg-zinc-200 text-zinc-900"
                         }`}
                       >
                         {ollamaModels.length === 0 ? (
@@ -335,7 +335,7 @@ export function SettingsModal({
                         className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
                           isDarkMode
                             ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                            : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+                            : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
                         }`}
                       />
                     </div>
@@ -351,7 +351,7 @@ export function SettingsModal({
                         className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
                           isDarkMode
                             ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                            : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                            : "border-zinc-300 bg-zinc-200 text-zinc-900"
                         }`}
                       >
                         {OPENAI_MODELS.map((model) => (
@@ -378,7 +378,7 @@ export function SettingsModal({
                         className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
                           isDarkMode
                             ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                            : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+                            : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
                         }`}
                       />
                     </div>
@@ -394,7 +394,7 @@ export function SettingsModal({
                         className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
                           isDarkMode
                             ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                            : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                            : "border-zinc-300 bg-zinc-200 text-zinc-900"
                         }`}
                       >
                         {CLAUDE_MODELS.map((model) => (
@@ -421,7 +421,7 @@ export function SettingsModal({
                         className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
                           isDarkMode
                             ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                            : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+                            : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
                         }`}
                       />
                     </div>
@@ -437,7 +437,7 @@ export function SettingsModal({
                         className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
                           isDarkMode
                             ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                            : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                            : "border-zinc-300 bg-zinc-200 text-zinc-900"
                         }`}
                       >
                         {GEMINI_MODELS.map((model) => (
@@ -451,7 +451,7 @@ export function SettingsModal({
             </div>
           </div>
 
-          <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
+          <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
             <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Serp API Key</p>
             <input
               type="password"
@@ -465,7 +465,7 @@ export function SettingsModal({
               className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
                 isDarkMode
                   ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                  : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+                  : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
               }`}
             />
           </div>
@@ -505,7 +505,7 @@ export function SettingsModal({
                       className={`rounded-lg border px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
                         isDarkMode
                           ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                          : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                          : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
                       }`}
                     >
                       Cancel
@@ -544,7 +544,7 @@ export function SettingsModal({
                       className={`rounded-lg border px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
                         isDarkMode
                           ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                          : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                          : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
                       } disabled:opacity-50`}
                     >
                       Cancel

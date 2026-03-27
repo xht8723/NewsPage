@@ -22,10 +22,10 @@ export function PreferencePanel({
   onSetPreferenceConcepts,
 }: PreferencePanelProps): React.JSX.Element {
   return (
-    <div className={`rounded-2xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/50" : "border-zinc-200 bg-white"} ${className}`.trim()}>
+    <div className={`rounded-2xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/50" : "border-zinc-200 bg-zinc-150"} ${className}`.trim()}>
       <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Sort by:</p>
       <div className={`flex items-center gap-0.5 rounded-full border p-1 text-[10px] font-black uppercase tracking-widest ${
-        isDarkMode ? "border-zinc-800 bg-zinc-900" : "border-zinc-200 bg-zinc-50"
+        isDarkMode ? "border-zinc-800 bg-zinc-900" : "border-zinc-200 bg-zinc-150"
       }`}>
         <button
           onClick={() => onSetSortMode("date")}
@@ -78,7 +78,7 @@ export function PreferencePanel({
               className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
                 isDarkMode
                   ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                  : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+                  : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
               }`}
             />
           </div>
@@ -92,7 +92,7 @@ export function PreferencePanel({
               className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
                 isDarkMode
                   ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                  : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+                  : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
               }`}
             />
           </div>
