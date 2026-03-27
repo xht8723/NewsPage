@@ -1,6 +1,7 @@
 import type React from "react";
 import { ArrowLeft } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { useImageFallback } from "../hooks/useImageFallback";
 import type { NewsArticle } from "../types/news";
 import { getTagColor } from "../utils/newsMeta";
 
@@ -21,6 +22,8 @@ export function ArticleDetailModal({
   onOpenUrl,
   onReprocessArticle,
 }: ArticleDetailModalProps): React.JSX.Element | null {
+  const onThumbnailError = useImageFallback("https://placehold.co/1200x640/27272a/a1a1aa?text=News");
+
   if (!selectedArticle) {
     return null;
   }
@@ -49,10 +52,7 @@ export function ArticleDetailModal({
             src={selectedArticle.thumbnailUrl}
             alt={`${selectedArticle.title} thumbnail`}
             className="h-full w-full object-cover"
-            onError={(e) => {
-              e.currentTarget.onerror = null;
-              e.currentTarget.src = "https://placehold.co/1200x640/27272a/a1a1aa?text=News";
-            }}
+            onError={onThumbnailError}
           />
         </div>
 

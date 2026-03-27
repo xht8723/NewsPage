@@ -1,7 +1,8 @@
 use crate::db::{get_article_by_id, get_unenriched_articles_by_category, list_unenriched_categories, mark_enriched, upsert_article};
 use crate::news_item::{NewsItem, RankedNewsItem};
-use crate::serp_parser::{list_supported_topics, scrape_serp_topics, scrape_serp_topics_with_api_key};
-use crate::ollama_read::fetch_article_text;
+use crate::article_extract::fetch_article_text;
+use crate::scrapers::{run_default_scrapers, ScrapeContext};
+use crate::scrapers::serp::{list_supported_topics, scrape_serp_topics};
 use chrono::{DateTime, Local, Utc};
 use sqlx::sqlite::SqlitePool;
 use std::path::{Path, PathBuf};
@@ -10,12 +11,11 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 
-pub mod ann_scraper;
+pub mod article_extract;
 pub mod db;
 pub mod id_generator;
 pub mod news_item;
-pub mod ollama_read;
-pub mod serp_parser;
+pub mod scrapers;
 pub mod platform_llm;
 
 pub type CleanedArticle = NewsItem;
@@ -522,21 +522,22 @@ async fn run_scrape_stage(
         return Ok(());
     }
 
-    let ann_items = ann_scraper::scrape_ann(None).await?;
-    println!("Fetched {} items from ANN", ann_items.len());
-    for item in &ann_items {
-        upsert_article(&state.db, item)
-            .await
-            .map_err(|e| format!("DB upsert error: {}", e))?;
-    }
-
     if resolved.serp_api_key.is_empty() {
         println!("Skipping SERP scrape — missing SerpAPI key in settings.");
-    } else {
-        let serp_items =
-            scrape_serp_topics_with_api_key(&[], &[], None, Some(&resolved.serp_api_key)).await?;
-        println!("Fetched {} items from SERP", serp_items.len());
-        for item in &serp_items {
+    }
+
+    let scrape_context = ScrapeContext {
+        serp_api_key: if resolved.serp_api_key.trim().is_empty() {
+            None
+        } else {
+            Some(resolved.serp_api_key.clone())
+        },
+    };
+    let stage_results = run_default_scrapers(&scrape_context).await?;
+
+    for stage_result in stage_results {
+        println!("Fetched {} items from {}", stage_result.items.len(), stage_result.stage_name);
+        for item in &stage_result.items {
             upsert_article(&state.db, item)
                 .await
                 .map_err(|e| format!("DB upsert error: {}", e))?;
@@ -1384,55 +1385,3 @@ mod helper_tests {
     }
 }
 
-#[cfg(test)]
-mod full_pipeline_tests {
-    use super::*;
-    use crate::ann_scraper::scrape_ann;
-    use crate::ollama_read::enrich_news_items;
-    use std::time::Instant;
-
-    #[tokio::test]
-    async fn full_pipeline_ann_ollama() {
-        let enriched_path = r"F:\dev\NewsPage\ANN_enriched_test.json";
-
-        // ── 1. Fetch from ANN ─────────────────────────────────────────────────
-        let t_ann = Instant::now();
-        println!("\n[1/2] Fetching ANN news…");
-        let items = scrape_ann(None).await.expect("scrape_ann failed");
-        println!("      {} items fetched in {:.2?}", items.len(), t_ann.elapsed());
-        assert!(!items.is_empty(), "ANN returned 0 items");
-
-        // ── 2. Enrich with Ollama ─────────────────────────────────────────────
-        println!("[2/2] Enriching {} items with Ollama (qwen2.5:3b)…", items.len());
-        let t_ollama = Instant::now();
-        let mut enriched: Vec<NewsItem> = Vec::new();
-        let total = items.len();
-
-        let results = enrich_news_items(items, None).await;
-        for (i, result) in results.into_iter().enumerate() {
-            let t_item = Instant::now();
-            print!("      [{}/{}] processing … ", i + 1, total);
-            match result {
-                Ok(mut e) => {
-                    e.is_enriched = true;
-                    println!("done in {:.2?}", t_item.elapsed());
-                    enriched.push(e);
-                }
-                Err(err) => {
-                    println!("FAILED: {}", err);
-                }
-            }
-        }
-
-        let ollama_elapsed = t_ollama.elapsed();
-        println!("\n      Ollama complete: {}/{} items in {:.2?}", enriched.len(), total, ollama_elapsed);
-        if !enriched.is_empty() {
-            println!("      Avg per item: {:.2?}", ollama_elapsed / enriched.len() as u32);
-        }
-
-        // ── 3. Write enriched items to JSON ───────────────────────────────────
-        let json = serde_json::to_string_pretty(&enriched).expect("Failed to serialize");
-        std::fs::write(enriched_path, &json).expect("Failed to write ANN_enriched_test.json");
-        println!("      Written to {}", enriched_path);
-    }
-}

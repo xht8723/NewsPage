@@ -252,20 +252,12 @@ function App(): React.JSX.Element {
 
     setReprocessingArticleId(article.id);
     setEnrichmentError(null);
+    const llmArgs = buildLLMArgs(settings);
 
     try {
       const updatedItem = await invoke<BackendNewsItem>("reprocess_article", {
         articleId: article.id,
-        llmProvider: settings.llmProvider,
-        openaiApiKey: settings.openaiApiKey,
-        claudeApiKey: settings.claudeApiKey,
-        geminiApiKey: settings.geminiApiKey,
-        openaiModel: settings.openaiModel,
-        claudeModel: settings.claudeModel,
-        geminiModel: settings.geminiModel,
-        ollamaAddress: settings.ollamaAddress,
-        ollamaModel: settings.ollamaModel,
-        ollamaEmbeddingModel: settings.ollamaEmbeddingModel,
+        ...llmArgs,
       });
 
       const mapped = mapBackendNewsItem(updatedItem);

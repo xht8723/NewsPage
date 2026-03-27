@@ -1,5 +1,6 @@
 import { ChevronRight } from "lucide-react";
 import type { LayoutMode } from "../constants/news";
+import { useImageFallback } from "../hooks/useImageFallback";
 import type { NewsArticle } from "../types/news";
 import { getTagColor } from "../utils/newsMeta";
 
@@ -20,6 +21,8 @@ export function ArticleCard({
   onSelect,
   onOpenContextMenu,
 }: ArticleCardProps): React.JSX.Element {
+  const onThumbnailError = useImageFallback("https://placehold.co/640x360/27272a/a1a1aa?text=News");
+
   return (
     <div
       data-card-context-menu="true"
@@ -42,10 +45,7 @@ export function ArticleCard({
           alt={`${item.title} thumbnail`}
           loading="lazy"
           className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-          onError={(e) => {
-            e.currentTarget.onerror = null;
-            e.currentTarget.src = "https://placehold.co/640x360/27272a/a1a1aa?text=News";
-          }}
+          onError={onThumbnailError}
         />
       </div>
       <div className={`p-6 ${layout === "list" ? "md:py-2" : ""} flex flex-1 flex-col`}>
