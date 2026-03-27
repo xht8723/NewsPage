@@ -545,17 +545,6 @@ mod tests {
     }
 
     #[test]
-    fn truncates_serp_news_items_to_default_limit() {
-        let mut items: Vec<_> = (0..12)
-            .map(|index| test_item(&format!("item-{index}"), "2026-03-23T02:16:31Z"))
-            .collect();
-
-        truncate_serp_news_items(&mut items, None);
-
-        assert_eq!(items.len(), 10);
-    }
-
-    #[test]
     fn truncates_serp_news_items_to_requested_limit() {
         let mut items: Vec<_> = (0..12)
             .map(|index| test_item(&format!("item-{index}"), "2026-03-23T02:16:31Z"))

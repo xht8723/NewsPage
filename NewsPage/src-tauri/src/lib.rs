@@ -155,7 +155,7 @@ async fn enrich_media_and_embedding(
 
     // Generate and store embedding (soft failure — missing embedding degrades gracefully).
     let embed_text = format!("{} {} {}", enriched.title, enriched.tags.join(" "), enriched.snippet);
-    match local_embedding::embed_text(&embed_text, Some(local_embedding_model)).await {
+    match local_embedding::embed_text(&embed_text, Some(local_embedding_model), local_embedding::EmbedPurpose::Passage).await {
         Ok(vec) => {
             if let Err(e) = db::save_embedding(db_pool, &enriched.id, &vec).await {
                 println!("Embedding save failed for {}: {}", enriched.id, e);
@@ -778,7 +778,7 @@ async fn get_enriched_news(
             ));
         }
 
-        let cache_prefix = format!("fastembed::{}", embedding_model.to_ascii_lowercase());
+        let cache_prefix = format!("candle::{}", embedding_model.to_ascii_lowercase());
 
         // Fetch all articles with embeddings (no LIMIT — scoring needs the full set).
         let rows = db::get_articles_with_embeddings(
@@ -803,7 +803,7 @@ async fn get_enriched_news(
                 liked_vecs.push(cached);
                 continue;
             }
-            match local_embedding::embed_text(concept, Some(&embedding_model)).await {
+            match local_embedding::embed_text(concept, Some(&embedding_model), local_embedding::EmbedPurpose::Query).await {
                 Ok(v) => {
                     state
                         .preference_embedding_cache
@@ -827,7 +827,7 @@ async fn get_enriched_news(
                 disliked_vecs.push(cached);
                 continue;
             }
-            match local_embedding::embed_text(concept, Some(&embedding_model)).await {
+            match local_embedding::embed_text(concept, Some(&embedding_model), local_embedding::EmbedPurpose::Query).await {
                 Ok(v) => {
                     state
                         .preference_embedding_cache

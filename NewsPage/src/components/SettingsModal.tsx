@@ -3,6 +3,7 @@ import type React from "react";
 import type { Dispatch, SetStateAction } from "react";
 import {
   CLAUDE_MODELS,
+  EMBEDDING_MODEL_INFO,
   GEMINI_MODELS,
   OPENAI_MODELS,
   type OllamaConnectionState,
@@ -164,9 +165,11 @@ export function SettingsModal({
                         : "border-zinc-300 bg-zinc-200 text-zinc-900"
                     } ${embeddingSelectionLocked ? "opacity-60" : ""}`}
                   >
-                    {localEmbeddingModels.map((model) => (
-                      <option key={`embed-${model}`} value={model}>{model}</option>
-                    ))}
+                    {localEmbeddingModels.map((model) => {
+                      const info = EMBEDDING_MODEL_INFO[model];
+                      const label = info ? `${model}  (${info.size}, ${info.dims}d, ${info.langs})` : model;
+                      return <option key={`embed-${model}`} value={model}>{label}</option>;
+                    })}
                     {localEmbeddingModels.length === 0 && <option value={settings.localEmbeddingModel}>{settings.localEmbeddingModel}</option>}
                   </select>
                   {!embeddingSelectionLocked && (
@@ -193,7 +196,7 @@ export function SettingsModal({
                   </div>
                   <p className={`mt-2 break-all text-[11px] ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
                     {localEmbeddingStatus
-                      ? `${localEmbeddingStatus.message}${localEmbeddingStatus.cache_dir ? ` (${localEmbeddingStatus.cache_dir})` : ""}`
+                      ? localEmbeddingStatus.message
                       : "Model status unavailable"}
                   </p>
                   {embeddingIsBusy && (

@@ -7,6 +7,7 @@ pub mod automaton;
 pub mod serp;
 
 use ann::AnnScraperStage;
+use automaton::AutomatonScraperStage;
 use serp::SerpScraperStage;
 
 pub struct ScrapeContext {
@@ -30,7 +31,12 @@ pub trait ScraperStage: Send + Sync {
 }
 
 fn default_scraper_stages() -> Vec<Box<dyn ScraperStage>> {
-    vec![Box::new(AnnScraperStage), Box::new(SerpScraperStage)]
+    vec![
+        Box::new(AnnScraperStage),
+        // To disable Automaton: remove the line below (or set ENABLED=false in automaton.rs).
+        Box::new(AutomatonScraperStage),
+        Box::new(SerpScraperStage),
+    ]
 }
 
 pub async fn run_default_scrapers(ctx: &ScrapeContext) -> Result<Vec<StageRunResult>, String> {

@@ -8,7 +8,7 @@ const baseSettings: UserSettings = {
   llmProvider: "ollama",
   ollamaAddress: "http://127.0.0.1:11434",
   ollamaModel: "qwen2.5:3b",
-  localEmbeddingModel: "nomic-embed-text-v1.5",
+  localEmbeddingModel: "multilingual-e5-small",
   embeddingInitialized: false,
   embeddingModelLocked: false,
   openaiApiKey: "",
@@ -40,7 +40,7 @@ describe("useEnrichedNews helper logic", () => {
       sortBy: "date",
       likedConcepts: ["retro games", "indie dev"],
       dislikedConcepts: ["nft", "mobile gacha"],
-      localEmbeddingModel: "nomic-embed-text-v1.5",
+      localEmbeddingModel: "multilingual-e5-small",
     });
   });
 
