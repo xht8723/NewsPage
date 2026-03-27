@@ -13,8 +13,7 @@ export interface EnrichedNewsRequestArgs {
   sortBy: string;
   likedConcepts: string[];
   dislikedConcepts: string[];
-  ollamaAddress: string;
-  ollamaEmbeddingModel: string;
+  localEmbeddingModel: string;
 }
 
 export function parseConceptList(value: string): string[] {
@@ -38,8 +37,7 @@ export function buildEnrichedNewsRequestArgs(
     sortBy: settings.sortMode,
     likedConcepts: parseConceptList(settings.likedConcepts),
     dislikedConcepts: parseConceptList(settings.dislikedConcepts),
-    ollamaAddress: settings.ollamaAddress,
-    ollamaEmbeddingModel: settings.ollamaEmbeddingModel,
+    localEmbeddingModel: settings.localEmbeddingModel,
   };
 }
 

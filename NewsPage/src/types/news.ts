@@ -1,4 +1,5 @@
 import type { TopicCategory } from "../constants/news";
+import type { LayoutMode } from "../constants/news";
 
 export interface NewsArticle {
   id: string;
@@ -40,7 +41,9 @@ export interface UserSettings {
   llmProvider: string;
   ollamaAddress: string;
   ollamaModel: string;
-  ollamaEmbeddingModel: string;
+  localEmbeddingModel: string;
+  embeddingInitialized: boolean;
+  embeddingModelLocked: boolean;
   openaiApiKey: string;
   openaiModel: string;
   claudeApiKey: string;
@@ -51,6 +54,14 @@ export interface UserSettings {
   likedConcepts: string;
   dislikedConcepts: string;
   sortMode: string;
+  layout: LayoutMode;
+}
+
+export interface LocalEmbeddingStatus {
+  state: string;
+  active_model: string | null;
+  cache_dir: string;
+  message: string;
 }
 
 export interface CardContextMenuState {

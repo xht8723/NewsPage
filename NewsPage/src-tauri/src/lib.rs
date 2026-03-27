@@ -17,14 +17,15 @@ pub mod id_generator;
 pub mod news_item;
 pub mod scrapers;
 pub mod platform_llm;
+pub mod local_embedding;
 
 pub type CleanedArticle = NewsItem;
 
 const DEFAULT_OLLAMA_ADDRESS: &str = "http://127.0.0.1:11434";
 const DEFAULT_OLLAMA_MODEL: &str = "qwen2.5:3b";
-const DEFAULT_OLLAMA_EMBEDDING_MODEL: &str = platform_llm::DEFAULT_EMBED_MODEL;
+const DEFAULT_LOCAL_EMBEDDING_MODEL: &str = local_embedding::DEFAULT_LOCAL_EMBEDDING_MODEL;
 const ARTICLE_PROCESS_TIMEOUT_SECS: u64 = 30;
-const RELEVANCE_UNAVAILABLE_TOKEN: &str = "RELEVANCE_OLLAMA_UNAVAILABLE";
+const RELEVANCE_UNAVAILABLE_TOKEN: &str = "RELEVANCE_EMBEDDING_UNAVAILABLE";
 
 #[derive(serde::Deserialize)]
 struct OllamaTagsResponse {
@@ -139,8 +140,7 @@ async fn enrich_media_and_embedding(
     db_pool: &SqlitePool,
     image_cache_dir: &Path,
     enriched: &mut NewsItem,
-    ollama_address: &str,
-    ollama_embedding_model: &str,
+    local_embedding_model: &str,
 ) {
     if !enriched.thumbnail.trim().is_empty() {
         match cache_thumbnail(image_cache_dir, &enriched.id, &enriched.thumbnail).await {
@@ -155,7 +155,7 @@ async fn enrich_media_and_embedding(
 
     // Generate and store embedding (soft failure — missing embedding degrades gracefully).
     let embed_text = format!("{} {} {}", enriched.title, enriched.tags.join(" "), enriched.snippet);
-    match platform_llm::get_ollama_embedding(ollama_address, &embed_text, Some(ollama_embedding_model)).await {
+    match local_embedding::embed_text(&embed_text, Some(local_embedding_model)).await {
         Ok(vec) => {
             if let Err(e) = db::save_embedding(db_pool, &enriched.id, &vec).await {
                 println!("Embedding save failed for {}: {}", enriched.id, e);
@@ -313,6 +313,7 @@ struct LlmOverrideArgs {
     ollama_address: Option<String>,
     ollama_model: Option<String>,
     ollama_embedding_model: Option<String>,
+    local_embedding_model: Option<String>,
 }
 
 struct ResolvedLlmSettings {
@@ -325,7 +326,7 @@ struct ResolvedLlmSettings {
     gemini_model: String,
     ollama_address: String,
     ollama_model: String,
-    ollama_embedding_model: String,
+    local_embedding_model: String,
     serp_api_key: String,
 }
 
@@ -382,10 +383,11 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
         .get("ollamaModel")
         .cloned()
         .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_string());
-    let saved_ollama_embedding_model = settings_map
-        .get("ollamaEmbeddingModel")
+    let saved_local_embedding_model = settings_map
+        .get("localEmbeddingModel")
         .cloned()
-        .unwrap_or_else(|| DEFAULT_OLLAMA_EMBEDDING_MODEL.to_string());
+        .or_else(|| settings_map.get("ollamaEmbeddingModel").cloned())
+        .unwrap_or_else(|| DEFAULT_LOCAL_EMBEDDING_MODEL.to_string());
     let saved_llm_provider = settings_map
         .get("llmProvider")
         .cloned()
@@ -429,9 +431,11 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
         gemini_model: resolve_setting_value(overrides.gemini_model, saved_gemini_model),
         ollama_address: resolve_setting_value(overrides.ollama_address, saved_ollama_address),
         ollama_model: resolve_setting_value(overrides.ollama_model, saved_ollama_model),
-        ollama_embedding_model: resolve_setting_value(
-            overrides.ollama_embedding_model,
-            saved_ollama_embedding_model,
+        local_embedding_model: resolve_setting_value(
+            overrides
+                .local_embedding_model
+                .or(overrides.ollama_embedding_model),
+            saved_local_embedding_model,
         ),
         serp_api_key: saved_serp_api_key.trim().to_string(),
     }
@@ -619,8 +623,7 @@ async fn run_enrichment_stage(
                     &state.db,
                     image_cache_dir,
                     &mut enriched,
-                    &settings.ollama_address,
-                    &settings.ollama_embedding_model,
+                    &settings.local_embedding_model,
                 )
                 .await;
 
@@ -734,8 +737,7 @@ async fn get_enriched_news(
     sort_by: Option<String>,
     liked_concepts: Option<Vec<String>>,
     disliked_concepts: Option<Vec<String>>,
-    ollama_address: Option<String>,
-    ollama_embedding_model: Option<String>,
+    local_embedding_model: Option<String>,
 ) -> Result<Vec<RankedNewsItem>, String> {
     let limit = limit.unwrap_or(300).clamp(1, 1000);
     let offset = offset.unwrap_or(0).max(0);
@@ -764,23 +766,19 @@ async fn get_enriched_news(
     let use_scoring = sort_mode == "score" && (!liked.is_empty() || !disliked.is_empty());
 
     if use_scoring {
-        let base_url = ollama_address
+        let embedding_model = local_embedding_model
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| DEFAULT_OLLAMA_ADDRESS.to_string());
-        let embedding_model = ollama_embedding_model
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| DEFAULT_OLLAMA_EMBEDDING_MODEL.to_string());
+            .unwrap_or_else(|| DEFAULT_LOCAL_EMBEDDING_MODEL.to_string());
 
-        if let Err(e) = test_ollama_connection(base_url.clone()).await {
+        if let Err(e) = local_embedding::health_check(Some(&embedding_model)).await {
             return Err(format!(
-                "{}: Relevance sort unavailable because Ollama is unreachable at {} ({})",
-                RELEVANCE_UNAVAILABLE_TOKEN, base_url, e
+                "{}: Relevance sort unavailable because local embedding engine failed ({})",
+                RELEVANCE_UNAVAILABLE_TOKEN, e
             ));
         }
 
-        let cache_prefix = base_url.trim_end_matches('/').to_ascii_lowercase();
+        let cache_prefix = format!("fastembed::{}", embedding_model.to_ascii_lowercase());
 
         // Fetch all articles with embeddings (no LIMIT — scoring needs the full set).
         let rows = db::get_articles_with_embeddings(
@@ -805,7 +803,7 @@ async fn get_enriched_news(
                 liked_vecs.push(cached);
                 continue;
             }
-            match platform_llm::get_ollama_embedding(&base_url, concept, Some(&embedding_model)).await {
+            match local_embedding::embed_text(concept, Some(&embedding_model)).await {
                 Ok(v) => {
                     state
                         .preference_embedding_cache
@@ -829,7 +827,7 @@ async fn get_enriched_news(
                 disliked_vecs.push(cached);
                 continue;
             }
-            match platform_llm::get_ollama_embedding(&base_url, concept, Some(&embedding_model)).await {
+            match local_embedding::embed_text(concept, Some(&embedding_model)).await {
                 Ok(v) => {
                     state
                         .preference_embedding_cache
@@ -980,6 +978,8 @@ async fn purge_database(app: tauri::AppHandle, state: tauri::State<'_, AppState>
         if let Ok(raw) = std::fs::read_to_string(&settings_path) {
             if let Ok(mut map) = serde_json::from_str::<HashMap<String, String>>(&raw) {
                 map.remove("last_scrape_epoch");
+                map.insert("embeddingInitialized".to_string(), "false".to_string());
+                map.insert("embeddingModelLocked".to_string(), "false".to_string());
                 if let Ok(json) = serde_json::to_string_pretty(&map) {
                     let _ = std::fs::write(&settings_path, json);
                 }
@@ -1059,7 +1059,7 @@ async fn start_all_action(
     gemini_model: Option<String>,
     ollama_address: Option<String>,
     ollama_model: Option<String>,
-    ollama_embedding_model: Option<String>,
+    local_embedding_model: Option<String>,
 ) -> Result<(), String> {
     let per_category_limit = limit.clamp(1, 100) as i64;
     println!(
@@ -1078,7 +1078,8 @@ async fn start_all_action(
             gemini_model,
             ollama_address,
             ollama_model,
-            ollama_embedding_model,
+            ollama_embedding_model: None,
+            local_embedding_model,
         },
     )?;
 
@@ -1120,7 +1121,7 @@ async fn reprocess_article(
     gemini_model: Option<String>,
     ollama_address: Option<String>,
     ollama_model: Option<String>,
-    ollama_embedding_model: Option<String>,
+    local_embedding_model: Option<String>,
 ) -> Result<NewsItem, String> {
     let runtime = resolve_runtime_llm_context(
         &app,
@@ -1134,7 +1135,8 @@ async fn reprocess_article(
             gemini_model,
             ollama_address,
             ollama_model,
-            ollama_embedding_model,
+            ollama_embedding_model: None,
+            local_embedding_model,
         },
     )?;
 
@@ -1154,8 +1156,7 @@ async fn reprocess_article(
         &state.db,
         &runtime.image_cache_dir,
         &mut enriched,
-        &runtime.resolved.ollama_address,
-        &runtime.resolved.ollama_embedding_model,
+        &runtime.resolved.local_embedding_model,
     )
     .await;
 
@@ -1210,6 +1211,21 @@ fn get_provider_options() -> Vec<&'static str> {
     platform_llm::LLMProvider::options()
 }
 
+#[tauri::command]
+fn list_local_embedding_models() -> Vec<String> {
+    local_embedding::list_supported_models()
+}
+
+#[tauri::command]
+fn get_local_embedding_status() -> local_embedding::LocalEmbeddingStatus {
+    local_embedding::get_status()
+}
+
+#[tauri::command]
+async fn prepare_local_embedding_model(model: Option<String>) -> Result<local_embedding::LocalEmbeddingStatus, String> {
+    local_embedding::prepare_model(model.as_deref()).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     dotenv::dotenv().ok();
@@ -1217,6 +1233,11 @@ pub fn run() {
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_data_dir)?;
+            let embedding_cache_dir = app_data_dir.join("embedding_models");
+            local_embedding::configure_cache_dir(embedding_cache_dir)
+                .map_err(|e| -> Box<dyn std::error::Error> {
+                    Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
+                })?;
             let db_path = format!("sqlite:{}", app_data_dir.join("news.db").to_string_lossy());
             println!("📁 Database path: {}", db_path);
             println!("📁 App data directory: {}", app_data_dir.to_string_lossy());
@@ -1242,19 +1263,20 @@ pub fn run() {
                         .map(|v| v.trim().to_ascii_lowercase())
                         .unwrap_or_else(|| "date".to_string());
                     if persisted_sort_mode == "score" {
-                        let startup_ollama_address = settings_map
-                            .get("ollamaAddress")
+                        let startup_embedding_model = settings_map
+                            .get("localEmbeddingModel")
                             .cloned()
-                            .unwrap_or_else(|| DEFAULT_OLLAMA_ADDRESS.to_string());
-                        let reachable = tauri::async_runtime::block_on(test_ollama_connection(startup_ollama_address.clone())).is_ok();
-                        if !reachable {
+                            .or_else(|| settings_map.get("ollamaEmbeddingModel").cloned())
+                            .unwrap_or_else(|| DEFAULT_LOCAL_EMBEDDING_MODEL.to_string());
+                        let supported = local_embedding::ensure_model_supported(Some(&startup_embedding_model)).is_ok();
+                        if !supported {
                             settings_map.insert("sortMode".to_string(), "date".to_string());
                             if let Ok(json) = serde_json::to_string_pretty(&settings_map) {
                                 let _ = std::fs::write(&settings_path, json);
                             }
                             println!(
-                                "Startup check: Ollama unreachable at {}. Relevance sort was reset to date.",
-                                startup_ollama_address
+                                "Startup check: local embedding model '{}' is unsupported. Relevance sort was reset to date.",
+                                startup_embedding_model
                             );
                         }
                     }
@@ -1272,6 +1294,9 @@ pub fn run() {
             list_provider_models,
             test_provider_connection,
             get_provider_options,
+            list_local_embedding_models,
+            get_local_embedding_status,
+            prepare_local_embedding_model,
             reprocess_article,
             open_url,
             save_setting,

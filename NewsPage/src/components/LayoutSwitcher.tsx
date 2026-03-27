@@ -1,4 +1,4 @@
-import { CreditCard, LayoutGrid, LayoutList } from "lucide-react";
+import { LayoutGrid, LayoutList, Rows3 } from "lucide-react";
 import type React from "react";
 import type { LayoutMode } from "../constants/news";
 
@@ -34,18 +34,6 @@ export function LayoutSwitcher({ show, isDarkMode, layout, onSetLayout }: Layout
           <LayoutGrid size={16} />
         </button>
         <button
-          onClick={() => onSetLayout("card")}
-          className={`rounded-full p-2.5 transition-all ${
-            layout === "card"
-              ? isDarkMode
-                ? "bg-zinc-100 text-black shadow-md"
-                : "bg-zinc-800 text-white shadow-md"
-              : "hover:bg-zinc-500/10"
-          }`}
-        >
-          <CreditCard size={16} />
-        </button>
-        <button
           onClick={() => onSetLayout("list")}
           className={`rounded-full p-2.5 transition-all ${
             layout === "list"
@@ -56,6 +44,18 @@ export function LayoutSwitcher({ show, isDarkMode, layout, onSetLayout }: Layout
           }`}
         >
           <LayoutList size={16} />
+        </button>
+        <button
+          onClick={() => onSetLayout("compact_list")}
+          className={`rounded-full p-2.5 transition-all ${
+            layout === "compact_list"
+              ? isDarkMode
+                ? "bg-zinc-100 text-black shadow-md"
+                : "bg-zinc-800 text-white shadow-md"
+              : "hover:bg-zinc-500/10"
+          }`}
+        >
+          <Rows3 size={16} />
         </button>
       </div>
     </div>

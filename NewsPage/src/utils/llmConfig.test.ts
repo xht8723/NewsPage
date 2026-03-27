@@ -8,7 +8,9 @@ const baseSettings: UserSettings = {
   llmProvider: "ollama",
   ollamaAddress: "http://127.0.0.1:11434",
   ollamaModel: "qwen2.5:3b",
-  ollamaEmbeddingModel: "nomic-embed-text",
+  localEmbeddingModel: "nomic-embed-text-v1.5",
+  embeddingInitialized: false,
+  embeddingModelLocked: false,
   openaiApiKey: "openai-key",
   openaiModel: "gpt-5.4-mini",
   claudeApiKey: "claude-key",
@@ -19,6 +21,7 @@ const baseSettings: UserSettings = {
   likedConcepts: "",
   dislikedConcepts: "",
   sortMode: "date",
+  layout: "grid",
 };
 
 describe("llmConfig", () => {
@@ -67,7 +70,7 @@ describe("llmConfig", () => {
       geminiModel: "gemini-2.5-flash",
       ollamaAddress: "http://127.0.0.1:11434",
       ollamaModel: "qwen2.5:3b",
-      ollamaEmbeddingModel: "nomic-embed-text",
+      localEmbeddingModel: "nomic-embed-text-v1.5",
     });
   });
 });

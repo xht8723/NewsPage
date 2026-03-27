@@ -8,7 +8,9 @@ const baseSettings: UserSettings = {
   llmProvider: "ollama",
   ollamaAddress: "http://127.0.0.1:11434",
   ollamaModel: "qwen2.5:3b",
-  ollamaEmbeddingModel: "nomic-embed-text",
+  localEmbeddingModel: "nomic-embed-text-v1.5",
+  embeddingInitialized: false,
+  embeddingModelLocked: false,
   openaiApiKey: "",
   openaiModel: "gpt-5.4-mini",
   claudeApiKey: "",
@@ -19,6 +21,7 @@ const baseSettings: UserSettings = {
   likedConcepts: "retro games,  indie dev ,",
   dislikedConcepts: " nft , mobile gacha",
   sortMode: "date",
+  layout: "grid",
 };
 
 describe("useEnrichedNews helper logic", () => {
@@ -37,8 +40,7 @@ describe("useEnrichedNews helper logic", () => {
       sortBy: "date",
       likedConcepts: ["retro games", "indie dev"],
       dislikedConcepts: ["nft", "mobile gacha"],
-      ollamaAddress: "http://127.0.0.1:11434",
-      ollamaEmbeddingModel: "nomic-embed-text",
+      localEmbeddingModel: "nomic-embed-text-v1.5",
     });
   });
 
@@ -49,7 +51,7 @@ describe("useEnrichedNews helper logic", () => {
   });
 
   it("detects relevance unavailable errors only in score mode", () => {
-    expect(shouldDisableRelevanceFromError("score", "Error: RELEVANCE_OLLAMA_UNAVAILABLE")).toBe(true);
-    expect(shouldDisableRelevanceFromError("date", "Error: RELEVANCE_OLLAMA_UNAVAILABLE")).toBe(false);
+    expect(shouldDisableRelevanceFromError("score", "Error: RELEVANCE_EMBEDDING_UNAVAILABLE")).toBe(true);
+    expect(shouldDisableRelevanceFromError("date", "Error: RELEVANCE_EMBEDDING_UNAVAILABLE")).toBe(false);
   });
 });

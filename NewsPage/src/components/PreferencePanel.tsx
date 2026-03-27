@@ -3,6 +3,7 @@ interface PreferencePanelProps {
   isDarkMode: boolean;
   sortMode: string;
   isRelevanceMode: boolean;
+  isEmbeddingReady: boolean;
   likedConcepts: string;
   dislikedConcepts: string;
   onSetSortMode: (mode: "date" | "score") => void;
@@ -14,6 +15,7 @@ export function PreferencePanel({
   isDarkMode,
   sortMode,
   isRelevanceMode,
+  isEmbeddingReady,
   likedConcepts,
   dislikedConcepts,
   onSetSortMode,
@@ -21,7 +23,7 @@ export function PreferencePanel({
 }: PreferencePanelProps): React.JSX.Element {
   return (
     <div className={`rounded-2xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/50" : "border-zinc-200 bg-white"} ${className}`.trim()}>
-      <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Feed Ranking</p>
+      <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Sort by:</p>
       <div className={`flex items-center gap-0.5 rounded-full border p-1 text-[10px] font-black uppercase tracking-widest ${
         isDarkMode ? "border-zinc-800 bg-zinc-900" : "border-zinc-200 bg-zinc-50"
       }`}>
@@ -40,9 +42,14 @@ export function PreferencePanel({
           Date
         </button>
         <button
-          onClick={() => onSetSortMode("score")}
+          onClick={() => isEmbeddingReady && onSetSortMode("score")}
+          disabled={!isEmbeddingReady}
           className={`flex-1 rounded-full px-3 py-1.5 transition-all ${
-            sortMode === "score"
+            !isEmbeddingReady
+              ? isDarkMode
+                ? "cursor-not-allowed opacity-40 text-zinc-600"
+                : "cursor-not-allowed opacity-40 text-zinc-400"
+              : sortMode === "score"
               ? isDarkMode
                 ? "bg-zinc-200 text-zinc-900 shadow"
                 : "bg-zinc-800 text-white shadow"
@@ -51,7 +58,7 @@ export function PreferencePanel({
                 : "text-zinc-500 hover:text-zinc-700"
           }`}
         >
-          Relevance
+          Vector
         </button>
       </div>
 
@@ -89,9 +96,6 @@ export function PreferencePanel({
               }`}
             />
           </div>
-          <p className={`text-xs ${isDarkMode ? "text-zinc-600" : "text-zinc-400"}`}>
-            Requires nomic-embed-text in Ollama for relevance scoring.
-          </p>
         </div>
       </div>
     </div>

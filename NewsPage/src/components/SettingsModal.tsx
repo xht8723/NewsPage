@@ -3,12 +3,11 @@ import type React from "react";
 import type { Dispatch, SetStateAction } from "react";
 import {
   CLAUDE_MODELS,
-  DEFAULT_EMBEDDING_MODEL,
   GEMINI_MODELS,
   OPENAI_MODELS,
   type OllamaConnectionState,
 } from "../constants/news";
-import type { UserSettings } from "../types/news";
+import type { LocalEmbeddingStatus, UserSettings } from "../types/news";
 
 interface SettingsModalProps {
   showSettings: boolean;
@@ -23,6 +22,12 @@ interface SettingsModalProps {
   ollamaModels: string[];
   isRefreshingModels: boolean;
   refreshOllamaModels: (address: string, preferredModel?: string) => Promise<void>;
+  localEmbeddingModels: string[];
+  localEmbeddingStatus: LocalEmbeddingStatus | null;
+  isPreparingLocalEmbeddingModel: boolean;
+  onPrepareLocalEmbeddingModel: (model: string) => Promise<void>;
+  embeddingInitialized: boolean;
+  embeddingModelLocked: boolean;
   purgeConfirmStep: 0 | 1 | 2;
   setPurgeConfirmStep: Dispatch<SetStateAction<0 | 1 | 2>>;
   isPurging: boolean;
@@ -44,6 +49,12 @@ export function SettingsModal({
   ollamaModels,
   isRefreshingModels,
   refreshOllamaModels,
+  localEmbeddingModels,
+  localEmbeddingStatus,
+  isPreparingLocalEmbeddingModel,
+  onPrepareLocalEmbeddingModel,
+  embeddingInitialized,
+  embeddingModelLocked,
   purgeConfirmStep,
   setPurgeConfirmStep,
   isPurging,
@@ -54,6 +65,16 @@ export function SettingsModal({
   if (!showSettings) {
     return null;
   }
+
+  const embeddingIsBusy = isPreparingLocalEmbeddingModel || localEmbeddingStatus?.state === "downloading";
+  const embeddingSelectionLocked = embeddingInitialized && embeddingModelLocked;
+  const selectedModelReady =
+    localEmbeddingStatus?.state === "ready" &&
+    (localEmbeddingStatus.active_model ?? "").toLowerCase() === settings.localEmbeddingModel.toLowerCase();
+  const downloadButtonDisabled = embeddingIsBusy || selectedModelReady;
+  const embeddingModelTooltip = embeddingSelectionLocked
+    ? "Embedding model is locked after first successful setup to keep relevance sorting consistent. Purge Database in Danger Zone to unlock."
+    : "Select the local embedding model used for relevance sorting.";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -82,14 +103,14 @@ export function SettingsModal({
               <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>General Settings</p>
               <div className="space-y-3">
                 <div>
-                  <label className="mb-1.5 block text-xs font-medium opacity-70">Number of news pulled per category</label>
+                  <label className="mb-1.5 block text-xs font-medium opacity-70">Number of news per pull</label>
                   <input
                     type="number"
                     min={1}
-                    max={50}
+                    max={100}
                     value={settings.newsLimit}
                     onChange={(e) => {
-                      const val = Math.min(50, Math.max(1, Number(e.target.value)));
+                      const val = Math.min(100, Math.max(1, Number(e.target.value)));
                       setSettings((s) => ({ ...s, newsLimit: val }));
                       saveSetting("newsLimit", String(val));
                     }}
@@ -124,117 +145,62 @@ export function SettingsModal({
             </div>
 
             <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-50"}`}>
-              <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Ollama Settings</p>
+              <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Embedding Settings</p>
               <div className="space-y-3">
                 <div>
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <label className="text-xs font-medium opacity-70">Endpoint Address</label>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`h-2.5 w-2.5 rounded-full ${
-                          ollamaConnectionState === "ok"
-                            ? "bg-emerald-500"
-                            : ollamaConnectionState === "fail"
-                              ? "bg-red-500"
-                              : "bg-zinc-500"
-                        }`}
-                        title={ollamaConnectionState === "ok" ? "Connected" : ollamaConnectionState === "fail" ? "Connection failed" : "Not tested"}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => void testOllamaConnection(settings.ollamaAddress)}
-                        disabled={isTestingOllama}
-                        className={`rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
-                          isDarkMode
-                            ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                            : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                        } disabled:opacity-50`}
-                      >
-                        {isTestingOllama ? "Testing..." : "Test Connection"}
-                      </button>
-                    </div>
-                  </div>
-                  <input
-                    type="text"
-                    placeholder="http://127.0.0.1:11434"
-                    value={settings.ollamaAddress}
+                  <label className="mb-1.5 block text-xs font-medium opacity-70">Local Embedding Model (Relevance)</label>
+                  <select
+                    value={settings.localEmbeddingModel}
+                    disabled={embeddingSelectionLocked}
+                    title={embeddingModelTooltip}
                     onChange={(e) => {
                       const val = e.target.value;
-                      setSettings((s) => ({ ...s, ollamaAddress: val }));
-                      setOllamaConnectionState("unknown");
-                      saveSetting("ollamaAddress", val);
+                      setSettings((s) => ({ ...s, localEmbeddingModel: val }));
+                      saveSetting("localEmbeddingModel", val);
                     }}
                     className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
                       isDarkMode
-                        ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                        : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
-                    }`}
-                  />
-                </div>
-
-                <div>
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <label className="text-xs font-medium opacity-70">Ollama LLM Model</label>
+                        ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                        : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                    } ${embeddingSelectionLocked ? "opacity-60" : ""}`}
+                  >
+                    {localEmbeddingModels.map((model) => (
+                      <option key={`embed-${model}`} value={model}>{model}</option>
+                    ))}
+                    {localEmbeddingModels.length === 0 && <option value={settings.localEmbeddingModel}>{settings.localEmbeddingModel}</option>}
+                  </select>
+                  {!embeddingSelectionLocked && (
+                    <p className={`mt-2 text-[11px] ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
+                      {!embeddingInitialized
+                        ? "First launch setup: choose your embedding model and click Download Model."
+                        : "Embedding model selection is unlocked."}
+                    </p>
+                  )}
+                  <div className="mt-2 flex items-start justify-end">
                     <button
                       type="button"
-                      onClick={() => void refreshOllamaModels(settings.ollamaAddress, settings.ollamaModel)}
-                      disabled={isRefreshingModels}
+                      disabled={downloadButtonDisabled}
+                      onClick={() => void onPrepareLocalEmbeddingModel(settings.localEmbeddingModel)}
                       className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
                         isDarkMode
-                          ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                          : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                      } disabled:opacity-50`}
+                          ? `border-zinc-700 bg-zinc-800 text-zinc-200 ${downloadButtonDisabled ? "" : "hover:bg-zinc-700"}`
+                          : `border-zinc-300 bg-white text-zinc-700 ${downloadButtonDisabled ? "" : "hover:bg-zinc-100"}`
+                      } shrink-0 disabled:opacity-50`}
                     >
-                      <RefreshCw size={12} className={isRefreshingModels ? "animate-spin" : ""} />
-                      Refresh
+                      <RefreshCw size={12} className={embeddingIsBusy ? "animate-spin" : ""} />
+                      {embeddingIsBusy ? "Downloading..." : selectedModelReady ? "Downloaded" : "Download Model"}
                     </button>
                   </div>
-                  <select
-                    value={settings.ollamaModel}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setSettings((s) => ({ ...s, ollamaModel: val }));
-                      saveSetting("ollamaModel", val);
-                    }}
-                    className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                      isDarkMode
-                        ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                        : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                    }`}
-                  >
-                    {ollamaModels.length === 0 ? (
-                      <option value={settings.ollamaModel}>{settings.ollamaModel || "No models found"}</option>
-                    ) : (
-                      ollamaModels.map((model) => (
-                        <option key={model} value={model}>{model}</option>
-                      ))
-                    )}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="mb-1.5 block text-xs font-medium opacity-70">Embedding Model (Relevance)</label>
-                  <select
-                    value={settings.ollamaEmbeddingModel}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setSettings((s) => ({ ...s, ollamaEmbeddingModel: val }));
-                      saveSetting("ollamaEmbeddingModel", val);
-                    }}
-                    className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                      isDarkMode
-                        ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                        : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                    }`}
-                  >
-                    {ollamaModels.length === 0 ? (
-                      <option value={settings.ollamaEmbeddingModel}>{settings.ollamaEmbeddingModel || DEFAULT_EMBEDDING_MODEL}</option>
-                    ) : (
-                      ollamaModels.map((model) => (
-                        <option key={`embed-${model}`} value={model}>{model}</option>
-                      ))
-                    )}
-                  </select>
+                  <p className={`mt-2 break-all text-[11px] ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
+                    {localEmbeddingStatus
+                      ? `${localEmbeddingStatus.message}${localEmbeddingStatus.cache_dir ? ` (${localEmbeddingStatus.cache_dir})` : ""}`
+                      : "Model status unavailable"}
+                  </p>
+                  {embeddingIsBusy && (
+                    <div className={`mt-3 overflow-hidden rounded-full border ${isDarkMode ? "border-zinc-700" : "border-zinc-300"}`}>
+                      <div className={`h-2 w-full animate-pulse ${isDarkMode ? "bg-emerald-500/70" : "bg-emerald-500"}`} />
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -265,30 +231,92 @@ export function SettingsModal({
                 </div>
 
                 {settings.llmProvider === "ollama" && (
-                  <div>
-                    <label className="mb-1.5 block text-xs font-medium opacity-70">Ollama LLM Model</label>
-                    <select
-                      value={settings.ollamaModel}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setSettings((s) => ({ ...s, ollamaModel: val }));
-                        saveSetting("ollamaModel", val);
-                      }}
-                      className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                        isDarkMode
-                          ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                          : "border-zinc-300 bg-zinc-100 text-zinc-900"
-                      }`}
-                    >
-                      {ollamaModels.length === 0 ? (
-                        <option value={settings.ollamaModel}>{settings.ollamaModel || "No models found"}</option>
-                      ) : (
-                        ollamaModels.map((model) => (
-                          <option key={`provider-${model}`} value={model}>{model}</option>
-                        ))
-                      )}
-                    </select>
-                  </div>
+                  <>
+                    <div>
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <label className="text-xs font-medium opacity-70">Ollama Endpoint Address</label>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`h-2.5 w-2.5 rounded-full ${
+                              ollamaConnectionState === "ok"
+                                ? "bg-emerald-500"
+                                : ollamaConnectionState === "fail"
+                                  ? "bg-red-500"
+                                  : "bg-zinc-500"
+                            }`}
+                            title={ollamaConnectionState === "ok" ? "Connected" : ollamaConnectionState === "fail" ? "Connection failed" : "Not tested"}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void testOllamaConnection(settings.ollamaAddress)}
+                            disabled={isTestingOllama}
+                            className={`rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                              isDarkMode
+                                ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                                : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                            } disabled:opacity-50`}
+                          >
+                            {isTestingOllama ? "Testing..." : "Test Connection"}
+                          </button>
+                        </div>
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="http://127.0.0.1:11434"
+                        value={settings.ollamaAddress}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSettings((s) => ({ ...s, ollamaAddress: val }));
+                          setOllamaConnectionState("unknown");
+                          saveSetting("ollamaAddress", val);
+                        }}
+                        className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                          isDarkMode
+                            ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                            : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-400"
+                        }`}
+                      />
+                    </div>
+                    <div>
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <label className="text-xs font-medium opacity-70">Ollama LLM Model</label>
+                        <button
+                          type="button"
+                          onClick={() => void refreshOllamaModels(settings.ollamaAddress, settings.ollamaModel)}
+                          disabled={isRefreshingModels}
+                          className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                            isDarkMode
+                              ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                          } disabled:opacity-50`}
+                        >
+                          <RefreshCw size={12} className={isRefreshingModels ? "animate-spin" : ""} />
+                          Refresh
+                        </button>
+                      </div>
+                      <select
+                        value={settings.ollamaModel}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSettings((s) => ({ ...s, ollamaModel: val }));
+                          saveSetting("ollamaModel", val);
+                        }}
+                        className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                          isDarkMode
+                            ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                            : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                        }`}
+                      >
+                        {ollamaModels.length === 0 ? (
+                          <option value={settings.ollamaModel}>{settings.ollamaModel || "No models found"}</option>
+                        ) : (
+                          ollamaModels.map((model) => (
+                            <option key={`provider-${model}`} value={model}>{model}</option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+                  </>
                 )}
 
                 {settings.llmProvider === "openai" && (
@@ -447,7 +475,7 @@ export function SettingsModal({
             <div className={`rounded-xl border border-red-500/30 p-4 ${isDarkMode ? "bg-red-950/20" : "bg-red-50"}`}>
               <p className="mb-1 text-sm font-semibold">Purge Database</p>
               <p className={`mb-4 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
-                Permanently deletes all news articles and cached thumbnails. This cannot be undone.
+                Permanently deletes all news articles and cached thumbnails. This cannot be undone. It also unlocks embedding model selection.
               </p>
 
               {purgeConfirmStep === 0 && (

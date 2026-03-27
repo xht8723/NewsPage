@@ -17,13 +17,14 @@ import {
   CATEGORIES,
   TOPIC_CATEGORIES,
   DEFAULT_EMBEDDING_MODEL,
+  LOCAL_EMBEDDING_MODELS,
   DEFAULT_VISIBLE_CATEGORIES,
   type Category,
   type TopicCategory,
   type LayoutMode,
   type OllamaConnectionState,
 } from "./constants/news";
-import type { NewsArticle, BackendNewsItem, UserSettings, CardContextMenuState } from "./types/news";
+import type { NewsArticle, BackendNewsItem, UserSettings, CardContextMenuState, LocalEmbeddingStatus } from "./types/news";
 import { mapBackendNewsItem } from "./utils/newsMapper";
 import { formatDateLocal, offsetDateString, getProviderLabel } from "./utils/newsMeta";
 import { buildLLMArgs, getSelectedApiKey, getSelectedEndpoint, getSelectedModel } from "./utils/llmConfig";
@@ -41,7 +42,7 @@ import "./App.css";
 function App(): React.JSX.Element {
   const [loading, setLoading] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<Category>("All");
-  const [layout, setLayout] = useState<LayoutMode>("card");
+  const [layout, setLayout] = useState<LayoutMode>("grid");
   const [selectedDate, setSelectedDate] = useState(() => formatDateLocal(new Date()));
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [showCalendar, setShowCalendar] = useState(false);
@@ -63,7 +64,9 @@ function App(): React.JSX.Element {
     llmProvider: "ollama",
     ollamaAddress: "http://127.0.0.1:11434",
     ollamaModel: "qwen2.5:3b",
-    ollamaEmbeddingModel: DEFAULT_EMBEDDING_MODEL,
+    localEmbeddingModel: DEFAULT_EMBEDDING_MODEL,
+    embeddingInitialized: false,
+    embeddingModelLocked: false,
     openaiApiKey: "",
     openaiModel: "gpt-5.4-mini",
     claudeApiKey: "",
@@ -74,21 +77,44 @@ function App(): React.JSX.Element {
     likedConcepts: "",
     dislikedConcepts: "",
     sortMode: "date",
+    layout: "grid",
   });
   const isRelevanceMode = settings.sortMode === "score";
   const [ollamaConnectionState, setOllamaConnectionState] = useState<OllamaConnectionState>("unknown");
   const [isTestingOllama, setIsTestingOllama] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [isRefreshingModels, setIsRefreshingModels] = useState(false);
+  const [localEmbeddingModels, setLocalEmbeddingModels] = useState<string[]>(LOCAL_EMBEDDING_MODELS as unknown as string[]);
+  const [localEmbeddingStatus, setLocalEmbeddingStatus] = useState<LocalEmbeddingStatus | null>(null);
+  const [isPreparingLocalEmbeddingModel, setIsPreparingLocalEmbeddingModel] = useState(false);
   const [purgeConfirmStep, setPurgeConfirmStep] = useState<0 | 1 | 2>(0);
   const [isPurging, setIsPurging] = useState(false);
   const [showLayoutSwitcher, setShowLayoutSwitcher] = useState(true);
+  const [showConfigPopup, setShowConfigPopup] = useState(false);
+  const [configPopupMessage, setConfigPopupMessage] = useState("");
   const saveSetting = useDebouncedSettingSaver(500);
 
   // Load persisted settings on mount
   useEffect(() => {
     invoke<Record<string, string>>("load_settings")
       .then((saved) => {
+        const savedLocalEmbeddingModel = saved.localEmbeddingModel?.trim()
+          ? saved.localEmbeddingModel
+          : (saved.ollamaEmbeddingModel?.trim() ? saved.ollamaEmbeddingModel : "");
+        const inferredEmbeddingInitialized =
+          saved.embeddingInitialized?.trim()
+            ? saved.embeddingInitialized === "true"
+            : savedLocalEmbeddingModel.length > 0;
+        const inferredEmbeddingLocked =
+          saved.embeddingModelLocked?.trim()
+            ? saved.embeddingModelLocked === "true"
+            : inferredEmbeddingInitialized;
+        const savedLayout = saved.layout?.trim();
+        const nextLayout: LayoutMode | null =
+          savedLayout === "grid" || savedLayout === "list" || savedLayout === "compact_list"
+            ? savedLayout
+            : null;
+
         setSettings((prev) => ({
           ...prev,
           newsLimit: saved.newsLimit ? Math.min(50, Math.max(1, Number(saved.newsLimit))) : prev.newsLimit,
@@ -96,7 +122,9 @@ function App(): React.JSX.Element {
           llmProvider: saved.llmProvider?.trim() ? saved.llmProvider : prev.llmProvider,
           ollamaAddress: saved.ollamaAddress?.trim() ? saved.ollamaAddress : prev.ollamaAddress,
           ollamaModel: saved.ollamaModel?.trim() ? saved.ollamaModel : prev.ollamaModel,
-          ollamaEmbeddingModel: saved.ollamaEmbeddingModel?.trim() ? saved.ollamaEmbeddingModel : prev.ollamaEmbeddingModel,
+          localEmbeddingModel: savedLocalEmbeddingModel || prev.localEmbeddingModel,
+          embeddingInitialized: inferredEmbeddingInitialized,
+          embeddingModelLocked: inferredEmbeddingLocked,
           openaiApiKey: saved.openaiApiKey ?? prev.openaiApiKey,
           openaiModel: saved.openaiModel?.trim() ? saved.openaiModel : prev.openaiModel,
           claudeApiKey: saved.claudeApiKey ?? prev.claudeApiKey,
@@ -107,7 +135,11 @@ function App(): React.JSX.Element {
           likedConcepts: saved.likedConcepts ?? prev.likedConcepts,
           dislikedConcepts: saved.dislikedConcepts ?? prev.dislikedConcepts,
           sortMode: saved.sortMode?.trim() ? saved.sortMode : prev.sortMode,
+          layout: nextLayout ?? prev.layout,
         }));
+        if (nextLayout) {
+          setLayout(nextLayout);
+        }
         if (saved.selectedCategory && (CATEGORIES as readonly string[]).includes(saved.selectedCategory)) {
           setSelectedCategory(saved.selectedCategory as Category);
         }
@@ -184,6 +216,44 @@ function App(): React.JSX.Element {
     }
   }, [disableRelevanceSort, saveSetting]);
 
+  const refreshLocalEmbeddingStatus = useCallback(async () => {
+    try {
+      const status = await invoke<LocalEmbeddingStatus>("get_local_embedding_status");
+      setLocalEmbeddingStatus(status);
+    } catch {
+      // Ignore transient status polling failures.
+    }
+  }, []);
+
+  const prepareLocalEmbeddingModel = useCallback(async (model: string) => {
+    setIsPreparingLocalEmbeddingModel(true);
+    try {
+      const status = await invoke<LocalEmbeddingStatus>("prepare_local_embedding_model", { model });
+      setLocalEmbeddingStatus(status);
+      if (status.state === "ready") {
+        setSettings((current) => ({
+          ...current,
+          embeddingInitialized: true,
+          embeddingModelLocked: true,
+          localEmbeddingModel: model,
+        }));
+        saveSetting("localEmbeddingModel", model);
+        saveSetting("embeddingInitialized", "true");
+        saveSetting("embeddingModelLocked", "true");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setLocalEmbeddingStatus((current) => ({
+        state: "error",
+        active_model: model,
+        cache_dir: current?.cache_dir ?? "",
+        message,
+      }));
+    } finally {
+      setIsPreparingLocalEmbeddingModel(false);
+    }
+  }, [saveSetting]);
+
   const { news, setNews, fetchEnrichedNews } = useEnrichedNews({
     selectedCategory,
     selectedDate,
@@ -203,9 +273,21 @@ function App(): React.JSX.Element {
   }, [fetchEnrichedNews]);
 
   const generateNews = async () => {
+    if (!settings.embeddingInitialized) {
+      setConfigPopupMessage("Embedding model not set up. Open Settings → Embedding Settings and click Download Model.");
+      setShowConfigPopup(true);
+      return;
+    }
+
+    const selectedApiKey = getSelectedApiKey(settings);
+    if (settings.llmProvider !== "ollama" && !selectedApiKey?.trim()) {
+      setConfigPopupMessage(`${getProviderLabel(settings.llmProvider)} API key is not configured. Open Settings to add your key.`);
+      setShowConfigPopup(true);
+      return;
+    }
+
     const llmArgs = buildLLMArgs(settings);
     const selectedModel = getSelectedModel(settings);
-    const selectedApiKey = getSelectedApiKey(settings);
     const selectedEndpoint = getSelectedEndpoint(settings);
 
     setLoading(true);
@@ -223,7 +305,8 @@ function App(): React.JSX.Element {
       const message = error instanceof Error ? error.message : String(error);
       setLoading(false);
       setEnrichmentProgress(null);
-      setEnrichmentError(message);
+      setConfigPopupMessage(message);
+      setShowConfigPopup(true);
       return;
     }
 
@@ -281,30 +364,6 @@ function App(): React.JSX.Element {
   useEffect(() => {
     void fetchEnrichedNews();
   }, [fetchEnrichedNews]);
-
-  useEffect(() => {
-    if (settings.sortMode !== "score") {
-      return;
-    }
-
-    let cancelled = false;
-    void invoke<boolean>("test_ollama_connection", { address: settings.ollamaAddress })
-      .then(() => {
-        if (!cancelled) {
-          setOllamaConnectionState("ok");
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setOllamaConnectionState("fail");
-          disableRelevanceSort("Ollama disconnected while relevance mode is active");
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [settings.sortMode, settings.ollamaAddress, disableRelevanceSort]);
 
   useEffect(() => {
     let unlistenUpdated: (() => void) | null = null;
@@ -372,11 +431,32 @@ function App(): React.JSX.Element {
       return;
     }
 
-    const address = settings.ollamaAddress;
-    const model = settings.ollamaModel;
-    void testOllamaConnection(address);
-    void refreshOllamaModels(address, model);
-  }, [showSettings, testOllamaConnection, refreshOllamaModels]);
+    if (settings.llmProvider === "ollama") {
+      const address = settings.ollamaAddress;
+      const model = settings.ollamaModel;
+      void testOllamaConnection(address);
+      void refreshOllamaModels(address, model);
+    }
+
+    void invoke<string[]>("list_local_embedding_models")
+      .then((models) => {
+        if (models.length > 0) {
+          setLocalEmbeddingModels(models);
+        }
+      })
+      .catch(() => {
+        setLocalEmbeddingModels(LOCAL_EMBEDDING_MODELS as unknown as string[]);
+      });
+
+    void refreshLocalEmbeddingStatus();
+    const timer = window.setInterval(() => {
+      void refreshLocalEmbeddingStatus();
+    }, 1500);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [showSettings, settings.llmProvider, settings.ollamaAddress, settings.ollamaModel, testOllamaConnection, refreshOllamaModels, refreshLocalEmbeddingStatus]);
 
   useEffect(() => {
     const handleContextMenu = (event: MouseEvent) => {
@@ -473,6 +553,12 @@ function App(): React.JSX.Element {
   const setSortMode = (mode: "date" | "score") => {
     setSettings((current) => (current.sortMode === mode ? current : { ...current, sortMode: mode }));
     saveSetting("sortMode", mode);
+  };
+
+  const handleSetLayout = (mode: LayoutMode) => {
+    setLayout(mode);
+    saveSetting("layout", mode);
+    setSettings((current) => (current.layout === mode ? current : { ...current, layout: mode }));
   };
 
   const setPreferenceConcepts = (field: "likedConcepts" | "dislikedConcepts", value: string) => {
@@ -592,6 +678,7 @@ function App(): React.JSX.Element {
             isDarkMode={isDarkMode}
             sortMode={settings.sortMode}
             isRelevanceMode={isRelevanceMode}
+            isEmbeddingReady={settings.embeddingInitialized}
             likedConcepts={settings.likedConcepts}
             dislikedConcepts={settings.dislikedConcepts}
             onSetSortMode={setSortMode}
@@ -706,7 +793,7 @@ function App(): React.JSX.Element {
               } disabled:opacity-50`}
             >
               {loading ? <RefreshCw className="animate-spin" size={16} /> : <Newspaper size={16} />}
-              Generate
+              Get news!
             </button>
           </div>
         </header>
@@ -716,6 +803,7 @@ function App(): React.JSX.Element {
             isDarkMode={isDarkMode}
             sortMode={settings.sortMode}
             isRelevanceMode={isRelevanceMode}
+            isEmbeddingReady={settings.embeddingInitialized}
             likedConcepts={settings.likedConcepts}
             dislikedConcepts={settings.dislikedConcepts}
             onSetSortMode={setSortMode}
@@ -729,15 +817,14 @@ function App(): React.JSX.Element {
               <Search size={48} className="text-zinc-500" />
               <div>
                 <h3 className="text-lg font-bold">No briefings for this date</h3>
-                <p className="text-sm">Click Generate to run the backend pipeline and populate enriched news for {selectedDate}.</p>
               </div>
             </div>
           ) : (
             <div
               className={`
                 ${layout === "grid" ? "grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3" : ""}
-                ${layout === "card" ? "grid grid-cols-1 gap-6 md:grid-cols-2" : ""}
                 ${layout === "list" ? "flex flex-col gap-4" : ""}
+                ${layout === "compact_list" ? "flex flex-col gap-2" : ""}
               `}
             >
               {filteredNews.map((item) => (
@@ -757,7 +844,7 @@ function App(): React.JSX.Element {
           )}
         </section>
 
-        <LayoutSwitcher show={showLayoutSwitcher} isDarkMode={isDarkMode} layout={layout} onSetLayout={setLayout} />
+        <LayoutSwitcher show={showLayoutSwitcher} isDarkMode={isDarkMode} layout={layout} onSetLayout={handleSetLayout} />
       </main>
 
       {contextMenu && (
@@ -788,6 +875,12 @@ function App(): React.JSX.Element {
         ollamaModels={ollamaModels}
         isRefreshingModels={isRefreshingModels}
         refreshOllamaModels={refreshOllamaModels}
+        localEmbeddingModels={localEmbeddingModels}
+        localEmbeddingStatus={localEmbeddingStatus}
+        isPreparingLocalEmbeddingModel={isPreparingLocalEmbeddingModel}
+        onPrepareLocalEmbeddingModel={prepareLocalEmbeddingModel}
+        embeddingInitialized={settings.embeddingInitialized}
+        embeddingModelLocked={settings.embeddingModelLocked}
         purgeConfirmStep={purgeConfirmStep}
         setPurgeConfirmStep={setPurgeConfirmStep}
         isPurging={isPurging}
@@ -795,6 +888,13 @@ function App(): React.JSX.Element {
         onPurgeDatabase={async () => {
           await invoke("purge_database");
           setNews([]);
+          setSettings((current) => ({
+            ...current,
+            embeddingInitialized: false,
+            embeddingModelLocked: false,
+          }));
+          saveSetting("embeddingInitialized", "false");
+          saveSetting("embeddingModelLocked", "false");
         }}
         onClose={() => {
           setShowSettings(false);
@@ -822,6 +922,49 @@ function App(): React.JSX.Element {
         onSelectDate={setSelectedDate}
         onClose={() => setShowCalendar(false)}
       />
+
+      {showConfigPopup && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setShowConfigPopup(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full max-w-sm rounded-2xl border p-6 shadow-2xl ${
+              isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-100" : "border-zinc-300 bg-white text-zinc-900"
+            }`}
+          >
+            <p className={`mb-1 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>
+              Setup required
+            </p>
+            <p className={`mb-5 text-sm leading-relaxed ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>
+              {configPopupMessage}
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setShowConfigPopup(false)}
+                className={`rounded-lg border px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+                  isDarkMode
+                    ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                    : "border-zinc-300 bg-zinc-100 text-zinc-700 hover:bg-zinc-200"
+                }`}
+              >
+                Dismiss
+              </button>
+              <button
+                onClick={() => { setShowConfigPopup(false); setShowSettings(true); }}
+                className={`rounded-lg border px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+                  isDarkMode
+                    ? "border-zinc-600 bg-zinc-200 text-zinc-900 hover:bg-white"
+                    : "border-zinc-700 bg-zinc-800 text-white hover:bg-zinc-900"
+                }`}
+              >
+                Open Settings
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

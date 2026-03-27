@@ -116,7 +116,7 @@ impl OllamaProvider {
 impl LLMProviderImpl for OllamaProvider {
     async fn list_models(&self) -> Result<Vec<String>, String> {
         let (host, port) = self.parse_address()?;
-        let url = format!("{}://{}/api/tags", host, port);
+        let url = format!("{}:{}/api/tags", host, port);
 
         #[derive(Deserialize)]
         struct ModelsResponse {
@@ -221,7 +221,7 @@ impl LLMProviderImpl for OllamaProvider {
 
     async fn test_connection(&self) -> Result<bool, String> {
         let (host, port) = self.parse_address()?;
-        let url = format!("{}://{}/api/tags", host, port);
+        let url = format!("{}:{}/api/tags", host, port);
         reqwest::get(&url)
             .await
             .map_err(|e| format!("Connection failed: {}", e))?;

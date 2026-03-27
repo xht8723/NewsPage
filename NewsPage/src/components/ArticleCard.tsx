@@ -21,6 +21,9 @@ export function ArticleCard({
   onSelect,
   onOpenContextMenu,
 }: ArticleCardProps): React.JSX.Element {
+  const isListLayout = layout === "list";
+  const isCompactListLayout = layout === "compact_list";
+  const visibleTags = isCompactListLayout ? item.tags.slice(0, 3) : item.tags;
   const onThumbnailError = useImageFallback("https://placehold.co/640x360/27272a/a1a1aa?text=News");
 
   return (
@@ -33,23 +36,25 @@ export function ArticleCard({
       }}
       className={`group cursor-pointer rounded-2xl border transition-all hover:shadow-lg ${
         isDarkMode ? "border-zinc-800 bg-zinc-900 hover:border-zinc-600" : "border-zinc-200 bg-white hover:border-zinc-300"
-      } ${layout === "list" ? "flex flex-col gap-4 p-4 md:flex-row" : "flex flex-col"}`}
+      } ${isListLayout ? "flex flex-col gap-4 p-4 md:flex-row" : isCompactListLayout ? "flex flex-col gap-2 px-3 py-2.5" : "flex flex-col"}`}
     >
-      <div
-        className={`${
-          layout === "list" ? "h-44 w-full md:h-auto md:w-56 md:flex-shrink-0" : "h-44 w-full"
-        } overflow-hidden rounded-xl`}
-      >
-        <img
-          src={item.thumbnailUrl}
-          alt={`${item.title} thumbnail`}
-          loading="lazy"
-          className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-          onError={onThumbnailError}
-        />
-      </div>
-      <div className={`p-6 ${layout === "list" ? "md:py-2" : ""} flex flex-1 flex-col`}>
-        <div className="mb-4 flex items-center gap-2">
+      {!isCompactListLayout && (
+        <div
+          className={`${
+            isListLayout ? "h-44 w-full md:h-auto md:w-56 md:flex-shrink-0" : "h-44 w-full"
+          } overflow-hidden rounded-xl`}
+        >
+          <img
+            src={item.thumbnailUrl}
+            alt={`${item.title} thumbnail`}
+            loading="lazy"
+            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+            onError={onThumbnailError}
+          />
+        </div>
+      )}
+      <div className={`${isCompactListLayout ? "px-1 py-1" : `p-6 ${isListLayout ? "md:py-2" : ""}`} flex flex-1 flex-col`}>
+        <div className={`${isCompactListLayout ? "mb-2" : "mb-4"} flex items-center gap-2`}>
           <span className={`rounded px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-white shadow-sm ${getTagColor(item.category)}`}>
             {item.category}
           </span>
@@ -67,23 +72,35 @@ export function ArticleCard({
             </span>
           )}
         </div>
-        <div className="mb-4 flex flex-wrap gap-1.5">
-          {item.tags.map((tag, tagIndex) => (
+        <div className={`${isCompactListLayout ? "mb-2" : "mb-4"} flex flex-wrap gap-1.5`}>
+          {visibleTags.map((tag, tagIndex) => (
             <span key={`${item.id}-tag-${tagIndex}`} className="rounded bg-zinc-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-zinc-500">
               {tag}
             </span>
           ))}
         </div>
         <h3
-          className={`text-lg mb-3 font-bold leading-tight transition-colors ${
+          className={`${isCompactListLayout ? "mb-2 text-base" : "mb-3 text-lg"} font-bold leading-tight transition-colors ${
             isDarkMode ? "text-zinc-100 group-hover:text-white" : "text-zinc-900"
           }`}
         >
           {item.title}
         </h3>
-        <p className={`mb-5 text-sm leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-600"}`}>{item.snippet}</p>
+        <p
+          className={`${isCompactListLayout ? "mb-3" : "mb-5"} text-sm leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-600"}`}
+          style={isCompactListLayout
+            ? {
+              display: "-webkit-box",
+              WebkitBoxOrient: "vertical",
+              WebkitLineClamp: 2,
+              overflow: "hidden",
+            }
+            : undefined}
+        >
+          {item.snippet}
+        </p>
         <div className="mt-auto flex items-center justify-between gap-3">
-          <div className={`flex min-w-0 items-center gap-2 text-[10px] font-black uppercase tracking-widest ${
+          <div className={`flex min-w-0 items-center gap-2 ${isCompactListLayout ? "text-[9px]" : "text-[10px]"} font-black uppercase tracking-widest ${
             isDarkMode ? "text-zinc-500" : "text-zinc-600"
           }`}>
             {item.sourceIconUrl ? (
@@ -99,7 +116,7 @@ export function ArticleCard({
             <span className="truncate">{item.sourceName}</span>
           </div>
           <div
-            className={`flex items-center text-[10px] font-black uppercase tracking-widest opacity-60 transition-opacity group-hover:opacity-100 ${
+            className={`flex items-center ${isCompactListLayout ? "text-[9px]" : "text-[10px]"} font-black uppercase tracking-widest opacity-60 transition-opacity group-hover:opacity-100 ${
               isDarkMode ? "text-zinc-400" : "text-zinc-900"
             }`}
           >

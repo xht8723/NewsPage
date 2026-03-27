@@ -53,7 +53,7 @@ export function buildLLMArgs(settings: UserSettings): {
   geminiModel: string;
   ollamaAddress: string;
   ollamaModel: string;
-  ollamaEmbeddingModel: string;
+  localEmbeddingModel: string;
 } {
   return {
     llmProvider: settings.llmProvider,
@@ -65,6 +65,6 @@ export function buildLLMArgs(settings: UserSettings): {
     geminiModel: settings.geminiModel,
     ollamaAddress: settings.ollamaAddress,
     ollamaModel: settings.ollamaModel,
-    ollamaEmbeddingModel: settings.ollamaEmbeddingModel,
+    localEmbeddingModel: settings.localEmbeddingModel,
   };
 }
