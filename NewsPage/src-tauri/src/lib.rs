@@ -154,7 +154,41 @@ async fn enrich_media_and_embedding(
     image_cache_dir: &Path,
     enriched: &mut NewsItem,
     local_embedding_model: &str,
+    google_cse_key: &str,
+    google_cse_cx: &str,
 ) {
+    // If thumbnail is missing or low quality, try Google Image Search
+    if article_extract::is_low_quality_thumbnail(&Some(enriched.thumbnail.clone())) {
+        if !google_cse_key.is_empty() && !google_cse_cx.is_empty() {
+            println!(
+                "[image-search] thumbnail missing/low-quality for '{}', searching...",
+                enriched.title
+            );
+            match article_extract::search_image_by_title(
+                google_cse_key,
+                google_cse_cx,
+                &enriched.title,
+            )
+            .await
+            {
+                Some(url) => {
+                    println!("[image-search] found replacement thumbnail: {}", url);
+                    enriched.thumbnail = url;
+                }
+                None => {
+                    println!("[image-search] no replacement found for '{}'", enriched.title);
+                }
+            }
+            // Delay to avoid throttling Google CSE API
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        } else {
+            println!(
+                "[image-search] CSE keys not configured, skipping image search for '{}'",
+                enriched.title
+            );
+        }
+    }
+
     if !enriched.thumbnail.trim().is_empty() {
         println!("[thumbnail] caching thumbnail for '{}': {}", enriched.id, enriched.thumbnail);
         match cache_thumbnail(image_cache_dir, &enriched.id, &enriched.thumbnail).await {
@@ -337,6 +371,8 @@ struct LlmOverrideArgs {
     ollama_model: Option<String>,
     ollama_embedding_model: Option<String>,
     local_embedding_model: Option<String>,
+    google_cse_key: Option<String>,
+    google_cse_cx: Option<String>,
 }
 
 struct ResolvedLlmSettings {
@@ -351,6 +387,8 @@ struct ResolvedLlmSettings {
     ollama_model: String,
     local_embedding_model: String,
     selected_regions: Vec<String>,
+    google_cse_key: String,
+    google_cse_cx: String,
 }
 
 struct RuntimeLlmContext {
@@ -443,6 +481,14 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
         .get("selectedRegions")
         .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_default();
+    let saved_google_cse_key = settings_map
+        .get("googleCseKey")
+        .cloned()
+        .unwrap_or_default();
+    let saved_google_cse_cx = settings_map
+        .get("googleCseCx")
+        .cloned()
+        .unwrap_or_default();
 
     ResolvedLlmSettings {
         llm_provider: resolve_setting_value(overrides.llm_provider, saved_llm_provider),
@@ -461,6 +507,8 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
             saved_local_embedding_model,
         ),
         selected_regions: saved_selected_regions,
+        google_cse_key: resolve_setting_value(overrides.google_cse_key, saved_google_cse_key),
+        google_cse_cx: resolve_setting_value(overrides.google_cse_cx, saved_google_cse_cx),
     }
 }
 
@@ -644,6 +692,8 @@ async fn run_enrichment_stage(
                     image_cache_dir,
                     &mut enriched,
                     &settings.local_embedding_model,
+                    &settings.google_cse_key,
+                    &settings.google_cse_cx,
                 )
                 .await;
 
@@ -1062,6 +1112,8 @@ async fn start_all_action(
     ollama_address: Option<String>,
     ollama_model: Option<String>,
     local_embedding_model: Option<String>,
+    google_cse_key: Option<String>,
+    google_cse_cx: Option<String>,
 ) -> Result<(), String> {
     let per_category_limit = limit.clamp(1, 100) as i64;
     println!(
@@ -1082,6 +1134,8 @@ async fn start_all_action(
             ollama_model,
             ollama_embedding_model: None,
             local_embedding_model,
+            google_cse_key,
+            google_cse_cx,
         },
     )?;
 
@@ -1124,6 +1178,8 @@ async fn reprocess_article(
     ollama_address: Option<String>,
     ollama_model: Option<String>,
     local_embedding_model: Option<String>,
+    google_cse_key: Option<String>,
+    google_cse_cx: Option<String>,
 ) -> Result<NewsItem, String> {
     let runtime = resolve_runtime_llm_context(
         &app,
@@ -1139,6 +1195,8 @@ async fn reprocess_article(
             ollama_model,
             ollama_embedding_model: None,
             local_embedding_model,
+            google_cse_key,
+            google_cse_cx,
         },
     )?;
 
@@ -1159,6 +1217,8 @@ async fn reprocess_article(
         &runtime.image_cache_dir,
         &mut enriched,
         &runtime.resolved.local_embedding_model,
+        &runtime.resolved.google_cse_key,
+        &runtime.resolved.google_cse_cx,
     )
     .await;
 

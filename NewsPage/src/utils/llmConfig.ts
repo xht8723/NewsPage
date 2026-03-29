@@ -54,6 +54,8 @@ export function buildLLMArgs(settings: UserSettings): {
   ollamaAddress: string;
   ollamaModel: string;
   localEmbeddingModel: string;
+  googleCseKey: string;
+  googleCseCx: string;
 } {
   return {
     llmProvider: settings.llmProvider,
@@ -66,5 +68,7 @@ export function buildLLMArgs(settings: UserSettings): {
     ollamaAddress: settings.ollamaAddress,
     ollamaModel: settings.ollamaModel,
     localEmbeddingModel: settings.localEmbeddingModel,
+    googleCseKey: settings.googleCseKey,
+    googleCseCx: settings.googleCseCx,
   };
 }

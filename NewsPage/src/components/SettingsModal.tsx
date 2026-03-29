@@ -485,6 +485,49 @@ export function SettingsModal({
             )}
           </div>
 
+          <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
+            <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Image Search</p>
+            <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>When articles have no thumbnail or a low-quality image, search Google for a relevant image using the article title. Requires a Google Custom Search API key and Programmable Search Engine ID.</p>
+            <div className="space-y-3">
+              <div>
+                <label className="mb-1.5 block text-xs font-medium opacity-70">Google CSE API Key</label>
+                <input
+                  type="password"
+                  placeholder="AIza..."
+                  value={settings.googleCseKey}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSettings((s) => ({ ...s, googleCseKey: val }));
+                    saveSetting("googleCseKey", val);
+                  }}
+                  className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                    isDarkMode
+                      ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                      : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
+                  }`}
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium opacity-70">Programmable Search Engine ID (cx)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. a1b2c3d4e5f6g7h8i"
+                  value={settings.googleCseCx}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSettings((s) => ({ ...s, googleCseCx: val }));
+                    saveSetting("googleCseCx", val);
+                  }}
+                  className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                    isDarkMode
+                      ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                      : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
+                  }`}
+                />
+              </div>
+            </div>
+          </div>
+
           <div>
             <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-red-500">Danger Zone</p>
             <div className={`rounded-xl border border-red-500/30 p-4 ${isDarkMode ? "bg-red-950/20" : "bg-red-50"}`}>

@@ -17,6 +17,8 @@ const baseSettings: UserSettings = {
   claudeModel: "claude-sonnet-4-6",
   geminiApiKey: "gemini-key",
   geminiModel: "gemini-2.5-flash",
+  googleCseKey: "",
+  googleCseCx: "",
   selectedRegions: [] as string[],
   likedConcepts: "",
   dislikedConcepts: "",
@@ -71,6 +73,8 @@ describe("llmConfig", () => {
       ollamaAddress: "http://127.0.0.1:11434",
       ollamaModel: "qwen2.5:3b",
       localEmbeddingModel: "multilingual-e5-small",
+      googleCseKey: "",
+      googleCseCx: "",
     });
   });
 });

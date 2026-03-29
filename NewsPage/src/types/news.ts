@@ -50,6 +50,8 @@ export interface UserSettings {
   claudeModel: string;
   geminiApiKey: string;
   geminiModel: string;
+  googleCseKey: string;
+  googleCseCx: string;
   selectedRegions: string[];
   likedConcepts: string;
   dislikedConcepts: string;

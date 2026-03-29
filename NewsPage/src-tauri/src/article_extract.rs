@@ -451,6 +451,105 @@ fn check_image_url(url: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Thumbnail quality check + Google CSE image search fallback
+// ---------------------------------------------------------------------------
+
+/// Returns `true` if the thumbnail URL is missing or likely low quality.
+pub fn is_low_quality_thumbnail(url: &Option<String>) -> bool {
+    let url = match url {
+        Some(u) if !u.trim().is_empty() => u,
+        _ => return true, // no thumbnail
+    };
+    let lower = url.to_ascii_lowercase();
+    let bad_patterns = [
+        "placeholder", "default", "noimage", "no-image", "no_image",
+        "missing", "fallback", "generic", "blank", "spacer",
+    ];
+    for pat in &bad_patterns {
+        if lower.contains(pat) {
+            println!("[image-search] low quality thumbnail (contains '{}'): {}", pat, url);
+            return true;
+        }
+    }
+    false
+}
+
+/// Search Google Custom Search for a relevant image based on the article title.
+/// Returns the URL of the best image result, or None.
+pub async fn search_image_by_title(
+    api_key: &str,
+    cx: &str,
+    title: &str,
+) -> Option<String> {
+    if api_key.is_empty() || cx.is_empty() {
+        return None;
+    }
+
+    println!("[image-search] searching for: {}", title);
+
+    let client = build_client();
+    let resp = client
+        .get("https://www.googleapis.com/customsearch/v1")
+        .query(&[
+            ("q", title),
+            ("searchType", "image"),
+            ("num", "5"),
+            ("imgSize", "large"),
+            ("safe", "active"),
+            ("cx", cx),
+            ("key", api_key),
+        ])
+        .send()
+        .await
+        .ok()?;
+
+    if !resp.status().is_success() {
+        println!(
+            "[image-search] Google CSE API returned status {}",
+            resp.status()
+        );
+        return None;
+    }
+
+    let body: serde_json::Value = resp.json().await.ok()?;
+
+    // Parse the "items" array from the response
+    let items = body.get("items")?.as_array()?;
+
+    for item in items {
+        let link = item.get("link")?.as_str()?;
+
+        // Get image dimensions if available
+        let image_info = item.get("image");
+        let width = image_info
+            .and_then(|i| i.get("width"))
+            .and_then(|w| w.as_u64())
+            .unwrap_or(0);
+        let height = image_info
+            .and_then(|i| i.get("height"))
+            .and_then(|h| h.as_u64())
+            .unwrap_or(0);
+
+        // Skip small images
+        if width > 0 && width < 300 {
+            println!("[image-search] skipping small image ({}x{}): {}", width, height, link);
+            continue;
+        }
+
+        // Skip SVGs and data URIs
+        if check_image_url(link).is_err() {
+            continue;
+        }
+
+        println!("[image-search] selected image ({}x{}): {}", width, height, link);
+        return Some(link.to_string());
+    }
+
+    println!("[image-search] no suitable image found for: {}", title);
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
