@@ -97,13 +97,20 @@ fn file_ext_from_content_type(content_type: &str) -> Option<String> {
 }
 
 async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str) -> Result<String, String> {
-    if !(thumbnail_url.starts_with("http://") || thumbnail_url.starts_with("https://")) {
-        return Err(format!("thumbnail URL is not http/https: {}", thumbnail_url));
+    // Normalize protocol-relative URLs (e.g. //www.news.cn/...)
+    let url = if thumbnail_url.starts_with("//") {
+        format!("https:{}", thumbnail_url)
+    } else {
+        thumbnail_url.to_string()
+    };
+
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(format!("thumbnail URL is not http/https: {}", url));
     }
 
-    println!("[thumbnail] downloading: {}", thumbnail_url);
+    println!("[thumbnail] downloading: {}", url);
 
-    let response = reqwest::get(thumbnail_url)
+    let response = reqwest::get(&url)
         .await
         .map_err(|e| format!("thumbnail request failed: {}", e))?;
 
@@ -134,7 +141,7 @@ async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str
     let ext = content_type
         .as_deref()
         .and_then(file_ext_from_content_type)
-        .or_else(|| file_ext_from_url(thumbnail_url))
+        .or_else(|| file_ext_from_url(&url))
         .unwrap_or_else(|| "jpg".to_string());
 
     let file_name = format!("{}.{}", sanitize_filename(article_id), ext);
@@ -154,39 +161,31 @@ async fn enrich_media_and_embedding(
     image_cache_dir: &Path,
     enriched: &mut NewsItem,
     local_embedding_model: &str,
-    google_cse_key: &str,
-    google_cse_cx: &str,
 ) {
-    // If thumbnail is missing or low quality, try Google Image Search
+    // If thumbnail is missing or low quality, try DuckDuckGo Image Search
     if article_extract::is_low_quality_thumbnail(&Some(enriched.thumbnail.clone())) {
-        if !google_cse_key.is_empty() && !google_cse_cx.is_empty() {
-            println!(
-                "[image-search] thumbnail missing/low-quality for '{}', searching...",
-                enriched.title
-            );
-            match article_extract::search_image_by_title(
-                google_cse_key,
-                google_cse_cx,
-                &enriched.title,
-            )
-            .await
-            {
-                Some(url) => {
-                    println!("[image-search] found replacement thumbnail: {}", url);
-                    enriched.thumbnail = url;
-                }
-                None => {
-                    println!("[image-search] no replacement found for '{}'", enriched.title);
-                }
-            }
-            // Delay to avoid throttling Google CSE API
-            tokio::time::sleep(Duration::from_millis(150)).await;
+        println!(
+            "[image-search] thumbnail missing/low-quality for '{}', searching...",
+            enriched.title
+        );
+        let search_query = if enriched.snippet.trim().is_empty() {
+            enriched.title.clone()
         } else {
-            println!(
-                "[image-search] CSE keys not configured, skipping image search for '{}'",
-                enriched.title
-            );
+            enriched.snippet.clone()
+        };
+        match article_extract::search_image_by_title(&search_query)
+        .await
+        {
+            Some(url) => {
+                println!("[image-search] found replacement thumbnail: {}", url);
+                enriched.thumbnail = url;
+            }
+            None => {
+                println!("[image-search] no replacement found for '{}'", enriched.title);
+            }
         }
+        // Delay to avoid throttling
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
     if !enriched.thumbnail.trim().is_empty() {
@@ -362,8 +361,6 @@ struct LlmOverrideArgs {
     ollama_model: Option<String>,
     ollama_embedding_model: Option<String>,
     local_embedding_model: Option<String>,
-    google_cse_key: Option<String>,
-    google_cse_cx: Option<String>,
 }
 
 struct ResolvedLlmSettings {
@@ -378,8 +375,7 @@ struct ResolvedLlmSettings {
     ollama_model: String,
     local_embedding_model: String,
     selected_regions: Vec<String>,
-    google_cse_key: String,
-    google_cse_cx: String,
+    visible_categories: HashMap<String, bool>,
 }
 
 struct RuntimeLlmContext {
@@ -472,13 +468,9 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
         .get("selectedRegions")
         .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_default();
-    let saved_google_cse_key = settings_map
-        .get("googleCseKey")
-        .cloned()
-        .unwrap_or_default();
-    let saved_google_cse_cx = settings_map
-        .get("googleCseCx")
-        .cloned()
+    let saved_visible_categories: HashMap<String, bool> = settings_map
+        .get("visibleCategories")
+        .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_default();
 
     ResolvedLlmSettings {
@@ -498,8 +490,7 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
             saved_local_embedding_model,
         ),
         selected_regions: saved_selected_regions,
-        google_cse_key: resolve_setting_value(overrides.google_cse_key, saved_google_cse_key),
-        google_cse_cx: resolve_setting_value(overrides.google_cse_cx, saved_google_cse_cx),
+        visible_categories: saved_visible_categories,
     }
 }
 
@@ -612,13 +603,30 @@ async fn run_scrape_stage(
     Ok(())
 }
 
-async fn collect_items_to_enrich(state: &AppState, per_category_limit: i64) -> Result<Vec<NewsItem>, String> {
+async fn collect_items_to_enrich(
+    state: &AppState,
+    per_category_limit: i64,
+    visible_categories: &HashMap<String, bool>,
+) -> Result<Vec<NewsItem>, String> {
     let categories = list_unenriched_categories(&state.db)
         .await
         .map_err(|e| format!("DB category read error: {}", e))?;
 
     let mut items_to_enrich = Vec::new();
     for category in categories {
+        // Skip hidden categories (case-insensitive match against frontend keys)
+        if !visible_categories.is_empty() {
+            let is_visible = visible_categories
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(&category))
+                .map(|(_, v)| *v)
+                .unwrap_or(true); // default to visible if not in the map
+            if !is_visible {
+                println!("Skipping hidden category '{}' — not enriching", category);
+                continue;
+            }
+        }
+
         let mut category_items = get_unenriched_articles_by_category(
             &state.db,
             &category,
@@ -753,8 +761,6 @@ async fn run_enrichment_stage(
                         image_cache_dir,
                         &mut enriched,
                         &settings.local_embedding_model,
-                        &settings.google_cse_key,
-                        &settings.google_cse_cx,
                     )
                     .await;
 
@@ -1164,8 +1170,6 @@ async fn start_all_action(
     ollama_address: Option<String>,
     ollama_model: Option<String>,
     local_embedding_model: Option<String>,
-    google_cse_key: Option<String>,
-    google_cse_cx: Option<String>,
 ) -> Result<(), String> {
     let per_category_limit = limit.clamp(1, 100) as i64;
     println!(
@@ -1186,8 +1190,6 @@ async fn start_all_action(
             ollama_model,
             ollama_embedding_model: None,
             local_embedding_model,
-            google_cse_key,
-            google_cse_cx,
         },
     )?;
 
@@ -1200,7 +1202,7 @@ async fn start_all_action(
 
     run_scrape_stage(&state, &runtime.resolved, cooldown_hours, &runtime.settings_path).await?;
 
-    let items_to_enrich = collect_items_to_enrich(&state, per_category_limit).await?;
+    let items_to_enrich = collect_items_to_enrich(&state, per_category_limit, &runtime.resolved.visible_categories).await?;
     let result = run_enrichment_stage(
         &app,
         &state,
@@ -1230,8 +1232,6 @@ async fn reprocess_article(
     ollama_address: Option<String>,
     ollama_model: Option<String>,
     local_embedding_model: Option<String>,
-    google_cse_key: Option<String>,
-    google_cse_cx: Option<String>,
 ) -> Result<NewsItem, String> {
     let runtime = resolve_runtime_llm_context(
         &app,
@@ -1247,8 +1247,6 @@ async fn reprocess_article(
             ollama_model,
             ollama_embedding_model: None,
             local_embedding_model,
-            google_cse_key,
-            google_cse_cx,
         },
     )?;
 
@@ -1269,8 +1267,6 @@ async fn reprocess_article(
         &runtime.image_cache_dir,
         &mut enriched,
         &runtime.resolved.local_embedding_model,
-        &runtime.resolved.google_cse_key,
-        &runtime.resolved.google_cse_cx,
     )
     .await;
 

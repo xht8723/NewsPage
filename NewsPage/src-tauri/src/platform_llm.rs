@@ -740,8 +740,8 @@ impl LLMProviderImpl for GeminiProvider {
         );
 
         for (i, (title, text)) in articles.iter().enumerate() {
-            // Truncate text to ~4000 chars to keep batch within token limits
-            let truncated = if text.len() > 4000 { &text[..4000] } else { text.as_str() };
+            // Truncate text to ~4000 bytes at a valid char boundary
+            let truncated = truncate_at_char_boundary(text, 4000);
             prompt.push_str(&format!(
                 "[ARTICLE {}]\nTitle: {}\nText: {}\n\n",
                 i + 1, title, truncated
@@ -942,6 +942,19 @@ pub fn create_provider(config: &LLMConfig) -> Result<Box<dyn LLMProviderImpl>, S
             Ok(Box::new(GeminiProvider::new(api_key, config.model.clone())))
         }
     }
+}
+
+/// Truncate a string to at most `max_bytes` bytes, ensuring the cut lands on
+/// a valid UTF-8 character boundary (never panics on multi-byte characters).
+fn truncate_at_char_boundary(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 /// Parse a batched Gemini response into per-article results.

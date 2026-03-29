@@ -17,8 +17,6 @@ const baseSettings: UserSettings = {
   claudeModel: "claude-sonnet-4-6",
   geminiApiKey: "",
   geminiModel: "gemini-2.5-flash",
-  googleCseKey: "",
-  googleCseCx: "",
   selectedRegions: [] as string[],
   likedConcepts: "retro games,  indie dev ,",
   dislikedConcepts: " nft , mobile gacha",

@@ -293,7 +293,7 @@ pub async fn fetch_article_text_and_thumbnail(
         .map_err(|e| format!("Failed to read response body: {}", e))?;
 
     println!("[thumbnail] extracting thumbnail from HTML ({} bytes):", html.len());
-    let thumbnail = extract_thumbnail_from_html(&html);
+    let thumbnail = extract_thumbnail_from_html(&html, &effective_url);
 
     match &thumbnail {
         Some(url) => println!("[thumbnail] extracted thumbnail URL: {}", url),
@@ -310,8 +310,26 @@ pub async fn fetch_article_text_and_thumbnail(
 ///
 /// Priority: `og:image` meta tag → first `<img>` in `<body>`.
 /// Filters out data URIs, SVGs, tracking pixels, and Google News logos.
-pub fn extract_thumbnail_from_html(html: &str) -> Option<String> {
+pub fn extract_thumbnail_from_html(html: &str, base_url: &str) -> Option<String> {
     let document = Html::parse_document(html);
+
+    // Helper: resolve relative/protocol-relative URLs against the article URL
+    let resolve = |raw_url: &str| -> String {
+        let trimmed = raw_url.trim();
+        if trimmed.starts_with("//") {
+            return format!("https:{}", trimmed);
+        }
+        if trimmed.starts_with("http://") || trimmed.starts_with("https://") || trimmed.starts_with("data:") {
+            return trimmed.to_string();
+        }
+        // Relative URL — resolve against base
+        if let Ok(base) = reqwest::Url::parse(base_url) {
+            if let Ok(resolved) = base.join(trimmed) {
+                return resolved.to_string();
+            }
+        }
+        trimmed.to_string()
+    };
 
     // 1. Try og:image
     if let Ok(sel) = Selector::parse(r#"meta[property="og:image"]"#) {
@@ -323,7 +341,7 @@ pub fn extract_thumbnail_from_html(html: &str) -> Option<String> {
                 match check_image_url(url) {
                     Ok(()) => {
                         println!("[thumbnail]   og:image -> accepted: {}", url);
-                        return Some(url.to_string());
+                        return Some(resolve(url));
                     }
                     Err(reason) => {
                         println!("[thumbnail]   og:image -> rejected ({}): {}", reason, url);
@@ -346,7 +364,7 @@ pub fn extract_thumbnail_from_html(html: &str) -> Option<String> {
                 match check_image_url(url) {
                     Ok(()) => {
                         println!("[thumbnail]   twitter:image -> accepted: {}", url);
-                        return Some(url.to_string());
+                        return Some(resolve(url));
                     }
                     Err(reason) => {
                         println!("[thumbnail]   twitter:image -> rejected ({}): {}", reason, url);
@@ -369,7 +387,7 @@ pub fn extract_thumbnail_from_html(html: &str) -> Option<String> {
                 match check_image_url(url) {
                     Ok(()) => {
                         println!("[thumbnail]   link[image_src] -> accepted: {}", url);
-                        return Some(url.to_string());
+                        return Some(resolve(url));
                     }
                     Err(reason) => {
                         println!("[thumbnail]   link[image_src] -> rejected ({}): {}", reason, url);
@@ -397,7 +415,7 @@ pub fn extract_thumbnail_from_html(html: &str) -> Option<String> {
                 match check_image_url(url) {
                     Ok(()) => {
                         println!("[thumbnail]   body img -> accepted: {}", url);
-                        return Some(url.to_string());
+                        return Some(resolve(url));
                     }
                     Err(reason) => {
                         println!("[thumbnail]   body img -> rejected ({}): {}", reason, url);
@@ -464,7 +482,8 @@ pub fn is_low_quality_thumbnail(url: &Option<String>) -> bool {
     let lower = url.to_ascii_lowercase();
     let bad_patterns = [
         "placeholder", "default", "noimage", "no-image", "no_image",
-        "missing", "fallback", "generic", "blank", "spacer",
+        "missing", "fallback", "generic", "blank", "spacer", "logo",
+        "footer", "icon", "favicon", "avatar", "badge", "banner_ad",
     ];
     for pat in &bad_patterns {
         if lower.contains(pat) {
@@ -475,78 +494,119 @@ pub fn is_low_quality_thumbnail(url: &Option<String>) -> bool {
     false
 }
 
-/// Search Google Custom Search for a relevant image based on the article title.
-/// Returns the URL of the best image result, or None.
-pub async fn search_image_by_title(
-    api_key: &str,
-    cx: &str,
-    title: &str,
-) -> Option<String> {
-    if api_key.is_empty() || cx.is_empty() {
-        return None;
-    }
-
-    println!("[image-search] searching for: {}", title);
+/// Search DuckDuckGo Images for a relevant image based on the article title.
+/// Returns the URL of the best image result, or None. No API key required.
+pub async fn search_image_by_title(title: &str) -> Option<String> {
+    println!("[image-search] searching DuckDuckGo for: {}", title);
 
     let client = build_client();
-    let resp = client
-        .get("https://www.googleapis.com/customsearch/v1")
-        .query(&[
-            ("q", title),
-            ("searchType", "image"),
-            ("num", "5"),
-            ("imgSize", "large"),
-            ("safe", "active"),
-            ("cx", cx),
-            ("key", api_key),
-        ])
+    let encoded_query = urlencoding::encode(title);
+
+    // Step 1: Fetch the DDG search page to extract the vqd token
+    let page_url = format!(
+        "https://duckduckgo.com/?q={}&iax=images&ia=images",
+        encoded_query
+    );
+    let page_resp = client
+        .get(&page_url)
+        .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
         .send()
         .await
         .ok()?;
 
-    if !resp.status().is_success() {
+    let page_text = page_resp.text().await.ok()?;
+
+    // Extract vqd token: appears as vqd='...' or vqd="..." or vqd=4-...
+    let vqd = extract_vqd(&page_text)?;
+    println!("[image-search] got vqd token: {}...", &vqd[..vqd.len().min(12)]);
+
+    // Step 2: Query the image API
+    let api_url = format!(
+        "https://duckduckgo.com/i.js?l=us-en&o=json&q={}&vqd={}&f=,,,,,&p=1",
+        encoded_query, vqd
+    );
+    let api_resp = client
+        .get(&api_url)
+        .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+        .header("Referer", "https://duckduckgo.com/")
+        .send()
+        .await
+        .ok()?;
+
+    if !api_resp.status().is_success() {
         println!(
-            "[image-search] Google CSE API returned status {}",
-            resp.status()
+            "[image-search] DuckDuckGo API error: status {}",
+            api_resp.status()
         );
         return None;
     }
 
-    let body: serde_json::Value = resp.json().await.ok()?;
+    let body: serde_json::Value = api_resp.json().await.ok()?;
+    let results = body.get("results")?.as_array()?;
 
-    // Parse the "items" array from the response
-    let items = body.get("items")?.as_array()?;
+    for result in results.iter().take(10) {
+        let image_url = result.get("image").and_then(|v| v.as_str()).unwrap_or("");
+        if image_url.is_empty() {
+            continue;
+        }
 
-    for item in items {
-        let link = item.get("link")?.as_str()?;
-
-        // Get image dimensions if available
-        let image_info = item.get("image");
-        let width = image_info
-            .and_then(|i| i.get("width"))
+        let width = result
+            .get("width")
             .and_then(|w| w.as_u64())
             .unwrap_or(0);
-        let height = image_info
-            .and_then(|i| i.get("height"))
+        let height = result
+            .get("height")
             .and_then(|h| h.as_u64())
             .unwrap_or(0);
 
         // Skip small images
         if width > 0 && width < 300 {
-            println!("[image-search] skipping small image ({}x{}): {}", width, height, link);
+            println!(
+                "[image-search] skipping small image ({}x{}): {}",
+                width, height, image_url
+            );
             continue;
         }
 
         // Skip SVGs and data URIs
-        if check_image_url(link).is_err() {
+        if check_image_url(image_url).is_err() {
             continue;
         }
 
-        println!("[image-search] selected image ({}x{}): {}", width, height, link);
-        return Some(link.to_string());
+        println!(
+            "[image-search] selected image ({}x{}): {}",
+            width, height, image_url
+        );
+        return Some(image_url.to_string());
     }
 
     println!("[image-search] no suitable image found for: {}", title);
+    None
+}
+
+/// Extract the vqd token from DuckDuckGo HTML page content.
+fn extract_vqd(html: &str) -> Option<String> {
+    // Try pattern: vqd='...' or vqd="..."
+    for prefix in &["vqd='", "vqd=\""] {
+        if let Some(start) = html.find(prefix) {
+            let after = &html[start + prefix.len()..];
+            let end_char = if *prefix == "vqd='" { '\'' } else { '"' };
+            if let Some(end) = after.find(end_char) {
+                return Some(after[..end].to_string());
+            }
+        }
+    }
+    // Try pattern: vqd=4-... (unquoted, ends at & or ")
+    if let Some(start) = html.find("vqd=") {
+        let after = &html[start + 4..];
+        let end = after
+            .find(|c: char| c == '&' || c == '"' || c == '\'' || c == ' ' || c == ';')
+            .unwrap_or(after.len());
+        if end > 0 {
+            return Some(after[..end].to_string());
+        }
+    }
+    println!("[image-search] could not extract vqd token from DuckDuckGo page");
     None
 }
 
@@ -631,7 +691,7 @@ mod tests {
             <img src="https://example.com/body.jpg" />
         </body></html>"#;
         assert_eq!(
-            extract_thumbnail_from_html(html),
+            extract_thumbnail_from_html(html, "https://example.com/article"),
             Some("https://example.com/og.jpg".to_string())
         );
     }
@@ -643,7 +703,7 @@ mod tests {
             <img src="https://example.com/photo.jpg" />
         </body></html>"#;
         assert_eq!(
-            extract_thumbnail_from_html(html),
+            extract_thumbnail_from_html(html, "https://example.com/article"),
             Some("https://example.com/photo.jpg".to_string())
         );
     }
@@ -655,7 +715,7 @@ mod tests {
             <img data-src="https://example.com/lazy.jpg" />
         </body></html>"#;
         assert_eq!(
-            extract_thumbnail_from_html(html),
+            extract_thumbnail_from_html(html, "https://example.com/article"),
             Some("https://example.com/lazy.jpg".to_string())
         );
     }
@@ -669,7 +729,7 @@ mod tests {
             <img src="https://example.com/real.png" />
         </body></html>"#;
         assert_eq!(
-            extract_thumbnail_from_html(html),
+            extract_thumbnail_from_html(html, "https://example.com/article"),
             Some("https://example.com/real.png".to_string())
         );
     }
@@ -682,7 +742,7 @@ mod tests {
             <img src="https://example.com/photo.webp" />
         </body></html>"#;
         assert_eq!(
-            extract_thumbnail_from_html(html),
+            extract_thumbnail_from_html(html, "https://example.com/article"),
             Some("https://example.com/photo.webp".to_string())
         );
     }
@@ -695,7 +755,7 @@ mod tests {
             <img src="https://example.com/hero.jpg" />
         </body></html>"#;
         assert_eq!(
-            extract_thumbnail_from_html(html),
+            extract_thumbnail_from_html(html, "https://example.com/article"),
             Some("https://example.com/hero.jpg".to_string())
         );
     }
@@ -709,7 +769,7 @@ mod tests {
             <img src="https://example.com/article.jpg" />
         </body></html>"#;
         assert_eq!(
-            extract_thumbnail_from_html(html),
+            extract_thumbnail_from_html(html, "https://example.com/article"),
             Some("https://example.com/article.jpg".to_string())
         );
     }
@@ -723,7 +783,7 @@ mod tests {
             <img src="https://example.com/body.jpg" />
         </body></html>"#;
         assert_eq!(
-            extract_thumbnail_from_html(html),
+            extract_thumbnail_from_html(html, "https://example.com/article"),
             Some("https://example.com/twitter.jpg".to_string())
         );
     }
@@ -735,7 +795,7 @@ mod tests {
             <meta name="twitter:image:src" content="https://example.com/twitter2.jpg" />
         </head><body></body></html>"#;
         assert_eq!(
-            extract_thumbnail_from_html(html),
+            extract_thumbnail_from_html(html, "https://example.com/article"),
             Some("https://example.com/twitter2.jpg".to_string())
         );
     }
@@ -747,7 +807,7 @@ mod tests {
             <link rel="image_src" href="https://example.com/link-img.jpg" />
         </head><body></body></html>"#;
         assert_eq!(
-            extract_thumbnail_from_html(html),
+            extract_thumbnail_from_html(html, "https://example.com/article"),
             Some("https://example.com/link-img.jpg".to_string())
         );
     }
@@ -760,7 +820,7 @@ mod tests {
             <meta name="twitter:image" content="https://example.com/twitter.jpg" />
         </head><body></body></html>"#;
         assert_eq!(
-            extract_thumbnail_from_html(html),
+            extract_thumbnail_from_html(html, "https://example.com/article"),
             Some("https://example.com/og.jpg".to_string())
         );
     }
@@ -768,7 +828,7 @@ mod tests {
     #[test]
     fn no_images_returns_none() {
         let html = r#"<html><body><p>No images here</p></body></html>"#;
-        assert_eq!(extract_thumbnail_from_html(html), None);
+        assert_eq!(extract_thumbnail_from_html(html, "https://example.com/article"), None);
     }
 
     #[test]
