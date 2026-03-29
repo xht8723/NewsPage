@@ -1,11 +1,14 @@
 export const TOPIC_CATEGORIES = [
   "World",
-  "Gaming",
-  "Anime",
-  "Technology",
-  "Science",
+  "Nation",
   "Business",
+  "Technology",
   "Entertainment",
+  "Science",
+  "Sports",
+  "Health",
+  "Anime",
+  "Gaming",
 ] as const;
 
 export const CATEGORIES = ["All", ...TOPIC_CATEGORIES] as const;
@@ -17,13 +20,21 @@ export type OllamaConnectionState = "unknown" | "ok" | "fail";
 
 export const DEFAULT_VISIBLE_CATEGORIES: Record<TopicCategory, boolean> = {
   World: true,
-  Gaming: true,
-  Anime: true,
-  Technology: true,
-  Science: true,
+  Nation: true,
   Business: true,
+  Technology: true,
   Entertainment: true,
+  Science: true,
+  Sports: true,
+  Health: true,
+  Anime: true,
+  Gaming: true,
 };
+
+export const AVAILABLE_REGIONS = [
+  { id: "canada", label: "Canada (English)" },
+  { id: "chinese", label: "Chinese (Simplified)" },
+] as const;
 
 export const OPENAI_MODELS = ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"] as const;
 export const CLAUDE_MODELS = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6"] as const;

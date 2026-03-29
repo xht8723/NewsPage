@@ -70,6 +70,54 @@ fn strip_cdata(s: &str) -> String {
     }
 }
 
+/// Decode common HTML/XML numeric and named character references.
+fn decode_html_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '&' {
+            let mut entity = String::new();
+            for c in chars.by_ref() {
+                if c == ';' {
+                    break;
+                }
+                entity.push(c);
+            }
+            if let Some(stripped) = entity.strip_prefix('#') {
+                let code = if let Some(hex) = stripped.strip_prefix('x').or(stripped.strip_prefix('X')) {
+                    u32::from_str_radix(hex, 16).ok()
+                } else {
+                    stripped.parse::<u32>().ok()
+                };
+                match code.and_then(char::from_u32) {
+                    Some(decoded) => out.push(decoded),
+                    None => { out.push('&'); out.push_str(&entity); out.push(';'); }
+                }
+            } else {
+                match entity.as_str() {
+                    "amp" => out.push('&'),
+                    "lt" => out.push('<'),
+                    "gt" => out.push('>'),
+                    "quot" => out.push('"'),
+                    "apos" => out.push('\''),
+                    "nbsp" => out.push('\u{00A0}'),
+                    "mdash" => out.push('\u{2014}'),
+                    "ndash" => out.push('\u{2013}'),
+                    "lsquo" => out.push('\u{2018}'),
+                    "rsquo" => out.push('\u{2019}'),
+                    "ldquo" => out.push('\u{201C}'),
+                    "rdquo" => out.push('\u{201D}'),
+                    "hellip" => out.push('\u{2026}'),
+                    _ => { out.push('&'); out.push_str(&entity); out.push(';'); }
+                }
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// Extract the first `src="..."` value from an HTML/XML snippet.
 fn first_img_src(html: &str) -> Option<String> {
     let marker = "src=\"";
@@ -98,7 +146,7 @@ fn parse_rss_items(xml: &str) -> Vec<AutomatonNewsItem> {
         remaining = &after[item_end + 7..];
 
         let title = match xml_tag_content(item_xml, "title") {
-            Some(t) => strip_cdata(t),
+            Some(t) => decode_html_entities(&strip_cdata(t)),
             None => continue,
         };
         if title.is_empty() {

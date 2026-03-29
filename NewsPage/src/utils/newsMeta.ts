@@ -46,12 +46,15 @@ export function getProviderLabel(provider: string): string {
 export function getTagColor(category: NewsArticle["category"]): string {
   const colors: Record<NewsArticle["category"], string> = {
     World: "bg-sky-500/90",
-    Gaming: "bg-violet-500/90",
-    Anime: "bg-pink-500/90",
-    Technology: "bg-indigo-500/90",
-    Science: "bg-amber-500/90",
+    Nation: "bg-cyan-500/90",
     Business: "bg-emerald-500/90",
+    Technology: "bg-indigo-500/90",
     Entertainment: "bg-fuchsia-500/90",
+    Science: "bg-amber-500/90",
+    Sports: "bg-orange-500/90",
+    Health: "bg-teal-500/90",
+    Anime: "bg-pink-500/90",
+    Gaming: "bg-violet-500/90",
   };
   return colors[category] || "bg-zinc-500";
 }

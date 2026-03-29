@@ -5,3 +5,4 @@ python_test_script
 enriched_newsItems_test.json
 newsItems_test.json
 .vscode
+google_news_rss_guide.md

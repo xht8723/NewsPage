@@ -4,14 +4,14 @@ use crate::news_item::NewsItem;
 
 pub mod ann;
 pub mod automaton;
-pub mod serp;
+pub mod gl_rss;
 
 use ann::AnnScraperStage;
 use automaton::AutomatonScraperStage;
-use serp::SerpScraperStage;
+use gl_rss::GlRssScraperStage;
 
 pub struct ScrapeContext {
-    pub serp_api_key: Option<String>,
+    pub selected_regions: Vec<String>,
 }
 
 pub struct StageRunResult {
@@ -35,7 +35,7 @@ fn default_scraper_stages() -> Vec<Box<dyn ScraperStage>> {
         Box::new(AnnScraperStage),
         // To disable Automaton: remove the line below (or set ENABLED=false in automaton.rs).
         Box::new(AutomatonScraperStage),
-        Box::new(SerpScraperStage),
+        Box::new(GlRssScraperStage),
     ]
 }
 

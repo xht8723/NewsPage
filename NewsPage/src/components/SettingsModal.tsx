@@ -2,6 +2,7 @@ import { RefreshCw, Settings, X } from "lucide-react";
 import type React from "react";
 import type { Dispatch, SetStateAction } from "react";
 import {
+  AVAILABLE_REGIONS,
   CLAUDE_MODELS,
   EMBEDDING_MODEL_INFO,
   GEMINI_MODELS,
@@ -455,22 +456,33 @@ export function SettingsModal({
           </div>
 
           <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
-            <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Serp API Key</p>
-            <input
-              type="password"
-              placeholder="Enter your SerpAPI key..."
-              value={settings.serpApiKey}
-              onChange={(e) => {
-                const val = e.target.value;
-                setSettings((s) => ({ ...s, serpApiKey: val }));
-                saveSetting("serpApiKey", val);
-              }}
-              className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                isDarkMode
-                  ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                  : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
-              }`}
-            />
+            <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>News Regions</p>
+            <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>Select one or more regions to scrape Google News for. Each region fetches all available topic categories.</p>
+            <div className="space-y-2">
+              {AVAILABLE_REGIONS.map((region) => {
+                const checked = settings.selectedRegions.includes(region.id);
+                return (
+                  <label key={region.id} className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        const next = checked
+                          ? settings.selectedRegions.filter((r) => r !== region.id)
+                          : [...settings.selectedRegions, region.id];
+                        setSettings((s) => ({ ...s, selectedRegions: next }));
+                        saveSetting("selectedRegions", JSON.stringify(next));
+                      }}
+                      className="h-4 w-4 rounded border-zinc-600 accent-emerald-500"
+                    />
+                    <span className="text-sm">{region.label}</span>
+                  </label>
+                );
+              })}
+            </div>
+            {settings.selectedRegions.length === 0 && (
+              <p className="mt-2 text-xs text-amber-500">No regions selected. Google News RSS will be skipped during scraping.</p>
+            )}
           </div>
 
           <div>

@@ -1,8 +1,8 @@
 use crate::db::{get_article_by_id, get_unenriched_articles_by_category, list_unenriched_categories, mark_enriched, upsert_article};
 use crate::news_item::{NewsItem, RankedNewsItem};
-use crate::article_extract::fetch_article_text;
+use crate::article_extract::fetch_article_text_and_thumbnail;
 use crate::scrapers::{run_default_scrapers, ScrapeContext};
-use crate::scrapers::serp::{list_supported_topics, scrape_serp_topics};
+use crate::scrapers::gl_rss::list_region_ids;
 use chrono::{DateTime, Local, Utc};
 use sqlx::sqlite::SqlitePool;
 use std::path::{Path, PathBuf};
@@ -170,10 +170,10 @@ async fn enrich_media_and_embedding(
 async fn fetch_and_enrich_article(
     llm: &dyn platform_llm::LLMProviderImpl,
     item: &NewsItem,
-) -> Result<(String, Vec<String>, String, String), String> {
-    let text = fetch_article_text(&item.url).await?;
+) -> Result<(String, Vec<String>, String, String, Option<String>), String> {
+    let (text, thumbnail) = fetch_article_text_and_thumbnail(&item.url).await?;
     let (tags, snippet, ai_summary) = llm.enrich(&item.title, &text).await?;
-    Ok((text, tags, snippet, ai_summary))
+    Ok((text, tags, snippet, ai_summary, thumbnail))
 }
 
 async fn persist_enriched_article(db_pool: &SqlitePool, enriched: &NewsItem) -> Result<(), String> {
@@ -189,10 +189,10 @@ async fn persist_enriched_article(db_pool: &SqlitePool, enriched: &NewsItem) -> 
 async fn fetch_and_enrich_article_with_timeouts(
     llm: &dyn platform_llm::LLMProviderImpl,
     item: &NewsItem,
-) -> Result<(String, Vec<String>, String, String), String> {
-    let text = tokio::time::timeout(
+) -> Result<(String, Vec<String>, String, String, Option<String>), String> {
+    let (text, thumbnail) = tokio::time::timeout(
         Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
-        fetch_article_text(&item.url),
+        fetch_article_text_and_thumbnail(&item.url),
     )
     .await
     .map_err(|_| {
@@ -215,7 +215,7 @@ async fn fetch_and_enrich_article_with_timeouts(
         )
     })??;
 
-    Ok((text, tags, snippet, ai_summary))
+    Ok((text, tags, snippet, ai_summary, thumbnail))
 }
 
 fn apply_enrichment_payload(
@@ -224,6 +224,7 @@ fn apply_enrichment_payload(
     tags: Vec<String>,
     snippet: String,
     ai_summary: String,
+    thumbnail_url: Option<String>,
     overwrite_existing: bool,
 ) -> NewsItem {
     if overwrite_existing || item.og_content.trim().is_empty() {
@@ -237,6 +238,11 @@ fn apply_enrichment_payload(
     }
     if overwrite_existing || item.ai_summary.trim().is_empty() {
         item.ai_summary = ai_summary;
+    }
+    if let Some(url) = thumbnail_url {
+        if overwrite_existing || item.thumbnail.trim().is_empty() {
+            item.thumbnail = url;
+        }
     }
 
     item
@@ -327,7 +333,7 @@ struct ResolvedLlmSettings {
     ollama_address: String,
     ollama_model: String,
     local_embedding_model: String,
-    serp_api_key: String,
+    selected_regions: Vec<String>,
 }
 
 struct RuntimeLlmContext {
@@ -416,9 +422,9 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
         .get("geminiModel")
         .cloned()
         .unwrap_or_else(|| "gemini-2.5-flash".to_string());
-    let saved_serp_api_key = settings_map
-        .get("serpApiKey")
-        .cloned()
+    let saved_selected_regions: Vec<String> = settings_map
+        .get("selectedRegions")
+        .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_default();
 
     ResolvedLlmSettings {
@@ -437,7 +443,7 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
                 .or(overrides.ollama_embedding_model),
             saved_local_embedding_model,
         ),
-        serp_api_key: saved_serp_api_key.trim().to_string(),
+        selected_regions: saved_selected_regions,
     }
 }
 
@@ -526,16 +532,12 @@ async fn run_scrape_stage(
         return Ok(());
     }
 
-    if resolved.serp_api_key.is_empty() {
-        println!("Skipping SERP scrape — missing SerpAPI key in settings.");
+    if resolved.selected_regions.is_empty() {
+        println!("Skipping Google News RSS scrape — no regions selected in settings.");
     }
 
     let scrape_context = ScrapeContext {
-        serp_api_key: if resolved.serp_api_key.trim().is_empty() {
-            None
-        } else {
-            Some(resolved.serp_api_key.clone())
-        },
+        selected_regions: resolved.selected_regions.clone(),
     };
     let stage_results = run_default_scrapers(&scrape_context).await?;
 
@@ -604,13 +606,14 @@ async fn run_enrichment_stage(
         let enrich_result = tokio::time::timeout(
             Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
             async {
-                let (text, tags, snippet, ai_summary) = fetch_and_enrich_article(llm, &item).await?;
+                let (text, tags, snippet, ai_summary, thumbnail) = fetch_and_enrich_article(llm, &item).await?;
                 Ok::<NewsItem, String>(apply_enrichment_payload(
                     item,
                     text,
                     tags,
                     snippet,
                     ai_summary,
+                    thumbnail,
                     false,
                 ))
             },
@@ -1022,26 +1025,8 @@ async fn list_ollama_models(address: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-async fn fetch_serp_news(
-    state: tauri::State<'_, AppState>,
-    include_topics: Option<Vec<String>>,
-    exclude_topics: Option<Vec<String>>,
-    limit: Option<usize>,
-) -> Result<Vec<NewsItem>, String> {
-    let include = include_topics.unwrap_or_default();
-    let exclude = exclude_topics.unwrap_or_default();
-    let items = scrape_serp_topics(&include, &exclude, limit).await?;
-    for item in &items {
-        upsert_article(&state.db, item)
-            .await
-            .map_err(|e| format!("DB insert error: {}", e))?;
-    }
-    Ok(items)
-}
-
-#[tauri::command]
-fn get_serp_supported_topics() -> Vec<String> {
-    list_supported_topics()
+fn get_available_regions() -> Vec<String> {
+    list_region_ids().into_iter().map(|s| s.to_string()).collect()
 }
 
 #[tauri::command]
@@ -1147,10 +1132,10 @@ async fn reprocess_article(
         .map_err(|e| format!("DB read error: {}", e))?
         .ok_or_else(|| format!("Article not found: {}", article_id))?;
 
-    let (text, tags, snippet, ai_summary) =
+    let (text, tags, snippet, ai_summary, thumbnail) =
         fetch_and_enrich_article_with_timeouts(llm.as_ref(), &item).await?;
 
-    let mut enriched = apply_enrichment_payload(item, text, tags, snippet, ai_summary, true);
+    let mut enriched = apply_enrichment_payload(item, text, tags, snippet, ai_summary, thumbnail, true);
 
     enrich_media_and_embedding(
         &state.db,
@@ -1285,8 +1270,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            fetch_serp_news,
-            get_serp_supported_topics,
+            get_available_regions,
             get_enriched_news,
             start_all_action,
             test_ollama_connection,
@@ -1363,6 +1347,7 @@ mod helper_tests {
             vec!["tag1".to_string()],
             "fresh snippet".to_string(),
             "fresh summary".to_string(),
+            None,
             false,
         );
 
@@ -1381,6 +1366,7 @@ mod helper_tests {
             vec!["new-tag".to_string()],
             "new snippet".to_string(),
             "new summary".to_string(),
+            None,
             false,
         );
 
@@ -1393,6 +1379,7 @@ mod helper_tests {
             vec!["new-tag".to_string()],
             "new snippet".to_string(),
             "new summary".to_string(),
+            None,
             true,
         );
 

@@ -17,7 +17,7 @@ const baseSettings: UserSettings = {
   claudeModel: "claude-sonnet-4-6",
   geminiApiKey: "gemini-key",
   geminiModel: "gemini-2.5-flash",
-  serpApiKey: "",
+  selectedRegions: [] as string[],
   likedConcepts: "",
   dislikedConcepts: "",
   sortMode: "date",

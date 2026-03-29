@@ -50,7 +50,7 @@ export interface UserSettings {
   claudeModel: string;
   geminiApiKey: string;
   geminiModel: string;
-  serpApiKey: string;
+  selectedRegions: string[];
   likedConcepts: string;
   dislikedConcepts: string;
   sortMode: string;
