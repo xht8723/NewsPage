@@ -306,78 +306,6 @@ pub async fn fetch_article_text_and_thumbnail(
     Ok((result.content_text, thumbnail))
 }
 
-#[cfg(test)]
-fn resolve_redirect_url(html: &str) -> Option<String> {
-    let document = Html::parse_document(html);
-
-    if let Ok(sel) = Selector::parse("meta[http-equiv]") {
-        for el in document.select(&sel) {
-            let equiv = el.value().attr("http-equiv").unwrap_or("");
-            if !equiv.eq_ignore_ascii_case("refresh") {
-                continue;
-            }
-
-            if let Some(content) = el.value().attr("content") {
-                if let Some(url) = parse_meta_refresh_url(content) {
-                    return Some(url);
-                }
-            }
-        }
-    }
-
-    if let Ok(sel) = Selector::parse("[data-n-au]") {
-        for el in document.select(&sel) {
-            if let Some(url) = el.value().attr("data-n-au") {
-                let url = url.trim();
-                if url.starts_with("http://") || url.starts_with("https://") {
-                    return Some(url.to_string());
-                }
-            }
-        }
-    }
-
-    // Match both double-quote and single-quote JS redirect variants.
-    for (pattern, close_char) in &[
-        ("window.location.replace(\"", '"'),
-        ("window.location.replace('" , '\''),
-        ("window.location.href=\"",    '"'),
-        ("window.location.href = \"",  '"'),
-        ("window.location.href='",     '\''),
-        ("window.location.href = '",   '\''),
-        ("window.location=\"",         '"'),
-        ("window.location = \"",       '"'),
-        ("window.location='",          '\''),
-        ("window.location = '",        '\''),
-    ] {
-        if let Some(index) = html.find(pattern) {
-            let rest = &html[index + pattern.len()..];
-            if let Some(end) = rest.find(*close_char) {
-                let url = &rest[..end];
-                if url.starts_with("http://") || url.starts_with("https://") {
-                    return Some(url.to_string());
-                }
-            }
-        }
-    }
-
-    None
-}
-
-#[cfg(test)]
-fn parse_meta_refresh_url(content: &str) -> Option<String> {
-    let lower = content.to_ascii_lowercase();
-    let index = lower.find("url=")?;
-    let url = content[index + 4..]
-        .trim()
-        .trim_matches(|c: char| c == '"' || c == '\'');
-
-    if url.starts_with("http://") || url.starts_with("https://") {
-        Some(url.to_string())
-    } else {
-        None
-    }
-}
-
 /// Extract a thumbnail URL from raw HTML.
 ///
 /// Priority: `og:image` meta tag → first `<img>` in `<body>`.
@@ -526,6 +454,74 @@ fn check_image_url(url: &str) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_meta_refresh_url(content: &str) -> Option<String> {
+        let lower = content.to_ascii_lowercase();
+        let index = lower.find("url=")?;
+        let url = content[index + 4..]
+            .trim()
+            .trim_matches(|c: char| c == '"' || c == '\'');
+
+        if url.starts_with("http://") || url.starts_with("https://") {
+            Some(url.to_string())
+        } else {
+            None
+        }
+    }
+
+    fn resolve_redirect_url(html: &str) -> Option<String> {
+        let document = Html::parse_document(html);
+
+        if let Ok(sel) = Selector::parse("meta[http-equiv]") {
+            for el in document.select(&sel) {
+                let equiv = el.value().attr("http-equiv").unwrap_or("");
+                if !equiv.eq_ignore_ascii_case("refresh") {
+                    continue;
+                }
+                if let Some(content) = el.value().attr("content") {
+                    if let Some(url) = parse_meta_refresh_url(content) {
+                        return Some(url);
+                    }
+                }
+            }
+        }
+
+        if let Ok(sel) = Selector::parse("[data-n-au]") {
+            for el in document.select(&sel) {
+                if let Some(url) = el.value().attr("data-n-au") {
+                    let url = url.trim();
+                    if url.starts_with("http://") || url.starts_with("https://") {
+                        return Some(url.to_string());
+                    }
+                }
+            }
+        }
+
+        for (pattern, close_char) in &[
+            ("window.location.replace(\"", '"'),
+            ("window.location.replace('",  '\''),
+            ("window.location.href=\"",    '"'),
+            ("window.location.href = \"",  '"'),
+            ("window.location.href='",     '\''),
+            ("window.location.href = '",   '\''),
+            ("window.location=\"",         '"'),
+            ("window.location = \"",       '"'),
+            ("window.location='",          '\''),
+            ("window.location = '",        '\''),
+        ] {
+            if let Some(index) = html.find(pattern) {
+                let rest = &html[index + pattern.len()..];
+                if let Some(end) = rest.find(*close_char) {
+                    let url = &rest[..end];
+                    if url.starts_with("http://") || url.starts_with("https://") {
+                        return Some(url.to_string());
+                    }
+                }
+            }
+        }
+
+        None
+    }
 
     #[test]
     fn og_image_is_preferred() {
