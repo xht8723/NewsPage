@@ -218,15 +218,6 @@ async fn enrich_media_and_embedding(
     }
 }
 
-async fn fetch_and_enrich_article(
-    llm: &dyn platform_llm::LLMProviderImpl,
-    item: &NewsItem,
-) -> Result<(String, Vec<String>, String, String, Option<String>), String> {
-    let (text, thumbnail) = fetch_article_text_and_thumbnail(&item.url).await?;
-    let (tags, snippet, ai_summary) = llm.enrich(&item.title, &text).await?;
-    Ok((text, tags, snippet, ai_summary, thumbnail))
-}
-
 async fn persist_enriched_article(db_pool: &SqlitePool, enriched: &NewsItem) -> Result<(), String> {
     upsert_article(db_pool, enriched)
         .await
@@ -647,6 +638,8 @@ struct EnrichmentStageResult {
     first_error: Option<String>,
 }
 
+const LLM_BATCH_SIZE: usize = 5;
+
 async fn run_enrichment_stage(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -658,74 +651,133 @@ async fn run_enrichment_stage(
 ) -> Result<EnrichmentStageResult, String> {
     let total = items_to_enrich.len();
     println!(
-        "Enriching {} unenriched items this run (up to {} per category)",
-        total,
-        per_category_limit
+        "Enriching {} unenriched items this run (up to {} per category, batch size {})",
+        total, per_category_limit, LLM_BATCH_SIZE
     );
 
     let mut enriched_count = 0;
     let mut first_error: Option<String> = None;
+    let mut global_index = 0;
 
-    for (index, item) in items_to_enrich.into_iter().enumerate() {
-        let fallback_item = item.clone();
-        let enrich_result = tokio::time::timeout(
-            Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
-            async {
-                let (text, tags, snippet, ai_summary, thumbnail) = fetch_and_enrich_article(llm, &item).await?;
-                Ok::<NewsItem, String>(apply_enrichment_payload(
-                    item,
-                    text,
-                    tags,
-                    snippet,
-                    ai_summary,
-                    thumbnail,
-                    false,
-                ))
-            },
-        )
-        .await;
+    // Process in batches of LLM_BATCH_SIZE
+    for batch in items_to_enrich.chunks(LLM_BATCH_SIZE) {
+        let batch_items: Vec<NewsItem> = batch.to_vec();
+        let batch_len = batch_items.len();
 
-        match enrich_result {
-            Ok(Ok(mut enriched)) => {
-                enrich_media_and_embedding(
-                    &state.db,
-                    image_cache_dir,
-                    &mut enriched,
-                    &settings.local_embedding_model,
-                    &settings.google_cse_key,
-                    &settings.google_cse_cx,
-                )
-                .await;
+        // Phase 1: Fetch article texts and thumbnails for the batch
+        println!("[batch] fetching text for {} articles...", batch_len);
+        let mut fetched: Vec<(NewsItem, Result<(String, Option<String>), String>)> =
+            Vec::with_capacity(batch_len);
 
-                enriched.is_enriched = true;
-                persist_enriched_article(&state.db, &enriched).await?;
-                enriched_count += 1;
+        for item in &batch_items {
+            let result = tokio::time::timeout(
+                Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
+                article_extract::fetch_article_text_and_thumbnail(&item.url),
+            )
+            .await;
 
-                emit_enriched_news_updated(app, &enriched, index + 1, total, enriched_count)?;
-                println!("Enriched: {}", enriched.title);
-            }
-            Ok(Err(err)) => {
-                println!("Failed to enrich item: {}", err);
-                mark_enriched(&state.db, &fallback_item.id)
-                    .await
-                    .map_err(|e| format!("mark_enriched fallback error: {}", e))?;
-                if first_error.is_none() {
-                    first_error = Some(err);
+            let fetch_result = match result {
+                Ok(r) => r,
+                Err(_) => Err(format!(
+                    "Timed out fetching article '{}' after {}s",
+                    item.title, ARTICLE_PROCESS_TIMEOUT_SECS
+                )),
+            };
+            fetched.push((item.clone(), fetch_result));
+        }
+
+        // Phase 2: Collect successfully fetched articles for batch LLM call
+        let mut llm_inputs: Vec<(usize, String, String)> = Vec::new(); // (batch_index, title, text)
+        for (i, (item, result)) in fetched.iter().enumerate() {
+            match result {
+                Ok((text, _)) => {
+                    llm_inputs.push((i, item.title.clone(), text.clone()));
+                }
+                Err(err) => {
+                    println!("Failed to fetch article text: {}", err);
+                    if first_error.is_none() {
+                        first_error = Some(err.clone());
+                    }
                 }
             }
-            Err(_) => {
-                let timeout_err = format!(
-                    "Timed out processing article '{}' after {}s",
-                    fallback_item.title, ARTICLE_PROCESS_TIMEOUT_SECS
-                );
-                println!("Failed to enrich item: {}", timeout_err);
-                mark_enriched(&state.db, &fallback_item.id)
-                    .await
-                    .map_err(|e| format!("mark_enriched timeout fallback error: {}", e))?;
+        }
+
+        // Call enrich_batch with all successfully fetched articles
+        let llm_results = if !llm_inputs.is_empty() {
+            let articles_for_llm: Vec<(String, String)> = llm_inputs
+                .iter()
+                .map(|(_, title, text)| (title.clone(), text.clone()))
+                .collect();
+
+            println!("[batch] calling LLM enrich_batch for {} articles...", articles_for_llm.len());
+            llm.enrich_batch(&articles_for_llm).await
+        } else {
+            vec![]
+        };
+
+        // Phase 3: Apply results, cache thumbnails, persist
+        let mut llm_result_idx = 0;
+        for (i, (item, fetch_result)) in fetched.into_iter().enumerate() {
+            global_index += 1;
+
+            // Check if this item had a successful text fetch
+            let is_in_llm_batch = llm_inputs.iter().any(|(idx, _, _)| *idx == i);
+
+            if !is_in_llm_batch {
+                // Text fetch failed — mark as failed, will retry next run
+                println!("Failed to enrich item (will retry next run): text fetch failed for '{}'", item.title);
                 if first_error.is_none() {
-                    first_error = Some(timeout_err);
+                    first_error = Some(format!("Text fetch failed for '{}'", item.title));
+                }
+                continue;
+            }
+
+            let (text, thumbnail) = fetch_result.unwrap(); // Safe: we know it succeeded
+
+            // Get the LLM result for this article
+            let llm_result = if llm_result_idx < llm_results.len() {
+                llm_result_idx += 1;
+                llm_results[llm_result_idx - 1].clone()
+            } else {
+                Err("Missing LLM result".to_string())
+            };
+
+            match llm_result {
+                Ok((tags, snippet, ai_summary)) => {
+                    let mut enriched = apply_enrichment_payload(
+                        item, text, tags, snippet, ai_summary, thumbnail, false,
+                    );
+
+                    enrich_media_and_embedding(
+                        &state.db,
+                        image_cache_dir,
+                        &mut enriched,
+                        &settings.local_embedding_model,
+                        &settings.google_cse_key,
+                        &settings.google_cse_cx,
+                    )
+                    .await;
+
+                    enriched.is_enriched = true;
+                    persist_enriched_article(&state.db, &enriched).await?;
+                    enriched_count += 1;
+
+                    emit_enriched_news_updated(app, &enriched, global_index, total, enriched_count)?;
+                    println!("Enriched: {}", enriched.title);
+                }
+                Err(err) => {
+                    println!("Failed to enrich item (will retry next run): {}", err);
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                    }
                 }
             }
+        }
+
+        // Delay between batches to respect rate limits (12s for 5 req/min)
+        if global_index < total {
+            println!("[batch] waiting 12s before next batch...");
+            tokio::time::sleep(Duration::from_secs(12)).await;
         }
     }
 

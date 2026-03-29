@@ -93,6 +93,19 @@ pub trait LLMProviderImpl: Send + Sync {
         text: &str,
     ) -> Result<(Vec<String>, String, String), String>;
 
+    /// Batch-enrich multiple articles in a single API call.
+    /// Default implementation falls back to sequential `enrich()` calls.
+    async fn enrich_batch(
+        &self,
+        articles: &[(String, String)],
+    ) -> Vec<Result<(Vec<String>, String, String), String>> {
+        let mut results = Vec::with_capacity(articles.len());
+        for (title, text) in articles {
+            results.push(self.enrich(title, text).await);
+        }
+        results
+    }
+
     /// Test the connection/authentication
     async fn test_connection(&self) -> Result<bool, String>;
 
@@ -678,185 +691,118 @@ impl LLMProviderImpl for GeminiProvider {
     }
 
     async fn enrich(&self, title: &str, text: &str) -> Result<(Vec<String>, String, String), String> {
-        #[derive(Serialize)]
-        struct Part {
-            text: String,
+        let results = self.enrich_batch(&[(title.to_string(), text.to_string())]).await;
+        results.into_iter().next().unwrap_or_else(|| Err("No result from batch".to_string()))
+    }
+
+    async fn enrich_batch(
+        &self,
+        articles: &[(String, String)],
+    ) -> Vec<Result<(Vec<String>, String, String), String>> {
+        if articles.is_empty() {
+            return vec![];
         }
 
         #[derive(Serialize)]
-        struct Content {
-            role: String,
-            parts: Vec<Part>,
-        }
-
+        struct Part { text: String }
         #[derive(Serialize)]
-        struct GeminiRequest {
-            contents: Vec<Content>,
+        struct Content { role: String, parts: Vec<Part> }
+        #[derive(Serialize)]
+        struct GeminiRequest { contents: Vec<Content> }
+        #[derive(Deserialize)]
+        struct TextPart { text: String }
+        #[derive(Deserialize)]
+        struct CandidateContent { parts: Vec<TextPart> }
+        #[derive(Deserialize)]
+        struct Candidate { content: CandidateContent }
+        #[derive(Deserialize)]
+        struct GeminiResponse { candidates: Vec<Candidate> }
+
+        let n = articles.len();
+        let mut prompt = String::from(
+            "You are a news enrichment engine. For each article below, produce exactly:\n\
+             TAGS: up to 5 relevant tags (comma-separated)\n\
+             SNIPPET: one sentence capturing the most important point\n\
+             SUMMARY: 3-10 bullet points, each starting with \"- \"\n\n\
+             Use this EXACT output format for each article:\n\n\
+             ===ARTICLE 1===\n\
+             TAGS: tag1, tag2, tag3\n\
+             SNIPPET: The one sentence.\n\
+             SUMMARY:\n\
+             - Point 1\n\
+             - Point 2\n\n\
+             ===ARTICLE 2===\n\
+             TAGS: ...\n\
+             SNIPPET: ...\n\
+             SUMMARY:\n\
+             - ...\n\n\
+             ---\n\n"
+        );
+
+        for (i, (title, text)) in articles.iter().enumerate() {
+            // Truncate text to ~4000 chars to keep batch within token limits
+            let truncated = if text.len() > 4000 { &text[..4000] } else { text.as_str() };
+            prompt.push_str(&format!(
+                "[ARTICLE {}]\nTitle: {}\nText: {}\n\n",
+                i + 1, title, truncated
+            ));
         }
 
-        #[derive(Deserialize)]
-        struct TextPart {
-            text: String,
-        }
-
-        #[derive(Deserialize)]
-        struct CandidateContent {
-            parts: Vec<TextPart>,
-        }
-
-        #[derive(Deserialize)]
-        struct Candidate {
-            content: CandidateContent,
-        }
-
-        #[derive(Deserialize)]
-        struct GeminiResponse {
-            candidates: Vec<Candidate>,
-        }
+        println!("[llm-batch] sending batch of {} articles to Gemini", n);
 
         let client = reqwest::Client::new();
-        let base_url = format!(
+        let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
             self.model
         );
 
-        // Get tags
-        let tags_prompt = format!(
-            "You are a news article tagger. Given the title and article text below, output up to 5 relevant tags.\n\
-			Rules: Output ONLY the tags as a comma-separated list. No explanation.\n\n\
-			Title: {}\nArticle: {}",
-            title, text
-        );
-
-        let tags_req = GeminiRequest {
+        let req = GeminiRequest {
             contents: vec![Content {
                 role: "user".to_string(),
-                parts: vec![Part {
-                    text: tags_prompt,
-                }],
+                parts: vec![Part { text: prompt }],
             }],
         };
 
-        let tags_resp = client
-            .post(&base_url)
+        let resp = match client
+            .post(&url)
             .header("x-goog-api-key", &self.api_key)
-            .json(&tags_req)
+            .json(&req)
             .send()
             .await
-            .map_err(|e| format!("Gemini tags request failed: {}", e))?;
-
-        if !tags_resp.status().is_success() {
-            let status = tags_resp.status();
-            let body = tags_resp.text().await.unwrap_or_default();
-            return Err(format!("Gemini tags request failed: status {} body {}", status, body));
-        }
-
-        let tags_resp = tags_resp
-            .json::<GeminiResponse>()
-            .await
-            .map_err(|e| format!("Failed to parse Gemini tags response: {}", e))?;
-
-        let tags: Vec<String> = tags_resp
-            .candidates
-            .first()
-            .and_then(|c| c.content.parts.first())
-            .map(|p| {
-                p.text
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .take(5)
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        // Get snippet
-        let snippet_prompt = format!(
-            "Write exactly ONE sentence that captures the most important point.\n\
-			Output ONLY the sentence. No explanation.\n\n\
-			Title: {}\nArticle: {}",
-            title, text
-        );
-
-        let snippet_req = GeminiRequest {
-            contents: vec![Content {
-                role: "user".to_string(),
-                parts: vec![Part {
-                    text: snippet_prompt,
-                }],
-            }],
+        {
+            Ok(r) => r,
+            Err(e) => {
+                let err = format!("Gemini batch request failed: {}", e);
+                return articles.iter().map(|_| Err(err.clone())).collect();
+            }
         };
 
-        let snippet_resp = client
-            .post(&base_url)
-            .header("x-goog-api-key", &self.api_key)
-            .json(&snippet_req)
-            .send()
-            .await
-            .map_err(|e| format!("Gemini snippet request failed: {}", e))?;
-
-        if !snippet_resp.status().is_success() {
-            let status = snippet_resp.status();
-            let body = snippet_resp.text().await.unwrap_or_default();
-            return Err(format!("Gemini snippet request failed: status {} body {}", status, body));
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            let err = format!("Gemini batch request failed: status {} body {}", status, body);
+            return articles.iter().map(|_| Err(err.clone())).collect();
         }
 
-        let snippet_resp = snippet_resp
-            .json::<GeminiResponse>()
-            .await
-            .map_err(|e| format!("Failed to parse Gemini snippet response: {}", e))?;
-
-        let snippet: String = snippet_resp
-            .candidates
-            .first()
-            .and_then(|c| c.content.parts.first())
-            .map(|p| p.text.trim().to_string())
-            .unwrap_or_default();
-
-        // Get summary
-        let summary_prompt = format!(
-            "Write a clear summary as 3-10 bullet points.\n\
-			Each line starts with '- '. Output ONLY the bullet points.\n\n\
-			Title: {}\nArticle: {}",
-            title, text
-        );
-
-        let summary_req = GeminiRequest {
-            contents: vec![Content {
-                role: "user".to_string(),
-                parts: vec![Part {
-                    text: summary_prompt,
-                }],
-            }],
+        let gemini_resp = match resp.json::<GeminiResponse>().await {
+            Ok(r) => r,
+            Err(e) => {
+                let err = format!("Failed to parse Gemini batch response: {}", e);
+                return articles.iter().map(|_| Err(err.clone())).collect();
+            }
         };
 
-        let summary_resp = client
-            .post(&base_url)
-            .header("x-goog-api-key", &self.api_key)
-            .json(&summary_req)
-            .send()
-            .await
-            .map_err(|e| format!("Gemini summary request failed: {}", e))?;
-
-        if !summary_resp.status().is_success() {
-            let status = summary_resp.status();
-            let body = summary_resp.text().await.unwrap_or_default();
-            return Err(format!("Gemini summary request failed: status {} body {}", status, body));
-        }
-
-        let summary_resp = summary_resp
-            .json::<GeminiResponse>()
-            .await
-            .map_err(|e| format!("Failed to parse Gemini summary response: {}", e))?;
-
-        let ai_summary: String = summary_resp
+        let full_text = gemini_resp
             .candidates
             .first()
             .and_then(|c| c.content.parts.first())
-            .map(|p| p.text.trim().to_string())
-            .unwrap_or_default();
+            .map(|p| p.text.as_str())
+            .unwrap_or("");
 
-        Ok((tags, snippet, ai_summary))
+        println!("[llm-batch] received response ({} chars), parsing {} articles", full_text.len(), n);
+
+        // Parse the response by splitting on ===ARTICLE N=== markers
+        parse_batch_response(full_text, n)
     }
 
     async fn test_connection(&self) -> Result<bool, String> {
@@ -996,4 +942,106 @@ pub fn create_provider(config: &LLMConfig) -> Result<Box<dyn LLMProviderImpl>, S
             Ok(Box::new(GeminiProvider::new(api_key, config.model.clone())))
         }
     }
+}
+
+/// Parse a batched Gemini response into per-article results.
+/// Splits on `===ARTICLE N===` markers and extracts TAGS/SNIPPET/SUMMARY from each section.
+fn parse_batch_response(
+    text: &str,
+    expected_count: usize,
+) -> Vec<Result<(Vec<String>, String, String), String>> {
+    // Split on ===ARTICLE N=== markers
+    let mut sections: Vec<&str> = Vec::new();
+    let mut remaining = text;
+
+    // Find all ===ARTICLE N=== markers and split
+    for i in 1..=expected_count {
+        let marker = format!("===ARTICLE {}===", i);
+        if let Some(pos) = remaining.find(&marker) {
+            remaining = &remaining[pos + marker.len()..];
+        }
+        // Find the end: either next ===ARTICLE marker or end of string
+        let next_marker = format!("===ARTICLE {}===", i + 1);
+        let end = remaining.find(&next_marker).unwrap_or(remaining.len());
+        sections.push(&remaining[..end]);
+        remaining = &remaining[end..];
+    }
+
+    // If we couldn't find markers, try splitting on just "===ARTICLE" generically
+    if sections.is_empty() || sections.iter().all(|s| s.trim().is_empty()) {
+        sections.clear();
+        let parts: Vec<&str> = text.split("===ARTICLE").collect();
+        // First element is before the first marker (usually empty), skip it
+        for part in parts.iter().skip(1) {
+            // Strip the "N===" prefix
+            let content = if let Some(pos) = part.find("===") {
+                &part[pos + 3..]
+            } else {
+                part
+            };
+            sections.push(content);
+        }
+    }
+
+    let mut results = Vec::with_capacity(expected_count);
+
+    for (i, section) in sections.iter().enumerate().take(expected_count) {
+        let parsed = parse_single_article_section(section);
+        println!(
+            "[llm-batch] article {}: tags={}, snippet={}chars, summary={}chars",
+            i + 1,
+            parsed.0.len(),
+            parsed.1.len(),
+            parsed.2.len()
+        );
+        results.push(Ok(parsed));
+    }
+
+    // Fill any missing articles with errors
+    while results.len() < expected_count {
+        results.push(Err(format!(
+            "Article {} missing from batch response",
+            results.len() + 1
+        )));
+    }
+
+    results
+}
+
+/// Parse TAGS/SNIPPET/SUMMARY from a single article section of the batch response.
+fn parse_single_article_section(section: &str) -> (Vec<String>, String, String) {
+    let mut tags = Vec::new();
+    let mut snippet = String::new();
+    let mut summary_lines = Vec::new();
+    let mut current_field = "";
+
+    for line in section.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("TAGS:") {
+            current_field = "tags";
+            tags = rest
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .take(5)
+                .collect();
+        } else if let Some(rest) = trimmed.strip_prefix("SNIPPET:") {
+            current_field = "snippet";
+            snippet = rest.trim().to_string();
+        } else if trimmed.starts_with("SUMMARY:") {
+            current_field = "summary";
+        } else if current_field == "summary" && trimmed.starts_with("- ") {
+            summary_lines.push(trimmed.to_string());
+        } else if current_field == "snippet" && snippet.is_empty() {
+            // Multi-line snippet (unlikely but handle it)
+            snippet = trimmed.to_string();
+        }
+    }
+
+    let ai_summary = summary_lines.join("\n");
+    (tags, snippet, ai_summary)
 }
