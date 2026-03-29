@@ -12,6 +12,8 @@ import {
   X,
   Settings,
   SlidersHorizontal,
+  EyeOff,
+  GripVertical,
 } from "lucide-react";
 import {
   CATEGORIES,
@@ -50,6 +52,12 @@ function App(): React.JSX.Element {
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [selectedArticle, setSelectedArticle] = useState<NewsArticle | null>(null);
   const [visibleCategories, setVisibleCategories] = useState<Record<TopicCategory, boolean>>(DEFAULT_VISIBLE_CATEGORIES);
+  const [categoryOrder, setCategoryOrder] = useState<TopicCategory[]>([...TOPIC_CATEGORIES]);
+  const [draggedCategory, setDraggedCategory] = useState<TopicCategory | null>(null);
+  const [dragOverCategory, setDragOverCategory] = useState<Category | null>(null);
+  const [dragPointer, setDragPointer] = useState<{ x: number; y: number } | null>(null);
+  const [categoryContextMenu, setCategoryContextMenu] = useState<{ x: number; y: number; category: TopicCategory } | null>(null);
+  const categoryButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const refreshTimeoutRef = useRef<number | null>(null);
   const [enrichmentProgress, setEnrichmentProgress] = useState<{ current: number; total: number; enriched: number } | null>(null);
   const [enrichmentError, setEnrichmentError] = useState<string | null>(null);
@@ -159,6 +167,22 @@ function App(): React.JSX.Element {
             setVisibleCategories(hasAnyVisible ? next : DEFAULT_VISIBLE_CATEGORIES);
           } catch {
             // Ignore invalid stored visibility JSON.
+          }
+        }
+
+        if (saved.categoryOrder) {
+          try {
+            const parsed = JSON.parse(saved.categoryOrder) as string[];
+            const valid = parsed.filter((c): c is TopicCategory =>
+              (TOPIC_CATEGORIES as readonly string[]).includes(c),
+            );
+            // Append any new categories not in the saved order
+            const missing = ([...TOPIC_CATEGORIES] as TopicCategory[]).filter((c) => !valid.includes(c));
+            if (valid.length > 0) {
+              setCategoryOrder([...valid, ...missing]);
+            }
+          } catch {
+            // Ignore invalid stored order JSON.
           }
         }
       })
@@ -362,8 +386,8 @@ function App(): React.JSX.Element {
   }, [reprocessingArticleId, settings]);
 
   const availableCategories = useMemo(
-    () => ["All", ...TOPIC_CATEGORIES.filter((category) => visibleCategories[category])] as Category[],
-    [visibleCategories],
+    () => ["All", ...categoryOrder.filter((category) => visibleCategories[category])] as Category[],
+    [visibleCategories, categoryOrder],
   );
 
   useEffect(() => {
@@ -555,6 +579,63 @@ function App(): React.JSX.Element {
     });
   };
 
+  const handleCategoryPointerDown = (e: React.PointerEvent, cat: TopicCategory) => {
+    if (e.button !== 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setDraggedCategory(cat);
+    setDragPointer({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleCategoryPointerMove = (e: React.PointerEvent) => {
+    if (!draggedCategory) return;
+    setDragPointer({ x: e.clientX, y: e.clientY });
+    // Release pointer capture temporarily to hit-test underlying elements
+    const target = e.currentTarget as HTMLElement;
+    target.releasePointerCapture(e.pointerId);
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    target.setPointerCapture(e.pointerId);
+    if (!el) { setDragOverCategory(null); return; }
+    for (const [name, btn] of categoryButtonRefs.current) {
+      if (btn.contains(el) && name !== draggedCategory && name !== "All") {
+        setDragOverCategory(name as Category);
+        return;
+      }
+    }
+    setDragOverCategory(null);
+  };
+
+  const handleCategoryPointerUp = () => {
+    if (!draggedCategory || !dragOverCategory || dragOverCategory === "All") {
+      setDraggedCategory(null);
+      setDragOverCategory(null);
+      setDragPointer(null);
+      return;
+    }
+
+    const targetCat = dragOverCategory as TopicCategory;
+    const draggedCat = draggedCategory;
+    setDraggedCategory(null);
+    setDragOverCategory(null);
+    setDragPointer(null);
+
+    setCategoryOrder((current) => {
+      const next = [...current];
+      const fromIdx = next.indexOf(draggedCat);
+      const toIdx = next.indexOf(targetCat);
+      if (fromIdx === -1 || toIdx === -1) return current;
+      next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, draggedCat);
+      saveSetting("categoryOrder", JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const handleCategoryContextMenu = (e: React.MouseEvent, cat: Category) => {
+    e.preventDefault();
+    if (cat === "All") return;
+    setCategoryContextMenu({ x: e.clientX, y: e.clientY, category: cat as TopicCategory });
+  };
+
   const setSortMode = (mode: "date" | "score") => {
     setSettings((current) => (current.sortMode === mode ? current : { ...current, sortMode: mode }));
     setRelevanceWarning(null);
@@ -625,8 +706,8 @@ function App(): React.JSX.Element {
 
           {showCategoryManager && (
             <div className={`mb-4 space-y-2 rounded-2xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/70" : "border-zinc-200 bg-zinc-150"}`}>
-              {TOPIC_CATEGORIES.map((category) => {
-                const visibleCount = TOPIC_CATEGORIES.filter((item) => visibleCategories[item]).length;
+              {categoryOrder.map((category) => {
+                const visibleCount = categoryOrder.filter((item) => visibleCategories[item]).length;
                 const isLastVisible = visibleCategories[category] && visibleCount === 1;
 
                 return (
@@ -652,25 +733,48 @@ function App(): React.JSX.Element {
             </div>
           )}
 
-          {availableCategories.map((cat) => (
-            <button
-              key={cat}
-              onClick={() => {
-                setSelectedCategory(cat);
-                void invoke("save_setting", { key: "selectedCategory", value: cat });
-              }}
-              className={`group flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm font-medium transition-all ${
-                selectedCategory === cat
-                  ? isDarkMode
-                    ? "bg-zinc-800 text-zinc-100 ring-1 ring-zinc-700"
-                    : "bg-zinc-200 text-zinc-900 ring-1 ring-zinc-300"
-                  : "text-zinc-500 hover:bg-zinc-800/30 hover:text-zinc-300"
-              }`}
-            >
-              <span>{cat}</span>
-              {selectedCategory === cat && <ChevronRight size={14} />}
-            </button>
-          ))}
+          {availableCategories.map((cat) => {
+            const isDragging = draggedCategory === cat;
+            const isDropTarget = dragOverCategory === cat && draggedCategory && cat !== "All";
+            return (
+              <div key={cat} className="relative">
+                {isDropTarget && (
+                  <div className={`absolute -top-1 left-3 right-3 h-0.5 rounded-full ${isDarkMode ? "bg-blue-400" : "bg-blue-500"}`} />
+                )}
+                <button
+                  ref={(el) => { if (el) categoryButtonRefs.current.set(cat, el); else categoryButtonRefs.current.delete(cat); }}
+                  onPointerDown={cat !== "All" ? (e) => handleCategoryPointerDown(e, cat as TopicCategory) : undefined}
+                  onPointerMove={handleCategoryPointerMove}
+                  onPointerUp={handleCategoryPointerUp}
+                  onContextMenu={(e) => handleCategoryContextMenu(e, cat)}
+                  onClick={() => {
+                    if (draggedCategory) return;
+                    setSelectedCategory(cat);
+                    void invoke("save_setting", { key: "selectedCategory", value: cat });
+                  }}
+                  className={`group flex w-full items-center gap-1 rounded-lg px-1.5 py-2 text-left text-sm font-medium transition-all select-none ${
+                    isDragging
+                      ? isDarkMode
+                        ? "bg-zinc-800/50 text-zinc-500 opacity-40"
+                        : "bg-zinc-200/50 text-zinc-400 opacity-40"
+                      : selectedCategory === cat
+                        ? isDarkMode
+                          ? "bg-zinc-800 text-zinc-100 ring-1 ring-zinc-700"
+                          : "bg-zinc-200 text-zinc-900 ring-1 ring-zinc-300"
+                        : "text-zinc-500 hover:bg-zinc-800/30 hover:text-zinc-300"
+                  } ${cat !== "All" ? "cursor-grab active:cursor-grabbing" : ""}`}
+                >
+                  {cat !== "All" ? (
+                    <GripVertical size={14} className="shrink-0 text-zinc-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  ) : (
+                    <span className="w-[14px] shrink-0" />
+                  )}
+                  <span className="flex-1">{cat}</span>
+                  {selectedCategory === cat && !draggedCategory && <ChevronRight size={14} className="shrink-0 mr-1" />}
+                </button>
+              </div>
+            );
+          })}
 
           {availableCategories.length === 0 && (
             <div className="rounded-2xl border border-dashed border-zinc-700 px-3 py-4 text-xs text-zinc-500">
@@ -678,6 +782,45 @@ function App(): React.JSX.Element {
             </div>
           )}
         </nav>
+
+        {categoryContextMenu && (
+          <div className="fixed inset-0 z-50" onClick={() => setCategoryContextMenu(null)}>
+            <div
+              className={`absolute min-w-[180px] rounded-xl border p-2 shadow-2xl ${
+                isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-200" : "border-zinc-300 bg-zinc-150 text-zinc-900"
+              }`}
+              style={{ left: categoryContextMenu.x, top: categoryContextMenu.y }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  toggleCategoryVisibility(categoryContextMenu.category);
+                  setCategoryContextMenu(null);
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-bold transition-colors ${
+                  isDarkMode ? "hover:bg-zinc-800" : "hover:bg-zinc-200"
+                }`}
+              >
+                <EyeOff size={14} />
+                <span>Hide "{categoryContextMenu.category}"</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {draggedCategory && dragPointer && (
+          <div
+            className={`pointer-events-none fixed z-50 rounded-lg border px-3 py-2 text-sm font-medium shadow-xl ${
+              isDarkMode
+                ? "border-zinc-600 bg-zinc-800 text-zinc-100"
+                : "border-zinc-300 bg-white text-zinc-900"
+            }`}
+            style={{ left: dragPointer.x + 12, top: dragPointer.y - 14 }}
+          >
+            {draggedCategory}
+          </div>
+        )}
 
         <div className="space-y-4 border-t border-inherit p-4">
           <PreferencePanel

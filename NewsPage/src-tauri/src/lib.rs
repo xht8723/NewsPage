@@ -98,15 +98,18 @@ fn file_ext_from_content_type(content_type: &str) -> Option<String> {
 
 async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str) -> Result<String, String> {
     if !(thumbnail_url.starts_with("http://") || thumbnail_url.starts_with("https://")) {
-        return Err("thumbnail URL is not http/https".to_string());
+        return Err(format!("thumbnail URL is not http/https: {}", thumbnail_url));
     }
+
+    println!("[thumbnail] downloading: {}", thumbnail_url);
 
     let response = reqwest::get(thumbnail_url)
         .await
         .map_err(|e| format!("thumbnail request failed: {}", e))?;
 
-    if !response.status().is_success() {
-        return Err(format!("thumbnail request returned status {}", response.status()));
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("thumbnail request returned status {}", status));
     }
 
     let content_type = response
@@ -115,10 +118,18 @@ async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
+    println!(
+        "[thumbnail] response: status={}, content-type={}",
+        status,
+        content_type.as_deref().unwrap_or("(none)")
+    );
+
     let bytes = response
         .bytes()
         .await
         .map_err(|e| format!("reading thumbnail bytes failed: {}", e))?;
+
+    println!("[thumbnail] received {} bytes", bytes.len());
 
     let ext = content_type
         .as_deref()
@@ -128,6 +139,8 @@ async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str
 
     let file_name = format!("{}.{}", sanitize_filename(article_id), ext);
     let file_path = cache_dir.join(file_name);
+
+    println!("[thumbnail] saving to: {}", file_path.display());
 
     tokio::fs::write(&file_path, &bytes)
         .await
@@ -143,14 +156,18 @@ async fn enrich_media_and_embedding(
     local_embedding_model: &str,
 ) {
     if !enriched.thumbnail.trim().is_empty() {
+        println!("[thumbnail] caching thumbnail for '{}': {}", enriched.id, enriched.thumbnail);
         match cache_thumbnail(image_cache_dir, &enriched.id, &enriched.thumbnail).await {
             Ok(cached_path) => {
+                println!("[thumbnail] cached to: {}", cached_path);
                 enriched.thumbnail = cached_path;
             }
             Err(err) => {
-                println!("Thumbnail cache failed for {}: {}", enriched.id, err);
+                println!("[thumbnail] cache failed for '{}': {}", enriched.id, err);
             }
         }
+    } else {
+        println!("[thumbnail] no thumbnail URL for '{}', skipping cache", enriched.id);
     }
 
     // Generate and store embedding (soft failure — missing embedding degrades gracefully).

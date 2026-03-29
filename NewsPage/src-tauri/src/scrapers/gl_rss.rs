@@ -207,6 +207,56 @@ struct RssItem {
     pub_date_parsed: Option<DateTime<Utc>>,
     source_name: String,
     source_icon: String,
+    thumbnail: String,
+}
+
+/// Extract a thumbnail URL from an RSS `<item>` block.
+///
+/// Priority:
+/// 1. `<media:content url="..." />` (Google News standard)
+/// 2. `<enclosure url="..." />` (generic RSS)
+/// 3. First `<img src="...">` inside `<description>` CDATA
+fn extract_rss_thumbnail(item_xml: &str) -> String {
+    // 1. <media:content url="..." />
+    if let Some(url) = extract_media_content_url(item_xml) {
+        return url;
+    }
+    // 2. <enclosure url="..." />
+    if let Some(url) = extract_enclosure_url(item_xml) {
+        return url;
+    }
+    // 3. <img> inside <description>
+    if let Some(desc) = xml_tag_content(item_xml, "description") {
+        let decoded = strip_cdata(&decode_entities(desc));
+        if let Some(url) = first_img_src(&decoded) {
+            return url;
+        }
+    }
+    String::new()
+}
+
+fn extract_media_content_url(xml: &str) -> Option<String> {
+    let start = xml.find("<media:content")?;
+    let rest = &xml[start..];
+    let end = rest.find('>')?;
+    let tag = &rest[..end];
+    extract_attr(tag, "url").filter(|u| u.starts_with("http"))
+}
+
+fn extract_enclosure_url(xml: &str) -> Option<String> {
+    let start = xml.find("<enclosure")?;
+    let rest = &xml[start..];
+    let end = rest.find('>')?;
+    let tag = &rest[..end];
+    extract_attr(tag, "url").filter(|u| u.starts_with("http"))
+}
+
+fn first_img_src(html: &str) -> Option<String> {
+    let start = html.find("<img ")?;
+    let rest = &html[start..];
+    let end = rest.find('>')?;
+    let tag = &rest[..end];
+    extract_attr(tag, "src").filter(|u| u.starts_with("http"))
 }
 
 fn parse_rss_items(xml: &str) -> Vec<RssItem> {
@@ -235,6 +285,7 @@ fn parse_rss_items(xml: &str) -> Vec<RssItem> {
             .to_string();
         let pub_date_parsed = parse_pub_date(&pub_date_raw);
         let (source_name, source_icon) = parse_source_tag(item_xml);
+        let thumbnail = extract_rss_thumbnail(item_xml);
 
         if title.is_empty() || link.is_empty() {
             continue;
@@ -249,6 +300,7 @@ fn parse_rss_items(xml: &str) -> Vec<RssItem> {
             pub_date_parsed,
             source_name,
             source_icon,
+            thumbnail,
         });
     }
 
@@ -268,7 +320,7 @@ fn rss_item_to_news_item(rss: &RssItem, category: &str) -> NewsItem {
         source_name: rss.source_name.clone(),
         source_icon: rss.source_icon.clone(),
         authors: Vec::new(),
-        thumbnail: String::new(),
+        thumbnail: rss.thumbnail.clone(),
         tags: Vec::new(),
         category: category.to_string(),
         ai_summary: String::new(),
@@ -457,12 +509,63 @@ mod tests {
             pub_date_parsed: Some(Utc::now()),
             source_name: "Test Source".to_string(),
             source_icon: "https://example.com/icon.png".to_string(),
+            thumbnail: "https://example.com/thumb.jpg".to_string(),
         };
         let news = rss_item_to_news_item(&rss, "world");
         assert_eq!(news.category, "world");
         assert_eq!(news.title, "Test Article");
+        assert_eq!(news.thumbnail, "https://example.com/thumb.jpg");
         assert!(!news.id.is_empty());
         assert!(!news.is_enriched);
+    }
+
+    #[test]
+    fn extracts_media_content_thumbnail() {
+        let item_xml = r#"<item>
+            <title>Test</title>
+            <link>https://example.com</link>
+            <media:content url="https://cdn.example.com/image.jpg" medium="image" width="800" height="450"/>
+        </item>"#;
+        assert_eq!(extract_rss_thumbnail(item_xml), "https://cdn.example.com/image.jpg");
+    }
+
+    #[test]
+    fn extracts_enclosure_thumbnail() {
+        let item_xml = r#"<item>
+            <title>Test</title>
+            <link>https://example.com</link>
+            <enclosure url="https://cdn.example.com/enc.jpg" type="image/jpeg"/>
+        </item>"#;
+        assert_eq!(extract_rss_thumbnail(item_xml), "https://cdn.example.com/enc.jpg");
+    }
+
+    #[test]
+    fn extracts_img_from_description() {
+        let item_xml = r#"<item>
+            <title>Test</title>
+            <link>https://example.com</link>
+            <description><![CDATA[<a href="https://example.com"><img src="https://cdn.example.com/desc.jpg" /></a> Some text]]></description>
+        </item>"#;
+        assert_eq!(extract_rss_thumbnail(item_xml), "https://cdn.example.com/desc.jpg");
+    }
+
+    #[test]
+    fn media_content_preferred_over_description_img() {
+        let item_xml = r#"<item>
+            <title>Test</title>
+            <media:content url="https://cdn.example.com/media.jpg" medium="image"/>
+            <description><![CDATA[<img src="https://cdn.example.com/desc.jpg" />]]></description>
+        </item>"#;
+        assert_eq!(extract_rss_thumbnail(item_xml), "https://cdn.example.com/media.jpg");
+    }
+
+    #[test]
+    fn no_thumbnail_in_rss_returns_empty() {
+        let item_xml = r#"<item>
+            <title>Test</title>
+            <link>https://example.com</link>
+        </item>"#;
+        assert_eq!(extract_rss_thumbnail(item_xml), "");
     }
 
     #[test]

@@ -39,6 +39,8 @@ trafilatura = "0.3.0"
 scraper = "0.26.0"
 sha2 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+base64 = "0.22"
+urlencoding = "2"
 
 [dev-dependencies]
 tauri = { version = "2.0.0", features = ["test"] } # Ensure the version matches your main tauri dependency
