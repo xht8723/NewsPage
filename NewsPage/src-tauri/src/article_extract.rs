@@ -306,6 +306,7 @@ pub async fn fetch_article_text_and_thumbnail(
     Ok((result.content_text, thumbnail))
 }
 
+#[cfg(test)]
 fn resolve_redirect_url(html: &str) -> Option<String> {
     let document = Html::parse_document(html);
 
@@ -362,6 +363,7 @@ fn resolve_redirect_url(html: &str) -> Option<String> {
     None
 }
 
+#[cfg(test)]
 fn parse_meta_refresh_url(content: &str) -> Option<String> {
     let lower = content.to_ascii_lowercase();
     let index = lower.find("url=")?;
