@@ -4,6 +4,7 @@ use reqwest::Client;
 use std::collections::HashSet;
 
 use crate::id_generator::generate_article_id;
+use crate::logging;
 use crate::news_item::NewsItem;
 
 use super::{ScrapeContext, ScraperStage};
@@ -120,9 +121,6 @@ fn build_feed_url(region: &RegionConfig, topic: &TopicDef) -> String {
 // ---------------------------------------------------------------------------
 // RSS XML parsing (lightweight, no XML crate required)
 // ---------------------------------------------------------------------------
-
-/// Delay between successive RSS fetches to avoid rate-limiting (ms).
-const FETCH_DELAY_MS: u64 = 150;
 
 /// Extract text between the first `<tag...>` and `</tag>` in `xml`.
 fn xml_tag_content<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
@@ -321,7 +319,6 @@ fn rss_item_to_news_item(rss: &RssItem, category: &str) -> NewsItem {
         source_icon: rss.source_icon.clone(),
         authors: Vec::new(),
         thumbnail: rss.thumbnail.clone(),
-        tags: Vec::new(),
         category: category.to_string(),
         ai_summary: String::new(),
         og_content: String::new(),
@@ -368,11 +365,21 @@ async fn scrape_region(
     seen_ids: &mut HashSet<String>,
     out: &mut Vec<NewsItem>,
 ) {
+    logging::info(
+        "Scrape",
+        format!("Starting RSS scrape for region '{}' ({} topics)", region.id, region.topics.len()),
+        Some(region.topics.len()),
+    );
     for topic in region.topics {
         let url = build_feed_url(region, topic);
         println!(
             "[gl_rss] Fetching {} / {} → {}",
             region.id, topic.category, url
+        );
+        logging::info(
+            "Scrape",
+            format!("Fetching feed {}/{}", region.id, topic.category),
+            None,
         );
 
         match fetch_rss_feed(client, &url).await {
@@ -399,14 +406,24 @@ async fn scrape_region(
                     region.id,
                     topic.category
                 );
+                logging::info(
+                    "Scrape",
+                    format!(
+                        "{}/{} parsed {} item(s), added {} unique within 24h",
+                        region.id,
+                        topic.category,
+                        rss_items.len(),
+                        added
+                    ),
+                    Some(added),
+                );
             }
             Err(e) => {
                 println!("[gl_rss] Warning: {}", e);
+                logging::warn("Scrape", format!("RSS fetch warning for {}/{}: {}", region.id, topic.category, e), None);
             }
         }
 
-        // Small delay between requests to be kind to Google's servers
-        tokio::time::sleep(tokio::time::Duration::from_millis(FETCH_DELAY_MS)).await;
     }
 }
 
@@ -422,6 +439,11 @@ pub async fn scrape_rss_regions(region_ids: &[String]) -> Result<Vec<NewsItem>, 
                 region_id,
                 list_region_ids()
             );
+            logging::warn(
+                "Scrape",
+                format!("Unknown region '{}' skipped", region_id),
+                None,
+            );
             continue;
         };
         scrape_region(&client, region, &mut seen_ids, &mut all_items).await;
@@ -429,6 +451,12 @@ pub async fn scrape_rss_regions(region_ids: &[String]) -> Result<Vec<NewsItem>, 
 
     // Sort by date descending
     all_items.sort_by(|a, b| b.date.cmp(&a.date));
+
+    logging::info(
+        "Scrape",
+        format!("RSS scrape complete with {} total unique item(s)", all_items.len()),
+        Some(all_items.len()),
+    );
 
     Ok(all_items)
 }

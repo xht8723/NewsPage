@@ -2,6 +2,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 use std::str::FromStr;
 
+use crate::logging;
 use crate::news_item::NewsItem;
 
 /// Encode a `Vec<f32>` as a flat little-endian byte blob for SQLite BLOB storage.
@@ -36,7 +37,6 @@ source_name: row.get("source_name"),
 source_icon: row.get("source_icon"),
 authors: decode_string_list(&row.get::<String, _>("authors")),
 thumbnail: row.get("thumbnail"),
-tags: decode_string_list(&row.get::<String, _>("tags")),
 category: row.get("category"),
 ai_summary: row.get("ai_summary"),
 og_content: row.get("og_content"),
@@ -52,6 +52,7 @@ let pool = SqlitePoolOptions::new()
 .connect_with(options)
 .await?;
 create_news_table(&pool).await?;
+logging::info("DB", format!("Initialized SQLite database at {}", db_path), None);
 Ok(pool)
 }
 
@@ -66,7 +67,6 @@ source_name TEXT NOT NULL,
 source_icon TEXT NOT NULL,
 authors TEXT NOT NULL DEFAULT '[]',
 thumbnail TEXT NOT NULL,
-tags TEXT NOT NULL DEFAULT '[]',
 category TEXT NOT NULL,
 ai_summary TEXT NOT NULL DEFAULT '',
 og_content TEXT NOT NULL DEFAULT '',
@@ -97,11 +97,16 @@ sqlx::query("CREATE INDEX IF NOT EXISTS idx_news_is_enriched ON news(is_enriched
 /// Persist an embedding vector for the given article id.
 pub async fn save_embedding(pool: &SqlitePool, id: &str, embedding: &[f32]) -> Result<(), sqlx::Error> {
     let blob = encode_embedding(embedding);
-    sqlx::query("UPDATE news SET embedding = ?1 WHERE id = ?2")
+    let result = sqlx::query("UPDATE news SET embedding = ?1 WHERE id = ?2")
         .bind(blob)
         .bind(id)
         .execute(pool)
         .await?;
+    logging::info(
+        "DB",
+        format!("Saved embedding for article {}", id),
+        Some(result.rows_affected() as usize),
+    );
     Ok(())
 }
 
@@ -116,7 +121,7 @@ pub async fn get_articles_with_embeddings(
     let rows = if let Some(cat) = category {
         sqlx::query(
             "SELECT id, title, url, date, source_name, source_icon, authors,
-                    thumbnail, tags, category, ai_summary, og_content, snippet, is_enriched,
+                    thumbnail, category, ai_summary, og_content, snippet, is_enriched,
                     embedding
              FROM news
              WHERE is_enriched = 1 AND category = ?1
@@ -131,7 +136,7 @@ pub async fn get_articles_with_embeddings(
     } else {
         sqlx::query(
             "SELECT id, title, url, date, source_name, source_icon, authors,
-                    thumbnail, tags, category, ai_summary, og_content, snippet, is_enriched,
+                    thumbnail, category, ai_summary, og_content, snippet, is_enriched,
                     embedding
              FROM news
              WHERE is_enriched = 1
@@ -160,11 +165,11 @@ pub async fn get_articles_with_embeddings(
 }
 
 pub async fn upsert_article(pool: &SqlitePool, article: &NewsItem) -> Result<(), sqlx::Error> {
-sqlx::query(
+let result = sqlx::query(
 "INSERT INTO news (
 id, title, url, date, source_name, source_icon, authors,
-thumbnail, tags, category, ai_summary, og_content, snippet, is_enriched
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+thumbnail, category, ai_summary, og_content, snippet, is_enriched
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
 ON CONFLICT(id) DO UPDATE SET
 title       = excluded.title,
 url         = excluded.url,
@@ -174,7 +179,6 @@ source_icon = excluded.source_icon,
 authors     = excluded.authors,
 category    = excluded.category,
 thumbnail   = CASE WHEN excluded.is_enriched = 1 THEN excluded.thumbnail  ELSE news.thumbnail  END,
-tags        = CASE WHEN excluded.is_enriched = 1 THEN excluded.tags        ELSE news.tags        END,
 ai_summary  = CASE WHEN excluded.is_enriched = 1 THEN excluded.ai_summary  ELSE news.ai_summary  END,
 og_content  = CASE WHEN excluded.is_enriched = 1 THEN excluded.og_content  ELSE news.og_content  END,
 snippet     = CASE WHEN excluded.is_enriched = 1 THEN excluded.snippet     ELSE news.snippet     END,
@@ -189,7 +193,6 @@ updated_at  = CURRENT_TIMESTAMP",
 .bind(&article.source_icon)
 .bind(encode_string_list(&article.authors))
 .bind(&article.thumbnail)
-.bind(encode_string_list(&article.tags))
 .bind(&article.category)
 .bind(&article.ai_summary)
 .bind(&article.og_content)
@@ -198,17 +201,28 @@ updated_at  = CURRENT_TIMESTAMP",
 .execute(pool)
 .await?;
 
+logging::info(
+"DB",
+format!("Upserted article '{}' ({})", article.title, article.id),
+Some(result.rows_affected() as usize),
+);
+
 Ok(())
 }
 
 /// Set is_enriched = true for the given article id.
 pub async fn mark_enriched(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
-sqlx::query(
+let result = sqlx::query(
 "UPDATE news SET is_enriched = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
 )
 .bind(id)
 .execute(pool)
 .await?;
+logging::info(
+"DB",
+format!("Marked article {} as enriched", id),
+Some(result.rows_affected() as usize),
+);
 Ok(())
 }
 
@@ -222,10 +236,18 @@ let rows = sqlx::query(
 .fetch_all(pool)
 .await?;
 
-Ok(rows
+let categories = rows
 .iter()
 .map(|row| row.get::<String, _>("category"))
-.collect())
+.collect::<Vec<String>>();
+
+logging::info(
+"DB",
+format!("Found {} category(ies) with unenriched articles", categories.len()),
+Some(categories.len()),
+);
+
+Ok(categories)
 }
 
 pub async fn get_unenriched_articles_by_category(
@@ -235,7 +257,7 @@ limit: i64,
 ) -> Result<Vec<NewsItem>, sqlx::Error> {
 let rows = sqlx::query(
 "SELECT id, title, url, date, source_name, source_icon, authors,
-        thumbnail, tags, category, ai_summary, og_content, snippet, is_enriched
+        thumbnail, category, ai_summary, og_content, snippet, is_enriched
  FROM news
  WHERE is_enriched = 0 AND category = ?1
  ORDER BY date DESC
@@ -246,13 +268,19 @@ let rows = sqlx::query(
 .fetch_all(pool)
 .await?;
 
-Ok(rows.iter().map(row_to_news_item).collect())
+let items = rows.iter().map(row_to_news_item).collect::<Vec<NewsItem>>();
+logging::info(
+"DB",
+format!("Loaded {} unenriched article(s) for category '{}'", items.len(), category),
+Some(items.len()),
+);
+Ok(items)
 }
 
 pub async fn get_article_by_id(pool: &SqlitePool, id: &str) -> Result<Option<NewsItem>, sqlx::Error> {
 let row = sqlx::query(
 "SELECT id, title, url, date, source_name, source_icon, authors,
-        thumbnail, tags, category, ai_summary, og_content, snippet, is_enriched
+        thumbnail, category, ai_summary, og_content, snippet, is_enriched
  FROM news WHERE id = ?1",
 )
 .bind(id)
@@ -264,7 +292,7 @@ Ok(row.as_ref().map(row_to_news_item))
 pub async fn list_articles(pool: &SqlitePool, limit: i64, offset: i64) -> Result<Vec<NewsItem>, sqlx::Error> {
 let rows = sqlx::query(
 "SELECT id, title, url, date, source_name, source_icon, authors,
-        thumbnail, tags, category, ai_summary, og_content, snippet, is_enriched
+        thumbnail, category, ai_summary, og_content, snippet, is_enriched
  FROM news
  WHERE is_enriched = 1
  ORDER BY date DESC
@@ -285,7 +313,7 @@ offset: i64,
 ) -> Result<Vec<NewsItem>, sqlx::Error> {
 let rows = sqlx::query(
 "SELECT id, title, url, date, source_name, source_icon, authors,
-        thumbnail, tags, category, ai_summary, og_content, snippet, is_enriched
+        thumbnail, category, ai_summary, og_content, snippet, is_enriched
  FROM news
  WHERE is_enriched = 1 AND category = ?1
  ORDER BY date DESC
@@ -302,7 +330,7 @@ Ok(rows.iter().map(row_to_news_item).collect())
 pub async fn get_articles_on_date(pool: &SqlitePool, date: &str) -> Result<Vec<NewsItem>, sqlx::Error> {
 let rows = sqlx::query(
 "SELECT id, title, url, date, source_name, source_icon, authors,
-        thumbnail, tags, category, ai_summary, og_content, snippet, is_enriched
+        thumbnail, category, ai_summary, og_content, snippet, is_enriched
  FROM news
  WHERE is_enriched = 1 AND date = ?1
  ORDER BY date DESC",
@@ -322,7 +350,7 @@ offset: i64,
 let pattern = format!("%{}%", keyword);
 let rows = sqlx::query(
 "SELECT id, title, url, date, source_name, source_icon, authors,
-        thumbnail, tags, category, ai_summary, og_content, snippet, is_enriched
+        thumbnail, category, ai_summary, og_content, snippet, is_enriched
  FROM news
  WHERE is_enriched = 1 AND title LIKE ?1
  ORDER BY date DESC
@@ -336,19 +364,17 @@ let rows = sqlx::query(
 Ok(rows.iter().map(row_to_news_item).collect())
 }
 
-pub async fn update_summary_and_tags(
+pub async fn update_summary(
 pool: &SqlitePool,
 id: &str,
 ai_summary: &str,
-tags: &[String],
 ) -> Result<bool, sqlx::Error> {
 let result = sqlx::query(
 "UPDATE news
- SET ai_summary = ?1, tags = ?2, updated_at = CURRENT_TIMESTAMP
- WHERE id = ?3",
+ SET ai_summary = ?1, updated_at = CURRENT_TIMESTAMP
+ WHERE id = ?2",
 )
 .bind(ai_summary)
-.bind(encode_string_list(tags))
 .bind(id)
 .execute(pool)
 .await?;
@@ -389,7 +415,6 @@ source_name: "Example".to_string(),
 source_icon: "https://example.com/icon.png".to_string(),
 authors: vec!["Author One".to_string()],
 thumbnail: "https://example.com/thumb.png".to_string(),
-tags: vec!["test".to_string()],
 category: "anime".to_string(),
 ai_summary: String::new(),
 og_content: String::new(),
@@ -428,7 +453,6 @@ let still_enriched = get_article_by_id(&pool, &item.id)
 assert!(still_enriched.is_enriched, "is_enriched must not be downgraded");
 
 item.ai_summary = "updated summary".to_string();
-item.tags = vec!["anime".to_string(), "news".to_string()];
 item.is_enriched = true;
 upsert_article(&pool, &item).await.expect("enriched upsert should work");
 let updated = get_article_by_id(&pool, &item.id)
@@ -440,12 +464,11 @@ let searched = search_articles_by_title(&pool, "Sample", 10, 0)
 .await.expect("title search should work");
 assert_eq!(searched.len(), 1);
 
-let updated_tags = update_summary_and_tags(
+let updated_summary = update_summary(
 &pool, &item.id,
 "summary from updater",
-&["tag1".to_string(), "tag2".to_string()],
-).await.expect("summary and tags update should work");
-assert!(updated_tags);
+).await.expect("summary update should work");
+assert!(updated_summary);
 
 let removed = delete_article_by_id(&pool, &item.id)
 .await.expect("delete should work");

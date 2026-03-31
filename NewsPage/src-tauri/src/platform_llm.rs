@@ -86,19 +86,19 @@ pub trait LLMProviderImpl: Send + Sync {
     /// Get available models for this provider
     async fn list_models(&self) -> Result<Vec<String>, String>;
 
-    /// Run the enrichment prompts (tags, snippet, summary)
+    /// Run the enrichment prompts (snippet, summary)
     async fn enrich(
         &self,
         title: &str,
         text: &str,
-    ) -> Result<(Vec<String>, String, String), String>;
+    ) -> Result<(String, String), String>;
 
     /// Batch-enrich multiple articles in a single API call.
     /// Default implementation falls back to sequential `enrich()` calls.
     async fn enrich_batch(
         &self,
         articles: &[(String, String)],
-    ) -> Vec<Result<(Vec<String>, String, String), String>> {
+    ) -> Vec<Result<(String, String), String>> {
         let mut results = Vec::with_capacity(articles.len());
         for (title, text) in articles {
             results.push(self.enrich(title, text).await);
@@ -156,7 +156,7 @@ impl LLMProviderImpl for OllamaProvider {
             .collect())
     }
 
-    async fn enrich(&self, title: &str, text: &str) -> Result<(Vec<String>, String, String), String> {
+    async fn enrich(&self, title: &str, text: &str) -> Result<(String, String), String> {
         use ollama_rs::generation::completion::request::GenerationRequest;
         use ollama_rs::Ollama;
 
@@ -168,32 +168,7 @@ impl LLMProviderImpl for OllamaProvider {
 
         let ollama = Ollama::new(host, port);
 
-        // --- Prompt 1: Tags ---
-        let prompt_tags = format!(
-            "You are a news article tagger. Given the title and article text below, output up to 5 relevant tags.\n\
-			Rules:\n\
-			- Identify themes, proper nouns, named entities (e.g. game titles, studio names, people, places).\n\
-			- Output ONLY the tags as a comma-separated list. No explanation. No numbering.\n\
-			- Up to 5 tags maximum.\n\
-			- Capitalize proper nouns; all other tags in lowercase. No underscores or special characters.\n\n\
-			Title: {}\n\
-			Article: {}",
-            title, text
-        );
-        let tag_response = ollama
-            .generate(GenerationRequest::new(model.to_string(), prompt_tags))
-            .await
-            .map_err(|e| format!("Ollama tags error: {}", e))?;
-
-        let tags: Vec<String> = tag_response
-            .response
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .take(5)
-            .collect();
-
-        // --- Prompt 2: Snippet ---
+        // --- Prompt 1: Snippet ---
         let prompt_snippet = format!(
             "You are a news summarizer. Write exactly ONE sentence that captures the most important point of the article below\n\
 			Rules:\n\
@@ -210,7 +185,7 @@ impl LLMProviderImpl for OllamaProvider {
 
         let snippet = snippet_response.response.trim().to_string();
 
-        // --- Prompt 3: Summary ---
+        // --- Prompt 2: Summary ---
         let prompt_summary = format!(
             "You are a precise news summarizer. Write a clear, well-structured summary of the article below.\n\
 			Rules:\n\
@@ -229,7 +204,7 @@ impl LLMProviderImpl for OllamaProvider {
 
         let ai_summary = summary_response.response.trim().to_string();
 
-        Ok((tags, snippet, ai_summary))
+        Ok((snippet, ai_summary))
     }
 
     async fn test_connection(&self) -> Result<bool, String> {
@@ -276,7 +251,7 @@ impl LLMProviderImpl for OpenAIProvider {
         Ok(OPENAI_MODELS.iter().map(|s| s.to_string()).collect())
     }
 
-    async fn enrich(&self, title: &str, text: &str) -> Result<(Vec<String>, String, String), String> {
+    async fn enrich(&self, title: &str, text: &str) -> Result<(String, String), String> {
         #[derive(Serialize, Deserialize)]
         struct Message {
             role: String,
@@ -301,48 +276,6 @@ impl LLMProviderImpl for OpenAIProvider {
         }
 
         let client = reqwest::Client::new();
-
-        // Get tags
-        let tags_prompt = format!(
-            "You are a news article tagger. Given the title and article text below, output up to 5 relevant tags.\n\
-			Rules: Output ONLY the tags as a comma-separated list. No explanation.\n\n\
-			Title: {}\nArticle: {}",
-            title, text
-        );
-
-        let tags_req = ChatRequest {
-            model: self.model.clone(),
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: tags_prompt,
-            }],
-            temperature: 0.7,
-        };
-
-        let tags_resp = client
-            .post("https://api.openai.com/v1/chat/completions")
-            .bearer_auth(&self.api_key)
-            .json(&tags_req)
-            .send()
-            .await
-            .map_err(|e| format!("OpenAI tags request failed: {}", e))?
-            .json::<ChatResponse>()
-            .await
-            .map_err(|e| format!("Failed to parse OpenAI tags response: {}", e))?;
-
-        let tags: Vec<String> = tags_resp
-            .choices
-            .first()
-            .map(|c| {
-                c.message
-                    .content
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .take(5)
-                    .collect()
-            })
-            .unwrap_or_default();
 
         // Get snippet
         let snippet_prompt = format!(
@@ -412,7 +345,7 @@ impl LLMProviderImpl for OpenAIProvider {
             .map(|c| c.message.content.trim().to_string())
             .unwrap_or_default();
 
-        Ok((tags, snippet, ai_summary))
+        Ok((snippet, ai_summary))
     }
 
     async fn test_connection(&self) -> Result<bool, String> {
@@ -456,7 +389,7 @@ impl LLMProviderImpl for ClaudeProvider {
         Ok(CLAUDE_MODELS.iter().map(|s| s.to_string()).collect())
     }
 
-    async fn enrich(&self, title: &str, text: &str) -> Result<(Vec<String>, String, String), String> {
+    async fn enrich(&self, title: &str, text: &str) -> Result<(String, String), String> {
         #[derive(Serialize)]
         struct TextContent {
             r#type: String,
@@ -489,51 +422,6 @@ impl LLMProviderImpl for ClaudeProvider {
         }
 
         let client = reqwest::Client::new();
-
-        // Get tags
-        let tags_prompt = format!(
-            "You are a news article tagger. Given the title and article text below, output up to 5 relevant tags.\n\
-			Rules: Output ONLY the tags as a comma-separated list. No explanation.\n\n\
-			Title: {}\nArticle: {}",
-            title, text
-        );
-
-        let tags_req = ClaudeRequest {
-            model: self.model.clone(),
-            max_tokens: 200,
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: vec![TextContent {
-                    r#type: "text".to_string(),
-                    text: tags_prompt,
-                }],
-            }],
-        };
-
-        let tags_resp = client
-            .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .json(&tags_req)
-            .send()
-            .await
-            .map_err(|e| format!("Claude tags request failed: {}", e))?
-            .json::<ClaudeResponse>()
-            .await
-            .map_err(|e| format!("Failed to parse Claude tags response: {}", e))?;
-
-        let tags: Vec<String> = tags_resp
-            .content
-            .first()
-            .map(|c| {
-                c.text
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .take(5)
-                    .collect()
-            })
-            .unwrap_or_default();
 
         // Get snippet
         let snippet_prompt = format!(
@@ -611,7 +499,7 @@ impl LLMProviderImpl for ClaudeProvider {
             .map(|c| c.text.trim().to_string())
             .unwrap_or_default();
 
-        Ok((tags, snippet, ai_summary))
+        Ok((snippet, ai_summary))
     }
 
     async fn test_connection(&self) -> Result<bool, String> {
@@ -690,7 +578,7 @@ impl LLMProviderImpl for GeminiProvider {
         Ok(GEMINI_MODELS.iter().map(|s| s.to_string()).collect())
     }
 
-    async fn enrich(&self, title: &str, text: &str) -> Result<(Vec<String>, String, String), String> {
+    async fn enrich(&self, title: &str, text: &str) -> Result<(String, String), String> {
         let results = self.enrich_batch(&[(title.to_string(), text.to_string())]).await;
         results.into_iter().next().unwrap_or_else(|| Err("No result from batch".to_string()))
     }
@@ -698,7 +586,7 @@ impl LLMProviderImpl for GeminiProvider {
     async fn enrich_batch(
         &self,
         articles: &[(String, String)],
-    ) -> Vec<Result<(Vec<String>, String, String), String>> {
+    ) -> Vec<Result<(String, String), String>> {
         if articles.is_empty() {
             return vec![];
         }
@@ -719,20 +607,19 @@ impl LLMProviderImpl for GeminiProvider {
         struct GeminiResponse { candidates: Vec<Candidate> }
 
         let n = articles.len();
-        let mut prompt = String::from(
-            "You are a news enrichment engine. For each article below, produce exactly:\n\
-             TAGS: up to 5 relevant tags (comma-separated)\n\
-             SNIPPET: one sentence capturing the most important point\n\
-             SUMMARY: 3-10 bullet points, each starting with \"- \"\n\n\
+            let s = if n == 1 { "" } else { "s" };
+            let mut prompt = format!(
+                "You are to summarize news articles. You will process exactly {n} article{s}.\n\
+                 For each article, produce exactly:\n\
+             SNIPPET: 1-3 short sentences introducing the article content.\n\
+             SUMMARY: 1-8 bullet points, each starting with \"- \"\n\n\
              Use this EXACT output format for each article:\n\n\
              ===ARTICLE 1===\n\
-             TAGS: tag1, tag2, tag3\n\
-             SNIPPET: The one sentence.\n\
+             SNIPPET:\n\
              SUMMARY:\n\
              - Point 1\n\
              - Point 2\n\n\
              ===ARTICLE 2===\n\
-             TAGS: ...\n\
              SNIPPET: ...\n\
              SUMMARY:\n\
              - ...\n\n\
@@ -962,7 +849,7 @@ fn truncate_at_char_boundary(s: &str, max_bytes: usize) -> &str {
 fn parse_batch_response(
     text: &str,
     expected_count: usize,
-) -> Vec<Result<(Vec<String>, String, String), String>> {
+) -> Vec<Result<(String, String), String>> {
     // Split on ===ARTICLE N=== markers
     let mut sections: Vec<&str> = Vec::new();
     let mut remaining = text;
@@ -1001,11 +888,10 @@ fn parse_batch_response(
     for (i, section) in sections.iter().enumerate().take(expected_count) {
         let parsed = parse_single_article_section(section);
         println!(
-            "[llm-batch] article {}: tags={}, snippet={}chars, summary={}chars",
+            "[llm-batch] article {}: snippet={}chars, summary={}chars",
             i + 1,
             parsed.0.len(),
-            parsed.1.len(),
-            parsed.2.len()
+            parsed.1.len()
         );
         results.push(Ok(parsed));
     }
@@ -1013,7 +899,7 @@ fn parse_batch_response(
     // Fill any missing articles with errors
     while results.len() < expected_count {
         results.push(Err(format!(
-            "Article {} missing from batch response",
+        "Article {} missing from batch response",
             results.len() + 1
         )));
     }
@@ -1021,9 +907,8 @@ fn parse_batch_response(
     results
 }
 
-/// Parse TAGS/SNIPPET/SUMMARY from a single article section of the batch response.
-fn parse_single_article_section(section: &str) -> (Vec<String>, String, String) {
-    let mut tags = Vec::new();
+/// Parse SNIPPET/SUMMARY from a single article section of the batch response.
+fn parse_single_article_section(section: &str) -> (String, String) {
     let mut snippet = String::new();
     let mut summary_lines = Vec::new();
     let mut current_field = "";
@@ -1034,15 +919,7 @@ fn parse_single_article_section(section: &str) -> (Vec<String>, String, String) 
             continue;
         }
 
-        if let Some(rest) = trimmed.strip_prefix("TAGS:") {
-            current_field = "tags";
-            tags = rest
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .take(5)
-                .collect();
-        } else if let Some(rest) = trimmed.strip_prefix("SNIPPET:") {
+        if let Some(rest) = trimmed.strip_prefix("SNIPPET:") {
             current_field = "snippet";
             snippet = rest.trim().to_string();
         } else if trimmed.starts_with("SUMMARY:") {
@@ -1056,5 +933,5 @@ fn parse_single_article_section(section: &str) -> (Vec<String>, String, String) 
     }
 
     let ai_summary = summary_lines.join("\n");
-    (tags, snippet, ai_summary)
+    (snippet, ai_summary)
 }

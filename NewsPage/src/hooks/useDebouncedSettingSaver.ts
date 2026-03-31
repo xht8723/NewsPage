@@ -11,6 +11,11 @@ export interface DebouncedSettingScheduler {
   cancel: () => void;
 }
 
+export interface DebouncedSettingSaverController {
+  saveSetting: (key: string, value: string) => void;
+  cancelPendingSave: () => void;
+}
+
 export function createDebouncedSettingScheduler(
   saveNow: (key: string, value: string) => void,
   delayMs: number,
@@ -36,6 +41,10 @@ export function createDebouncedSettingScheduler(
 }
 
 export function useDebouncedSettingSaver(delayMs: number = 500): (key: string, value: string) => void {
+  return useDebouncedSettingSaverController(delayMs).saveSetting;
+}
+
+export function useDebouncedSettingSaverController(delayMs: number = 500): DebouncedSettingSaverController {
   const timerRef = useRef<number | null>(null);
 
   const saveSetting = useCallback((key: string, value: string) => {
@@ -48,6 +57,13 @@ export function useDebouncedSettingSaver(delayMs: number = 500): (key: string, v
     }, delayMs);
   }, [delayMs]);
 
+  const cancelPendingSave = useCallback(() => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     return () => {
       if (timerRef.current !== null) {
@@ -57,5 +73,5 @@ export function useDebouncedSettingSaver(delayMs: number = 500): (key: string, v
     };
   }, []);
 
-  return saveSetting;
+  return { saveSetting, cancelPendingSave };
 }

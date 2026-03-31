@@ -23,7 +23,6 @@ export function ArticleCard({
 }: ArticleCardProps): React.JSX.Element {
   const isListLayout = layout === "list";
   const isCompactListLayout = layout === "compact_list";
-  const visibleTags = isCompactListLayout ? item.tags.slice(0, 3) : item.tags;
   const onThumbnailError = useImageFallback("https://placehold.co/640x360/27272a/a1a1aa?text=News");
 
   return (
@@ -71,13 +70,6 @@ export function ArticleCard({
               {(item.preferenceScore * 100).toFixed(0)}%
             </span>
           )}
-        </div>
-        <div className={`${isCompactListLayout ? "mb-2" : "mb-4"} flex flex-wrap gap-1.5`}>
-          {visibleTags.map((tag, tagIndex) => (
-            <span key={`${item.id}-tag-${tagIndex}`} className="rounded bg-zinc-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-zinc-500">
-              {tag}
-            </span>
-          ))}
         </div>
         <h3
           className={`${isCompactListLayout ? "mb-2 text-base" : "mb-3 text-lg"} font-bold leading-tight transition-colors ${

@@ -5,11 +5,9 @@ import {
   Calendar,
   Moon,
   Sun,
-  Newspaper,
   ChevronRight,
   Search,
   RefreshCw,
-  X,
   Settings,
   SlidersHorizontal,
   EyeOff,
@@ -26,12 +24,12 @@ import {
   type LayoutMode,
   type OllamaConnectionState,
 } from "./constants/news";
-import type { NewsArticle, BackendNewsItem, UserSettings, CardContextMenuState, LocalEmbeddingStatus } from "./types/news";
+import type { NewsArticle, BackendNewsItem, UserSettings, CardContextMenuState, LocalEmbeddingStatus, ProcessLogEntry, ProcessStageEvent } from "./types/news";
 import { mapBackendNewsItem } from "./utils/newsMapper";
 import { formatDateLocal, offsetDateString, getProviderLabel } from "./utils/newsMeta";
 import { buildLLMArgs, getSelectedApiKey, getSelectedEndpoint, getSelectedModel } from "./utils/llmConfig";
 import { useEnrichedNews } from "./hooks/useEnrichedNews";
-import { useDebouncedSettingSaver } from "./hooks/useDebouncedSettingSaver";
+import { useDebouncedSettingSaverController } from "./hooks/useDebouncedSettingSaver";
 import { PreferencePanel } from "./components/PreferencePanel";
 import { ArticleCard } from "./components/ArticleCard";
 import { LayoutSwitcher } from "./components/LayoutSwitcher";
@@ -39,7 +37,48 @@ import { CardContextMenu } from "./components/CardContextMenu";
 import { SettingsModal } from "./components/SettingsModal";
 import { ArticleDetailModal } from "./components/ArticleDetailModal";
 import { CalendarModal } from "./components/CalendarModal";
+import { LogPanel } from "./components/LogPanel";
 import "./App.css";
+
+type StageKey = "scrape" | "extract" | "enrich" | "persist";
+type StageState = "idle" | "running" | "done" | "error";
+type StartupPhase = "loading-settings" | "preparing-embedding" | "ready" | "error";
+
+const STAGE_ORDER: StageKey[] = ["scrape", "extract", "enrich", "persist"];
+
+function makeInitialStageStatus(): Record<StageKey, { state: StageState; current?: number; total?: number; message?: string }> {
+  return {
+    scrape: { state: "idle" },
+    extract: { state: "idle" },
+    enrich: { state: "idle" },
+    persist: { state: "idle" },
+  };
+}
+
+function createDefaultSettings(): UserSettings {
+  return {
+    newsLimit: 5,
+    scrapeCooldownHours: 2,
+      llmBatchSize: 5,
+    llmProvider: "ollama",
+    ollamaAddress: "http://127.0.0.1:11434",
+    ollamaModel: "qwen2.5:3b",
+    localEmbeddingModel: "",
+    embeddingInitialized: false,
+    embeddingModelLocked: false,
+    openaiApiKey: "",
+    openaiModel: "gpt-5.4-mini",
+    claudeApiKey: "",
+    claudeModel: "claude-sonnet-4-6",
+    geminiApiKey: "",
+    geminiModel: "gemini-2.5-flash",
+    selectedRegions: [],
+    likedConcepts: "",
+    dislikedConcepts: "",
+    sortMode: "date",
+    layout: "grid",
+  };
+}
 
 function App(): React.JSX.Element {
   const [loading, setLoading] = useState(false);
@@ -61,32 +100,16 @@ function App(): React.JSX.Element {
   const refreshTimeoutRef = useRef<number | null>(null);
   const [enrichmentProgress, setEnrichmentProgress] = useState<{ current: number; total: number; enriched: number } | null>(null);
   const [enrichmentError, setEnrichmentError] = useState<string | null>(null);
+  const [processLogs, setProcessLogs] = useState<ProcessLogEntry[]>([]);
+  const [showLogPanel, setShowLogPanel] = useState(false);
+  const [stageStatus, setStageStatus] = useState<Record<StageKey, { state: StageState; current?: number; total?: number; message?: string }>>(makeInitialStageStatus);
   const [contextMenu, setContextMenu] = useState<CardContextMenuState | null>(null);
   const [reprocessingArticleId, setReprocessingArticleId] = useState<string | null>(null);
+  const seenLogKeysRef = useRef<Map<string, number>>(new Map());
   const todayString = formatDateLocal(new Date());
   const canGoToNextDay = selectedDate < todayString;
 
-  const [settings, setSettings] = useState<UserSettings>({
-    newsLimit: 5,
-    scrapeCooldownHours: 2,
-    llmProvider: "ollama",
-    ollamaAddress: "http://127.0.0.1:11434",
-    ollamaModel: "qwen2.5:3b",
-    localEmbeddingModel: DEFAULT_EMBEDDING_MODEL,
-    embeddingInitialized: false,
-    embeddingModelLocked: false,
-    openaiApiKey: "",
-    openaiModel: "gpt-5.4-mini",
-    claudeApiKey: "",
-    claudeModel: "claude-sonnet-4-6",
-    geminiApiKey: "",
-    geminiModel: "gemini-2.5-flash",
-    selectedRegions: [] as string[],
-    likedConcepts: "",
-    dislikedConcepts: "",
-    sortMode: "date",
-    layout: "grid",
-  });
+  const [settings, setSettings] = useState<UserSettings>(createDefaultSettings);
   const isRelevanceMode = settings.sortMode === "score";
   const [ollamaConnectionState, setOllamaConnectionState] = useState<OllamaConnectionState>("unknown");
   const [isTestingOllama, setIsTestingOllama] = useState(false);
@@ -101,53 +124,96 @@ function App(): React.JSX.Element {
   const [showConfigPopup, setShowConfigPopup] = useState(false);
   const [configPopupMessage, setConfigPopupMessage] = useState("");
   const [relevanceWarning, setRelevanceWarning] = useState<string | null>(null);
-  const saveSetting = useDebouncedSettingSaver(500);
+  const { saveSetting, cancelPendingSave } = useDebouncedSettingSaverController(500);
+  const [isEmbeddingReady, setIsEmbeddingReady] = useState(false);
+  const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState(DEFAULT_EMBEDDING_MODEL);
+  const [startupPhase, setStartupPhase] = useState<StartupPhase>("loading-settings");
+  const [startupErrorMessage, setStartupErrorMessage] = useState("");
+  const isEmbeddingConfigured = settings.localEmbeddingModel.trim().length > 0;
+
+  const preloadEmbeddingOnStartup = useCallback(async (model: string) => {
+    const normalizedModel = model.trim().toLowerCase();
+    if (!normalizedModel) {
+      setIsEmbeddingReady(false);
+      setStartupErrorMessage("");
+      setStartupPhase("ready");
+      return;
+    }
+
+    setStartupPhase("preparing-embedding");
+    setStartupErrorMessage("");
+
+    try {
+      const status = await invoke<LocalEmbeddingStatus>("prepare_local_embedding_model", { model });
+      setLocalEmbeddingStatus(status);
+
+      const ready =
+        status.state === "ready"
+        && (status.active_model ?? "").toLowerCase() === normalizedModel;
+      if (!ready) {
+        throw new Error(status.message || `Failed to load embedding model '${model}'.`);
+      }
+
+      setIsEmbeddingReady(true);
+      setStartupPhase("ready");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setLocalEmbeddingStatus((current) => ({
+        state: "error",
+        active_model: model,
+        cache_dir: current?.cache_dir ?? "",
+        message,
+      }));
+      setIsEmbeddingReady(false);
+      setStartupErrorMessage(message);
+      setStartupPhase("error");
+    }
+  }, []);
 
   // Load persisted settings on mount
   useEffect(() => {
     invoke<Record<string, string>>("load_settings")
       .then((saved) => {
-        const savedLocalEmbeddingModel = saved.localEmbeddingModel?.trim()
-          ? saved.localEmbeddingModel
-          : (saved.ollamaEmbeddingModel?.trim() ? saved.ollamaEmbeddingModel : "");
-        const inferredEmbeddingInitialized =
-          saved.embeddingInitialized?.trim()
-            ? saved.embeddingInitialized === "true"
-            : savedLocalEmbeddingModel.length > 0;
-        const inferredEmbeddingLocked =
-          saved.embeddingModelLocked?.trim()
-            ? saved.embeddingModelLocked === "true"
-            : inferredEmbeddingInitialized;
+        const defaults = createDefaultSettings();
+        const savedLocalEmbeddingModel = saved.localEmbeddingModel?.trim() ? saved.localEmbeddingModel : "";
         const savedLayout = saved.layout?.trim();
         const nextLayout: LayoutMode | null =
           savedLayout === "grid" || savedLayout === "list" || savedLayout === "compact_list"
             ? savedLayout
             : null;
+        const persistedSortMode = saved.sortMode?.trim() ? saved.sortMode : defaults.sortMode;
+        const nextSortMode = !savedLocalEmbeddingModel && persistedSortMode === "score"
+          ? "date"
+          : persistedSortMode;
 
-        setSettings((prev) => ({
-          ...prev,
-          newsLimit: saved.newsLimit ? Math.min(50, Math.max(1, Number(saved.newsLimit))) : prev.newsLimit,
-          scrapeCooldownHours: saved.scrapeCooldownHours ? Math.min(24, Math.max(0, Number(saved.scrapeCooldownHours))) : prev.scrapeCooldownHours,
-          llmProvider: saved.llmProvider?.trim() ? saved.llmProvider : prev.llmProvider,
-          ollamaAddress: saved.ollamaAddress?.trim() ? saved.ollamaAddress : prev.ollamaAddress,
-          ollamaModel: saved.ollamaModel?.trim() ? saved.ollamaModel : prev.ollamaModel,
-          localEmbeddingModel: savedLocalEmbeddingModel || prev.localEmbeddingModel,
-          embeddingInitialized: inferredEmbeddingInitialized,
-          embeddingModelLocked: inferredEmbeddingLocked,
-          openaiApiKey: saved.openaiApiKey ?? prev.openaiApiKey,
-          openaiModel: saved.openaiModel?.trim() ? saved.openaiModel : prev.openaiModel,
-          claudeApiKey: saved.claudeApiKey ?? prev.claudeApiKey,
-          claudeModel: saved.claudeModel?.trim() ? saved.claudeModel : prev.claudeModel,
-          geminiApiKey: saved.geminiApiKey ?? prev.geminiApiKey,
-          geminiModel: saved.geminiModel?.trim() ? saved.geminiModel : prev.geminiModel,
-          selectedRegions: saved.selectedRegions ? (() => { try { return JSON.parse(saved.selectedRegions) as string[]; } catch { return prev.selectedRegions; } })() : prev.selectedRegions,
-          likedConcepts: saved.likedConcepts ?? prev.likedConcepts,
-          dislikedConcepts: saved.dislikedConcepts ?? prev.dislikedConcepts,
-          sortMode: saved.sortMode?.trim() ? saved.sortMode : prev.sortMode,
-          layout: nextLayout ?? prev.layout,
+        setSettings(() => ({
+          ...defaults,
+          newsLimit: saved.newsLimit ? Math.min(50, Math.max(1, Number(saved.newsLimit))) : defaults.newsLimit,
+          scrapeCooldownHours: saved.scrapeCooldownHours ? Math.min(24, Math.max(0, Number(saved.scrapeCooldownHours))) : defaults.scrapeCooldownHours,
+            llmBatchSize: saved.llmBatchSize ? Math.min(20, Math.max(1, Number(saved.llmBatchSize))) : defaults.llmBatchSize,
+          llmProvider: saved.llmProvider?.trim() ? saved.llmProvider : defaults.llmProvider,
+          ollamaAddress: saved.ollamaAddress?.trim() ? saved.ollamaAddress : defaults.ollamaAddress,
+          ollamaModel: saved.ollamaModel?.trim() ? saved.ollamaModel : defaults.ollamaModel,
+          localEmbeddingModel: savedLocalEmbeddingModel,
+          embeddingInitialized: savedLocalEmbeddingModel.length > 0,
+          embeddingModelLocked: savedLocalEmbeddingModel.length > 0,
+          openaiApiKey: saved.openaiApiKey ?? defaults.openaiApiKey,
+          openaiModel: saved.openaiModel?.trim() ? saved.openaiModel : defaults.openaiModel,
+          claudeApiKey: saved.claudeApiKey ?? defaults.claudeApiKey,
+          claudeModel: saved.claudeModel?.trim() ? saved.claudeModel : defaults.claudeModel,
+          geminiApiKey: saved.geminiApiKey ?? defaults.geminiApiKey,
+          geminiModel: saved.geminiModel?.trim() ? saved.geminiModel : defaults.geminiModel,
+          selectedRegions: saved.selectedRegions ? (() => { try { return JSON.parse(saved.selectedRegions) as string[]; } catch { return defaults.selectedRegions; } })() : defaults.selectedRegions,
+          likedConcepts: saved.likedConcepts ?? defaults.likedConcepts,
+          dislikedConcepts: saved.dislikedConcepts ?? defaults.dislikedConcepts,
+          sortMode: nextSortMode,
+          layout: nextLayout ?? defaults.layout,
         }));
+        setSelectedEmbeddingModel(savedLocalEmbeddingModel || DEFAULT_EMBEDDING_MODEL);
         if (nextLayout) {
           setLayout(nextLayout);
+        } else {
+          setLayout(defaults.layout);
         }
         if (saved.selectedCategory && (CATEGORIES as readonly string[]).includes(saved.selectedCategory)) {
           setSelectedCategory(saved.selectedCategory as Category);
@@ -185,9 +251,29 @@ function App(): React.JSX.Element {
             // Ignore invalid stored order JSON.
           }
         }
+
+        if (persistedSortMode !== nextSortMode) {
+          void invoke("save_setting", { key: "sortMode", value: nextSortMode });
+        }
+
+        if (savedLocalEmbeddingModel.length > 0) {
+          void preloadEmbeddingOnStartup(savedLocalEmbeddingModel);
+        } else {
+          setLocalEmbeddingStatus(null);
+          setIsEmbeddingReady(false);
+          setStartupErrorMessage("");
+          setStartupPhase("ready");
+        }
       })
-      .catch(() => { /* first launch — no settings file yet */ });
-  }, []);
+      .catch(() => {
+        setSettings(createDefaultSettings());
+        setSelectedEmbeddingModel(DEFAULT_EMBEDDING_MODEL);
+        setLocalEmbeddingStatus(null);
+        setIsEmbeddingReady(false);
+        setStartupErrorMessage("");
+        setStartupPhase("ready");
+      });
+  }, [preloadEmbeddingOnStartup]);
 
   const disableRelevanceSort = useCallback((reason: string) => {
     if (settings.sortMode !== "score") {
@@ -238,30 +324,44 @@ function App(): React.JSX.Element {
     }
   }, [disableRelevanceSort, saveSetting]);
 
-  const refreshLocalEmbeddingStatus = useCallback(async () => {
+  const refreshLocalEmbeddingStatus = useCallback(async (): Promise<LocalEmbeddingStatus | null> => {
     try {
       const status = await invoke<LocalEmbeddingStatus>("get_local_embedding_status");
       setLocalEmbeddingStatus(status);
+      const configuredModel = settings.localEmbeddingModel.trim().toLowerCase();
+      setIsEmbeddingReady(
+        status.state === "ready" &&
+        (status.active_model ?? "").toLowerCase() === configuredModel,
+      );
+      return status;
     } catch {
       // Ignore transient status polling failures.
+      return null;
     }
-  }, []);
+  }, [settings.localEmbeddingModel]);
 
   const prepareLocalEmbeddingModel = useCallback(async (model: string) => {
     setIsPreparingLocalEmbeddingModel(true);
     try {
       const status = await invoke<LocalEmbeddingStatus>("prepare_local_embedding_model", { model });
       setLocalEmbeddingStatus(status);
-      if (status.state === "ready") {
+      const ready =
+        status.state === "ready"
+        && (status.active_model ?? "").toLowerCase() === model.trim().toLowerCase();
+      if (ready) {
+        setIsEmbeddingReady(true);
+        setStartupErrorMessage("");
+        setStartupPhase("ready");
         setSettings((current) => ({
           ...current,
+          localEmbeddingModel: model,
           embeddingInitialized: true,
           embeddingModelLocked: true,
-          localEmbeddingModel: model,
         }));
-        saveSetting("localEmbeddingModel", model);
-        saveSetting("embeddingInitialized", "true");
-        saveSetting("embeddingModelLocked", "true");
+        setSelectedEmbeddingModel(model);
+        await invoke("save_setting", { key: "localEmbeddingModel", value: model });
+      } else {
+        throw new Error(status.message || `Failed to prepare embedding model '${model}'.`);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -271,6 +371,7 @@ function App(): React.JSX.Element {
         cache_dir: current?.cache_dir ?? "",
         message,
       }));
+      setIsEmbeddingReady(false);
     } finally {
       setIsPreparingLocalEmbeddingModel(false);
     }
@@ -289,6 +390,33 @@ function App(): React.JSX.Element {
     fetchEnrichedNewsRef.current = fetchEnrichedNews;
   }, [fetchEnrichedNews]);
 
+  const handleCleanReset = useCallback(async () => {
+    cancelPendingSave();
+    await invoke("purge_database");
+
+    const defaults = createDefaultSettings();
+    setNews([]);
+    setLoading(false);
+    setEnrichmentProgress(null);
+    setEnrichmentError(null);
+    setRelevanceWarning(null);
+    setStageStatus(makeInitialStageStatus());
+    setSelectedArticle(null);
+    setContextMenu(null);
+    setSettings(defaults);
+    setLayout(defaults.layout);
+    setSelectedCategory("All");
+    setVisibleCategories(DEFAULT_VISIBLE_CATEGORIES);
+    setCategoryOrder([...TOPIC_CATEGORIES]);
+    setSelectedEmbeddingModel(DEFAULT_EMBEDDING_MODEL);
+    setLocalEmbeddingStatus(null);
+    setIsEmbeddingReady(false);
+    setShowConfigPopup(false);
+    setConfigPopupMessage("");
+    setStartupErrorMessage("");
+    setStartupPhase("ready");
+  }, [cancelPendingSave, setNews]);
+
   const scheduleRefresh = useCallback((filterByDate: boolean) => {
     if (refreshTimeoutRef.current !== null) {
       window.clearTimeout(refreshTimeoutRef.current);
@@ -300,8 +428,54 @@ function App(): React.JSX.Element {
     }, 300);
   }, []);
 
+  const appendUniqueProcessLog = useCallback((entry: ProcessLogEntry) => {
+    const key = `${entry.timestamp_utc}|${entry.level}|${entry.category}|${entry.message}`;
+    const now = Date.now();
+    const seenMap = seenLogKeysRef.current;
+    const seenAt = seenMap.get(key);
+    if (seenAt && now - seenAt < 4000) {
+      return;
+    }
+    seenMap.set(key, now);
+
+    if (seenMap.size > 1500) {
+      for (const [k, ts] of seenMap) {
+        if (now - ts > 60000) {
+          seenMap.delete(k);
+        }
+      }
+    }
+
+    setProcessLogs((current) => {
+      const next = [...current, entry];
+      return next.length > 500 ? next.slice(next.length - 500) : next;
+    });
+  }, []);
+
+  const updateStageFromEvent = useCallback((event: ProcessStageEvent) => {
+    const stage = event.stage.toLowerCase() as StageKey;
+    if (!STAGE_ORDER.includes(stage)) {
+      return;
+    }
+
+    const nextState: StageState =
+      event.state === "running" || event.state === "done" || event.state === "error"
+        ? event.state
+        : "idle";
+
+    setStageStatus((current) => ({
+      ...current,
+      [stage]: {
+        state: nextState,
+        current: event.current ?? undefined,
+        total: event.total ?? undefined,
+        message: event.message,
+      },
+    }));
+  }, []);
+
   const generateNews = async () => {
-    if (!settings.embeddingInitialized) {
+    if (!isEmbeddingConfigured || !isEmbeddingReady) {
       setConfigPopupMessage("Embedding model not set up. Open Settings → Embedding Settings and click Download Model.");
       setShowConfigPopup(true);
       return;
@@ -322,6 +496,7 @@ function App(): React.JSX.Element {
     setEnrichmentProgress(null);
     setEnrichmentError(null);
     setRelevanceWarning(null);
+    setStageStatus(makeInitialStageStatus());
 
     try {
       await invoke<boolean>("test_provider_connection", {
@@ -391,16 +566,33 @@ function App(): React.JSX.Element {
   );
 
   useEffect(() => {
+    if (startupPhase !== "ready") {
+      return;
+    }
     void fetchEnrichedNews();
-  }, [fetchEnrichedNews]);
+  }, [fetchEnrichedNews, startupPhase]);
 
   useEffect(() => {
-    let unlistenUpdated: (() => void) | null = null;
-    let unlistenCompleted: (() => void) | null = null;
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
 
     const initListeners = async () => {
       try {
-        unlistenUpdated = await listen<{current: number; total: number; enriched_count: number; date?: string}>("enriched-news-updated", (event) => {
+        const persisted = await invoke<ProcessLogEntry[]>("load_process_logs", { limit: 300 });
+        if (!disposed) {
+          seenLogKeysRef.current.clear();
+          for (const entry of persisted) {
+            const key = `${entry.timestamp_utc}|${entry.level}|${entry.category}|${entry.message}`;
+            seenLogKeysRef.current.set(key, Date.now());
+          }
+          setProcessLogs(persisted);
+        }
+      } catch {
+        // Ignore missing or unreadable persisted logs.
+      }
+
+      try {
+        const off = await listen<{current: number; total: number; enriched_count: number; date?: string}>("enriched-news-updated", (event) => {
           console.log("📬 enriched-news-updated event received:", event.payload);
           setEnrichmentProgress({
             current: event.payload.current,
@@ -409,16 +601,28 @@ function App(): React.JSX.Element {
           });
           scheduleRefresh(true);
         });
+        if (disposed) {
+          off();
+        } else {
+          unlisteners.push(off);
+        }
         console.log("✅ Listener registered: enriched-news-updated");
       } catch (error) {
         console.error("❌ Failed to register enriched-news-updated listener:", error);
       }
 
       try {
-        unlistenCompleted = await listen<{total: number; enriched_count: number; failed_count: number; error_sample?: string}>("enriched-news-sync-complete", (event) => {
+        const off = await listen<{total: number; enriched_count: number; failed_count: number; error_sample?: string}>("enriched-news-sync-complete", (event) => {
           console.log("📬 enriched-news-sync-complete event received:", event.payload);
           setEnrichmentProgress(null);
           setLoading(false);
+          setStageStatus((current) => ({
+            ...current,
+            scrape: { ...current.scrape, state: current.scrape.state === "idle" ? "done" : current.scrape.state },
+            extract: { ...current.extract, state: current.extract.state === "idle" ? "done" : current.extract.state },
+            enrich: { ...current.enrich, state: event.payload.failed_count > 0 && event.payload.enriched_count === 0 ? "error" : "done" },
+            persist: { ...current.persist, state: event.payload.failed_count > 0 && event.payload.enriched_count === 0 ? "error" : "done" },
+          }));
           if (event.payload.error_sample && event.payload.enriched_count === 0 && event.payload.failed_count > 0) {
             setEnrichmentError(event.payload.error_sample);
           } else {
@@ -427,27 +631,58 @@ function App(): React.JSX.Element {
           // Fetch with current date/category filter now that enrichment is done
           void fetchEnrichedNewsRef.current(true, true);
         });
+        if (disposed) {
+          off();
+        } else {
+          unlisteners.push(off);
+        }
         console.log("✅ Listener registered: enriched-news-sync-complete");
       } catch (error) {
         console.error("❌ Failed to register enriched-news-sync-complete listener:", error);
+      }
+
+      try {
+        const off = await listen<ProcessLogEntry>("process-log", (event) => {
+          appendUniqueProcessLog(event.payload);
+        });
+        if (disposed) {
+          off();
+        } else {
+          unlisteners.push(off);
+        }
+        console.log("✅ Listener registered: process-log");
+      } catch (error) {
+        console.error("❌ Failed to register process-log listener:", error);
+      }
+
+      try {
+        const off = await listen<ProcessStageEvent>("process-stage", (event) => {
+          updateStageFromEvent(event.payload);
+        });
+        if (disposed) {
+          off();
+        } else {
+          unlisteners.push(off);
+        }
+        console.log("✅ Listener registered: process-stage");
+      } catch (error) {
+        console.error("❌ Failed to register process-stage listener:", error);
       }
     };
 
     void initListeners();
 
     return () => {
+      disposed = true;
       if (refreshTimeoutRef.current !== null) {
         window.clearTimeout(refreshTimeoutRef.current);
         refreshTimeoutRef.current = null;
       }
-      if (unlistenUpdated) {
-        unlistenUpdated();
-      }
-      if (unlistenCompleted) {
-        unlistenCompleted();
+      for (const unlisten of unlisteners) {
+        unlisten();
       }
     };
-  }, [scheduleRefresh]);
+  }, [appendUniqueProcessLog, scheduleRefresh, updateStageFromEvent]);
 
   useEffect(() => {
     if (selectedCategory !== "All" && !visibleCategories[selectedCategory] && availableCategories.length > 0) {
@@ -637,6 +872,9 @@ function App(): React.JSX.Element {
   };
 
   const setSortMode = (mode: "date" | "score") => {
+    if (mode === "score" && !isEmbeddingReady) {
+      return;
+    }
     setSettings((current) => (current.sortMode === mode ? current : { ...current, sortMode: mode }));
     setRelevanceWarning(null);
     saveSetting("sortMode", mode);
@@ -679,6 +917,59 @@ function App(): React.JSX.Element {
 
     return dateFiltered.filter((item) => item.category === selectedCategory);
   }, [news, selectedCategory, selectedDate, visibleCategories, settings.sortMode]);
+
+  if (startupPhase !== "ready") {
+    const startupMessage = startupPhase === "loading-settings"
+      ? "Loading settings..."
+      : startupPhase === "preparing-embedding"
+        ? `Loading embedding model '${settings.localEmbeddingModel}'...`
+        : startupErrorMessage;
+
+    return (
+      <div className={`min-h-screen ${isDarkMode ? "bg-zinc-950 text-zinc-200" : "bg-white text-zinc-900"} flex items-center justify-center p-6`}>
+        <div className={`w-full max-w-lg rounded-3xl border p-8 shadow-2xl ${isDarkMode ? "border-zinc-800 bg-zinc-900" : "border-zinc-200 bg-zinc-50"}`}>
+          <p className={`mb-2 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+            {startupPhase === "error" ? "Embedding load failed" : "Starting NewsPage"}
+          </p>
+          <h1 className={`mb-3 text-2xl font-black ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>
+            {startupPhase === "error" ? "Embedding model could not be loaded" : "Preparing your workspace"}
+          </h1>
+          <p className={`text-sm leading-relaxed ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>
+            {startupMessage}
+          </p>
+          {localEmbeddingStatus?.message && startupPhase !== "error" ? (
+            <p className={`mt-3 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+              {localEmbeddingStatus.message}
+            </p>
+          ) : null}
+          {startupPhase !== "error" ? (
+            <div className={`mt-6 overflow-hidden rounded-full border ${isDarkMode ? "border-zinc-700" : "border-zinc-300"}`}>
+              <div className={`h-2 w-full animate-pulse ${isDarkMode ? "bg-emerald-500/70" : "bg-emerald-500"}`} />
+            </div>
+          ) : (
+            <div className="mt-6 flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() => void preloadEmbeddingOnStartup(settings.localEmbeddingModel)}
+                className={`rounded-lg border px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+                  isDarkMode ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700" : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
+                }`}
+              >
+                Retry Load
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleCleanReset()}
+                className="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-red-700"
+              >
+                Clean Reset
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`min-h-screen transition-colors duration-300 ${isDarkMode ? "bg-zinc-950 text-zinc-400" : "bg-white text-zinc-800"}`}>
@@ -827,7 +1118,7 @@ function App(): React.JSX.Element {
             isDarkMode={isDarkMode}
             sortMode={settings.sortMode}
             isRelevanceMode={isRelevanceMode}
-            isEmbeddingReady={settings.embeddingInitialized}
+            isEmbeddingReady={isEmbeddingReady}
             likedConcepts={settings.likedConcepts}
             dislikedConcepts={settings.dislikedConcepts}
             onSetSortMode={setSortMode}
@@ -882,69 +1173,68 @@ function App(): React.JSX.Element {
         >
           <div>
             <h2 className={`text-2xl font-black ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{selectedCategory} News</h2>
-            <p className="text-sm font-medium text-zinc-500">
-              {enrichmentError ? (
-                <span
-                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 font-semibold shadow-sm ${
-                    isDarkMode
-                      ? "border-red-500/40 bg-red-500/15 text-red-300"
-                      : "border-red-400 bg-red-50 text-red-800"
-                  }`}
-                >
-                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-red-500" />
-                  {getProviderLabel(settings.llmProvider)} error — {enrichmentError}
-                  <button
-                    type="button"
-                    onClick={() => setEnrichmentError(null)}
-                    aria-label="Dismiss error"
-                    className={`ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full transition-colors ${
-                      isDarkMode ? "hover:bg-red-500/20" : "hover:bg-red-200"
-                    }`}
-                  >
-                    <X size={12} />
-                  </button>
-                </span>
-              ) : relevanceWarning && settings.sortMode === "score" ? (
-                <span
-                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 font-semibold shadow-sm ${
-                    isDarkMode
-                      ? "border-amber-500/40 bg-amber-500/15 text-amber-300"
-                      : "border-amber-400 bg-amber-50 text-amber-800"
-                  }`}
-                >
-                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-amber-500" />
-                  Relevance temporarily unavailable — keeping your selected sort mode
-                  <button
-                    type="button"
-                    onClick={() => setRelevanceWarning(null)}
-                    aria-label="Dismiss warning"
-                    className={`ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full transition-colors ${
-                      isDarkMode ? "hover:bg-amber-500/20" : "hover:bg-amber-200"
-                    }`}
-                  >
-                    <X size={12} />
-                  </button>
-                </span>
-              ) : enrichmentProgress ? (
-                <span
-                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 font-semibold shadow-sm ${
-                    isDarkMode
-                      ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
-                      : "border-emerald-400 bg-emerald-50 text-emerald-800"
-                  }`}
-                >
-                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Enriching: {enrichmentProgress.current}/{enrichmentProgress.total} items ({enrichmentProgress.enriched} completed)
-                </span>
-              ) : (
-                selectedCategory === "All" ? `All briefings for ${selectedDate}` : `Session briefing for ${selectedDate}`
-              )}
+            <p className="text-xs font-medium text-zinc-500">
+              {selectedCategory === "All" ? `All briefings for ${selectedDate}` : `Session briefing for ${selectedDate}`}
             </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {STAGE_ORDER.map((stage) => {
+                const item = stageStatus[stage];
+                const isRunning = item.state === "running";
+                const stageLabel = stage.charAt(0).toUpperCase() + stage.slice(1);
+                const badgeClass = item.state === "error"
+                  ? (isDarkMode ? "border-red-500/40 bg-red-500/15 text-red-300" : "border-red-400 bg-red-50 text-red-700")
+                  : item.state === "done"
+                    ? (isDarkMode ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-emerald-400 bg-emerald-50 text-emerald-700")
+                    : isRunning
+                      ? (isDarkMode ? "border-blue-500/40 bg-blue-500/10 text-blue-300" : "border-blue-400 bg-blue-50 text-blue-700")
+                      : (isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-400" : "border-zinc-300 bg-zinc-100 text-zinc-500");
+
+                return (
+                  <span key={stage} className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest ${badgeClass}`} title={item.message || stageLabel}>
+                    <span className={`inline-block h-1.5 w-1.5 rounded-full ${isRunning ? "animate-pulse bg-current" : "bg-current"}`} />
+                    {stageLabel}
+                    {typeof item.current === "number" && typeof item.total === "number" ? ` ${item.current}/${item.total}` : ""}
+                  </span>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => setShowLogPanel(true)}
+                className={`text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                  isDarkMode ? "text-zinc-500 hover:text-zinc-300" : "text-zinc-500 hover:text-zinc-700"
+                }`}
+              >
+                LOGS
+              </button>
+              {enrichmentProgress ? (
+                <span className={`text-[10px] font-semibold ${isDarkMode ? "text-emerald-300" : "text-emerald-700"}`}>
+                  Enriching {enrichmentProgress.current}/{enrichmentProgress.total}
+                </span>
+              ) : null}
+              {relevanceWarning && settings.sortMode === "score" ? (
+                <button
+                  type="button"
+                  onClick={() => setRelevanceWarning(null)}
+                  className={`text-[10px] font-semibold ${isDarkMode ? "text-amber-300 hover:text-amber-200" : "text-amber-700 hover:text-amber-800"}`}
+                >
+                  Relevance warning
+                </button>
+              ) : null}
+              {enrichmentError ? (
+                <button
+                  type="button"
+                  onClick={() => setEnrichmentError(null)}
+                  className={`text-[10px] font-semibold ${isDarkMode ? "text-red-300 hover:text-red-200" : "text-red-700 hover:text-red-800"}`}
+                >
+                  {getProviderLabel(settings.llmProvider)} error
+                </button>
+              ) : null}
+            </div>
           </div>
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setShowSettings(true)}
+              onClick={() => { setShowSettings(true); void refreshLocalEmbeddingStatus(); }}
               className={`rounded-full border p-2 transition-colors ${isDarkMode ? "border-zinc-800 hover:bg-zinc-800" : "border-zinc-300 bg-zinc-150 hover:bg-zinc-200"}`}
             >
               <Settings size={18} />
@@ -973,7 +1263,7 @@ function App(): React.JSX.Element {
             isDarkMode={isDarkMode}
             sortMode={settings.sortMode}
             isRelevanceMode={isRelevanceMode}
-            isEmbeddingReady={settings.embeddingInitialized}
+            isEmbeddingReady={isEmbeddingReady}
             likedConcepts={settings.likedConcepts}
             dislikedConcepts={settings.dislikedConcepts}
             onSetSortMode={setSortMode}
@@ -982,36 +1272,36 @@ function App(): React.JSX.Element {
         </div>
 
         <section className={`news-scroll min-h-0 flex-1 overflow-y-auto pb-24 pr-1 ${isDarkMode ? "news-scroll-dark" : "news-scroll-light"}`}>
-          {filteredNews.length === 0 ? (
-            <div className="flex flex-col items-center justify-center space-y-4 py-32 text-center opacity-40">
-              <Search size={48} className="text-zinc-500" />
-              <div>
-                <h3 className="text-lg font-bold">No briefings for this date</h3>
+            {filteredNews.length === 0 ? (
+              <div className="flex flex-col items-center justify-center space-y-4 py-32 text-center opacity-40">
+                <Search size={48} className="text-zinc-500" />
+                <div>
+                  <h3 className="text-lg font-bold">No briefings for this date</h3>
+                </div>
               </div>
-            </div>
-          ) : (
-            <div
-              className={`
-                ${layout === "grid" ? "grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3" : ""}
-                ${layout === "list" ? "flex flex-col gap-4" : ""}
-                ${layout === "compact_list" ? "flex flex-col gap-2" : ""}
-              `}
-            >
-              {filteredNews.map((item) => (
-                <ArticleCard
-                  key={item.id}
-                  item={item}
-                  layout={layout}
-                  isDarkMode={isDarkMode}
-                  sortMode={settings.sortMode}
-                  onSelect={setSelectedArticle}
-                  onOpenContextMenu={(article, x, y) => {
-                    setContextMenu({ article, x, y });
-                  }}
-                />
-              ))}
-            </div>
-          )}
+            ) : (
+              <div
+                className={`
+                  ${layout === "grid" ? "grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3" : ""}
+                  ${layout === "list" ? "flex flex-col gap-4" : ""}
+                  ${layout === "compact_list" ? "flex flex-col gap-2" : ""}
+                `}
+              >
+                {filteredNews.map((item) => (
+                  <ArticleCard
+                    key={item.id}
+                    item={item}
+                    layout={layout}
+                    isDarkMode={isDarkMode}
+                    sortMode={settings.sortMode}
+                    onSelect={setSelectedArticle}
+                    onOpenContextMenu={(article, x, y) => {
+                      setContextMenu({ article, x, y });
+                    }}
+                  />
+                ))}
+              </div>
+            )}
         </section>
 
         <LayoutSwitcher show={showLayoutSwitcher} isDarkMode={isDarkMode} layout={layout} onSetLayout={handleSetLayout} />
@@ -1046,26 +1336,18 @@ function App(): React.JSX.Element {
         isRefreshingModels={isRefreshingModels}
         refreshOllamaModels={refreshOllamaModels}
         localEmbeddingModels={localEmbeddingModels}
+        selectedEmbeddingModel={selectedEmbeddingModel}
+        onSelectEmbeddingModel={setSelectedEmbeddingModel}
         localEmbeddingStatus={localEmbeddingStatus}
         isPreparingLocalEmbeddingModel={isPreparingLocalEmbeddingModel}
         onPrepareLocalEmbeddingModel={prepareLocalEmbeddingModel}
-        embeddingInitialized={settings.embeddingInitialized}
-        embeddingModelLocked={settings.embeddingModelLocked}
+        isEmbeddingReady={isEmbeddingReady}
+        isEmbeddingConfigured={isEmbeddingConfigured}
         purgeConfirmStep={purgeConfirmStep}
         setPurgeConfirmStep={setPurgeConfirmStep}
         isPurging={isPurging}
         setIsPurging={setIsPurging}
-        onPurgeDatabase={async () => {
-          await invoke("purge_database");
-          setNews([]);
-          setSettings((current) => ({
-            ...current,
-            embeddingInitialized: false,
-            embeddingModelLocked: false,
-          }));
-          saveSetting("embeddingInitialized", "false");
-          saveSetting("embeddingModelLocked", "false");
-        }}
+        onPurgeDatabase={handleCleanReset}
         onClose={() => {
           setShowSettings(false);
           setPurgeConfirmStep(0);
@@ -1135,6 +1417,17 @@ function App(): React.JSX.Element {
           </div>
         </div>
       )}
+
+      <LogPanel
+        isDarkMode={isDarkMode}
+        isOpen={showLogPanel}
+        logs={processLogs}
+        onClear={() => {
+          setProcessLogs([]);
+          seenLogKeysRef.current.clear();
+        }}
+        onClose={() => setShowLogPanel(false)}
+      />
     </div>
   );
 }

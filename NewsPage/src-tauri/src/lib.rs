@@ -1,6 +1,7 @@
 use crate::db::{get_article_by_id, get_unenriched_articles_by_category, list_unenriched_categories, mark_enriched, upsert_article};
 use crate::news_item::{NewsItem, RankedNewsItem};
 use crate::article_extract::fetch_article_text_and_thumbnail;
+use crate::logging::ProcessLogEvent;
 use crate::scrapers::{run_default_scrapers, ScrapeContext};
 use crate::scrapers::gl_rss::list_region_ids;
 use chrono::{DateTime, Local, Utc};
@@ -18,12 +19,16 @@ pub mod news_item;
 pub mod scrapers;
 pub mod platform_llm;
 pub mod local_embedding;
+pub mod logging;
 
 pub type CleanedArticle = NewsItem;
 
 const DEFAULT_OLLAMA_ADDRESS: &str = "http://127.0.0.1:11434";
 const DEFAULT_OLLAMA_MODEL: &str = "qwen2.5:3b";
 const DEFAULT_LOCAL_EMBEDDING_MODEL: &str = local_embedding::DEFAULT_LOCAL_EMBEDDING_MODEL;
+const DEFAULT_OPENAI_MODEL: &str = "gpt-5.4-mini";
+const DEFAULT_CLAUDE_MODEL: &str = "claude-sonnet-4-6";
+const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
 const ARTICLE_PROCESS_TIMEOUT_SECS: u64 = 30;
 const RELEVANCE_UNAVAILABLE_TOKEN: &str = "RELEVANCE_EMBEDDING_UNAVAILABLE";
 
@@ -184,8 +189,6 @@ async fn enrich_media_and_embedding(
                 println!("[image-search] no replacement found for '{}'", enriched.title);
             }
         }
-        // Delay to avoid throttling
-        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
     if !enriched.thumbnail.trim().is_empty() {
@@ -204,7 +207,7 @@ async fn enrich_media_and_embedding(
     }
 
     // Generate and store embedding (soft failure — missing embedding degrades gracefully).
-    let embed_text = format!("{} {} {}", enriched.title, enriched.tags.join(" "), enriched.snippet);
+    let embed_text = format!("{} {}", enriched.title, enriched.snippet);
     match local_embedding::embed_text(&embed_text, Some(local_embedding_model), local_embedding::EmbedPurpose::Passage).await {
         Ok(vec) => {
             if let Err(e) = db::save_embedding(db_pool, &enriched.id, &vec).await {
@@ -230,7 +233,7 @@ async fn persist_enriched_article(db_pool: &SqlitePool, enriched: &NewsItem) -> 
 async fn fetch_and_enrich_article_with_timeouts(
     llm: &dyn platform_llm::LLMProviderImpl,
     item: &NewsItem,
-) -> Result<(String, Vec<String>, String, String, Option<String>), String> {
+) -> Result<(String, String, String, Option<String>), String> {
     let (text, thumbnail) = tokio::time::timeout(
         Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
         fetch_article_text_and_thumbnail(&item.url),
@@ -244,7 +247,7 @@ async fn fetch_and_enrich_article_with_timeouts(
     })?
     .map_err(|e| format!("Failed to fetch article text: {}", e))?;
 
-    let (tags, snippet, ai_summary) = tokio::time::timeout(
+    let (snippet, ai_summary) = tokio::time::timeout(
         Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
         llm.enrich(&item.title, &text),
     )
@@ -256,13 +259,12 @@ async fn fetch_and_enrich_article_with_timeouts(
         )
     })??;
 
-    Ok((text, tags, snippet, ai_summary, thumbnail))
+    Ok((text, snippet, ai_summary, thumbnail))
 }
 
 fn apply_enrichment_payload(
     mut item: NewsItem,
     text: String,
-    tags: Vec<String>,
     snippet: String,
     ai_summary: String,
     thumbnail_url: Option<String>,
@@ -270,9 +272,6 @@ fn apply_enrichment_payload(
 ) -> NewsItem {
     if overwrite_existing || item.og_content.trim().is_empty() {
         item.og_content = text;
-    }
-    if overwrite_existing || item.tags.is_empty() {
-        item.tags = tags;
     }
     if overwrite_existing || item.snippet.trim().is_empty() {
         item.snippet = snippet;
@@ -309,7 +308,35 @@ fn emit_enriched_news_updated(
         "[Event] enriched-news-updated: current={}, total={}, enriched={}",
         event.current, event.total, event.enriched_count
     );
+    logging::info(
+        "Enrichment",
+        format!(
+            "Progress {}/{} ({} enriched)",
+            event.current, event.total, event.enriched_count
+        ),
+        Some(event.enriched_count),
+    );
     app.emit("enriched-news-updated", &event)
+        .map_err(|e| format!("Event emit error: {}", e))
+}
+
+fn emit_process_stage(
+    app: &tauri::AppHandle,
+    stage: &str,
+    state: &str,
+    message: impl Into<String>,
+    current: Option<usize>,
+    total: Option<usize>,
+) -> Result<(), String> {
+    let event = ProcessStageEvent {
+        stage: stage.to_string(),
+        state: state.to_string(),
+        message: message.into(),
+        current,
+        total,
+        emitted_at_utc: Utc::now().to_rfc3339(),
+    };
+    app.emit("process-stage", &event)
         .map_err(|e| format!("Event emit error: {}", e))
 }
 
@@ -375,7 +402,8 @@ struct ResolvedLlmSettings {
     ollama_model: String,
     local_embedding_model: String,
     selected_regions: Vec<String>,
-    visible_categories: HashMap<String, bool>,
+        visible_categories: HashMap<String, bool>,
+        llm_batch_size: usize,
 }
 
 struct RuntimeLlmContext {
@@ -490,7 +518,12 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
             saved_local_embedding_model,
         ),
         selected_regions: saved_selected_regions,
-        visible_categories: saved_visible_categories,
+           visible_categories: saved_visible_categories,
+           llm_batch_size: settings_map
+              .get("llmBatchSize")
+              .and_then(|v| v.parse::<usize>().ok())
+              .map(|n| n.clamp(1, 20))
+              .unwrap_or(5),
     }
 }
 
@@ -560,11 +593,21 @@ fn persist_last_scrape(settings_path: &Path, now: SystemTime) {
 }
 
 async fn run_scrape_stage(
+    app: &tauri::AppHandle,
     state: &AppState,
     resolved: &ResolvedLlmSettings,
     cooldown_hours: u64,
     settings_path: &Path,
 ) -> Result<(), String> {
+    emit_process_stage(
+        app,
+        "scrape",
+        "running",
+        "Scraping selected regions",
+        None,
+        None,
+    )?;
+
     let last_scrape = *state.last_scrape.lock().unwrap();
     if !should_run_scrape(last_scrape, cooldown_hours) {
         let elapsed_min = last_scrape
@@ -576,30 +619,70 @@ async fn run_scrape_stage(
             elapsed_min,
             cooldown_hours
         );
+        logging::info(
+            "Scrape",
+            format!(
+                "Skipped scraping because cooldown is active (last run {} minutes ago, cooldown {}h)",
+                elapsed_min, cooldown_hours
+            ),
+            None,
+        );
+        emit_process_stage(
+            app,
+            "scrape",
+            "done",
+            "Skipped scrape due to cooldown",
+            None,
+            None,
+        )?;
         return Ok(());
     }
 
     if resolved.selected_regions.is_empty() {
         println!("Skipping Google News RSS scrape — no regions selected in settings.");
+        logging::warn("Scrape", "No regions selected in settings; skipping RSS stage", None);
     }
 
     let scrape_context = ScrapeContext {
         selected_regions: resolved.selected_regions.clone(),
     };
     let stage_results = run_default_scrapers(&scrape_context).await?;
+    let total_stages = stage_results.len();
 
-    for stage_result in stage_results {
+    for (index, stage_result) in stage_results.iter().enumerate() {
         println!("Fetched {} items from {}", stage_result.items.len(), stage_result.stage_name);
+        logging::info(
+            "Scrape",
+            format!("{} fetched {} items", stage_result.stage_name, stage_result.items.len()),
+            Some(stage_result.items.len()),
+        );
         for item in &stage_result.items {
             upsert_article(&state.db, item)
                 .await
                 .map_err(|e| format!("DB upsert error: {}", e))?;
         }
+        emit_process_stage(
+            app,
+            "scrape",
+            "running",
+            format!("{} completed", stage_result.stage_name),
+            Some(index + 1),
+            Some(total_stages),
+        )?;
     }
 
     let now = SystemTime::now();
     *state.last_scrape.lock().unwrap() = Some(now);
     persist_last_scrape(settings_path, now);
+    logging::info("Scrape", "Scrape stage completed and persisted last scrape timestamp", None);
+    emit_process_stage(
+        app,
+        "scrape",
+        "done",
+        "Scrape stage completed",
+        Some(total_stages),
+        Some(total_stages),
+    )?;
     Ok(())
 }
 
@@ -646,8 +729,6 @@ struct EnrichmentStageResult {
     first_error: Option<String>,
 }
 
-const LLM_BATCH_SIZE: usize = 5;
-
 async fn run_enrichment_stage(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -660,20 +741,57 @@ async fn run_enrichment_stage(
     let total = items_to_enrich.len();
     println!(
         "Enriching {} unenriched items this run (up to {} per category, batch size {})",
-        total, per_category_limit, LLM_BATCH_SIZE
+            total, per_category_limit, settings.llm_batch_size
     );
+    logging::info(
+        "Enrichment",
+        format!(
+            "Starting enrichment for {} items (limit/category={}, batch size={})",
+                total, per_category_limit, settings.llm_batch_size
+        ),
+        Some(total),
+    );
+    emit_process_stage(
+        app,
+        "extract",
+        "running",
+        "Starting extraction stage",
+        Some(0),
+        Some(total),
+    )?;
+    emit_process_stage(
+        app,
+        "enrich",
+        "idle",
+        "Waiting for extraction",
+        Some(0),
+        Some(total),
+    )?;
+    emit_process_stage(
+        app,
+        "persist",
+        "idle",
+        "Waiting for enrichment",
+        Some(0),
+        Some(total),
+    )?;
 
     let mut enriched_count = 0;
     let mut first_error: Option<String> = None;
-    let mut global_index = 0;
+    let mut global_index: usize = 0;
 
-    // Process in batches of LLM_BATCH_SIZE
-    for batch in items_to_enrich.chunks(LLM_BATCH_SIZE) {
+    // Process in batches of settings.llm_batch_size
+    for batch in items_to_enrich.chunks(settings.llm_batch_size) {
         let batch_items: Vec<NewsItem> = batch.to_vec();
         let batch_len = batch_items.len();
 
         // Phase 1: Fetch article texts and thumbnails for the batch
         println!("[batch] fetching text for {} articles...", batch_len);
+        logging::info(
+            "Extract",
+            format!("Fetching text and thumbnails for batch of {} article(s)", batch_len),
+            Some(batch_len),
+        );
         let mut fetched: Vec<(NewsItem, Result<(String, Option<String>), String>)> =
             Vec::with_capacity(batch_len);
 
@@ -703,12 +821,22 @@ async fn run_enrichment_stage(
                 }
                 Err(err) => {
                     println!("Failed to fetch article text: {}", err);
+                    logging::warn("Extract", format!("Text fetch failed: {}", err), None);
                     if first_error.is_none() {
                         first_error = Some(err.clone());
                     }
                 }
             }
         }
+
+        emit_process_stage(
+            app,
+            "extract",
+            "running",
+            "Extraction batch completed",
+            Some(global_index.saturating_add(batch_len).min(total)),
+            Some(total),
+        )?;
 
         // Call enrich_batch with all successfully fetched articles
         let llm_results = if !llm_inputs.is_empty() {
@@ -718,6 +846,19 @@ async fn run_enrichment_stage(
                 .collect();
 
             println!("[batch] calling LLM enrich_batch for {} articles...", articles_for_llm.len());
+            logging::info(
+                "Enrichment",
+                format!("Sending {} article(s) to LLM batch enrich", articles_for_llm.len()),
+                Some(articles_for_llm.len()),
+            );
+            emit_process_stage(
+                app,
+                "enrich",
+                "running",
+                format!("Enriching {} article(s) in current batch", articles_for_llm.len()),
+                Some(global_index),
+                Some(total),
+            )?;
             llm.enrich_batch(&articles_for_llm).await
         } else {
             vec![]
@@ -734,6 +875,11 @@ async fn run_enrichment_stage(
             if !is_in_llm_batch {
                 // Text fetch failed — mark as failed, will retry next run
                 println!("Failed to enrich item (will retry next run): text fetch failed for '{}'", item.title);
+                logging::warn(
+                    "Enrichment",
+                    format!("Skipping '{}' because fetch failed; will retry", item.title),
+                    None,
+                );
                 if first_error.is_none() {
                     first_error = Some(format!("Text fetch failed for '{}'", item.title));
                 }
@@ -751,9 +897,9 @@ async fn run_enrichment_stage(
             };
 
             match llm_result {
-                Ok((tags, snippet, ai_summary)) => {
+                Ok((snippet, ai_summary)) => {
                     let mut enriched = apply_enrichment_payload(
-                        item, text, tags, snippet, ai_summary, thumbnail, false,
+                        item, text, snippet, ai_summary, thumbnail, false,
                     );
 
                     enrich_media_and_embedding(
@@ -765,14 +911,36 @@ async fn run_enrichment_stage(
                     .await;
 
                     enriched.is_enriched = true;
+                    emit_process_stage(
+                        app,
+                        "persist",
+                        "running",
+                        format!("Persisting '{}'", enriched.title),
+                        Some(global_index),
+                        Some(total),
+                    )?;
                     persist_enriched_article(&state.db, &enriched).await?;
                     enriched_count += 1;
 
                     emit_enriched_news_updated(app, &enriched, global_index, total, enriched_count)?;
                     println!("Enriched: {}", enriched.title);
+                    logging::info(
+                        "Enrichment",
+                        format!("Enriched '{}' successfully", enriched.title),
+                        Some(enriched_count),
+                    );
+                    emit_process_stage(
+                        app,
+                        "persist",
+                        "running",
+                        format!("Persisted '{}'", enriched.title),
+                        Some(enriched_count),
+                        Some(total),
+                    )?;
                 }
                 Err(err) => {
                     println!("Failed to enrich item (will retry next run): {}", err);
+                    logging::warn("Enrichment", format!("LLM enrich failed: {}", err), None);
                     if first_error.is_none() {
                         first_error = Some(err);
                     }
@@ -780,12 +948,32 @@ async fn run_enrichment_stage(
             }
         }
 
-        // Delay between batches to respect rate limits (12s for 5 req/min)
-        if global_index < total {
-            println!("[batch] waiting 12s before next batch...");
-            tokio::time::sleep(Duration::from_secs(12)).await;
-        }
     }
+
+    emit_process_stage(
+        app,
+        "extract",
+        "done",
+        "Extraction stage completed",
+        Some(total),
+        Some(total),
+    )?;
+    emit_process_stage(
+        app,
+        "enrich",
+        "done",
+        "Enrichment stage completed",
+        Some(enriched_count),
+        Some(total),
+    )?;
+    emit_process_stage(
+        app,
+        "persist",
+        "done",
+        "Persistence stage completed",
+        Some(enriched_count),
+        Some(total),
+    )?;
 
     Ok(EnrichmentStageResult {
         total,
@@ -817,6 +1005,14 @@ fn emit_enriched_news_sync_complete(
         "[Event] Emitting enriched-news-sync-complete: total={}, enriched={}, failed={}",
         sync_event.total, sync_event.enriched_count, sync_event.failed_count
     );
+    logging::info(
+        "Enrichment",
+        format!(
+            "Completed enrichment: {} enriched, {} failed, total {}",
+            sync_event.enriched_count, sync_event.failed_count, sync_event.total
+        ),
+        Some(sync_event.enriched_count),
+    );
     app.emit("enriched-news-sync-complete", &sync_event)
         .map_err(|e| format!("Event emit error: {}", e))?;
 
@@ -844,6 +1040,16 @@ struct EnrichedNewsSyncCompleteEvent {
     enriched_count: usize,
     failed_count: usize,
     error_sample: Option<String>,
+    emitted_at_utc: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct ProcessStageEvent {
+    stage: String,
+    state: String,
+    message: String,
+    current: Option<usize>,
+    total: Option<usize>,
     emitted_at_utc: String,
 }
 
@@ -1034,6 +1240,40 @@ fn open_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_app_data_dir(app: tauri::AppHandle) -> Result<(), String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
+    open::that(dir).map_err(|e| format!("Failed to open app data dir: {}", e))
+}
+
+fn default_settings_map() -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    map.insert("newsLimit".to_string(), "5".to_string());
+    map.insert("scrapeCooldownHours".to_string(), "2".to_string());
+    map.insert("llmProvider".to_string(), "ollama".to_string());
+    map.insert("ollamaAddress".to_string(), DEFAULT_OLLAMA_ADDRESS.to_string());
+    map.insert("ollamaModel".to_string(), DEFAULT_OLLAMA_MODEL.to_string());
+    map.insert("openaiModel".to_string(), DEFAULT_OPENAI_MODEL.to_string());
+    map.insert("claudeModel".to_string(), DEFAULT_CLAUDE_MODEL.to_string());
+    map.insert("geminiModel".to_string(), DEFAULT_GEMINI_MODEL.to_string());
+    map.insert("selectedRegions".to_string(), "[]".to_string());
+    map.insert("likedConcepts".to_string(), "".to_string());
+    map.insert("dislikedConcepts".to_string(), "".to_string());
+    map.insert("sortMode".to_string(), "date".to_string());
+    map.insert("layout".to_string(), "grid".to_string());
+    map
+}
+
+fn write_settings_map(settings_path: &Path, map: &HashMap<String, String>) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(map)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+    std::fs::write(settings_path, json)
+        .map_err(|e| format!("Failed to write settings.json: {}", e))
+}
+
+#[tauri::command]
 fn save_setting(app: tauri::AppHandle, key: String, value: String) -> Result<(), String> {
     let settings_path = app
         .path()
@@ -1046,14 +1286,11 @@ fn save_setting(app: tauri::AppHandle, key: String, value: String) -> Result<(),
             .map_err(|e| format!("Failed to read settings.json: {}", e))?;
         serde_json::from_str(&raw).unwrap_or_default()
     } else {
-        HashMap::new()
+        default_settings_map()
     };
 
     map.insert(key, value);
-    let json = serde_json::to_string_pretty(&map)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    std::fs::write(&settings_path, json)
-        .map_err(|e| format!("Failed to write settings.json: {}", e))?;
+    write_settings_map(&settings_path, &map)?;
     Ok(())
 }
 
@@ -1085,36 +1322,38 @@ async fn purge_database(app: tauri::AppHandle, state: tauri::State<'_, AppState>
         .app_data_dir()
         .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
 
+    let settings_path = app_data.join("settings.json");
     let img_cache_dir = app_data.join("img_cache");
-    if img_cache_dir.exists() {
-        for entry in std::fs::read_dir(&img_cache_dir)
-            .map_err(|e| format!("Failed to read img_cache: {}", e))?
-        {
-            if let Ok(entry) = entry {
-                let _ = std::fs::remove_file(entry.path());
-            }
+    let embedding_cache_dir = app_data.join("embedding_models");
+    let logs_dir = app_data.join("logs");
+
+    for dir in [&img_cache_dir, &embedding_cache_dir, &logs_dir] {
+        if dir.exists() {
+            std::fs::remove_dir_all(dir)
+                .map_err(|e| format!("Failed to remove '{}': {}", dir.to_string_lossy(), e))?;
         }
     }
 
-    // Reset the in-memory scrape time gate
+    if settings_path.exists() {
+        std::fs::remove_file(&settings_path)
+            .map_err(|e| format!("Failed to remove settings.json: {}", e))?;
+    }
+
+    std::fs::create_dir_all(&img_cache_dir)
+        .map_err(|e| format!("Failed to recreate img_cache: {}", e))?;
+    std::fs::create_dir_all(&embedding_cache_dir)
+        .map_err(|e| format!("Failed to recreate embedding_models: {}", e))?;
+    std::fs::create_dir_all(&logs_dir)
+        .map_err(|e| format!("Failed to recreate logs: {}", e))?;
+
+    let defaults = default_settings_map();
+    write_settings_map(&settings_path, &defaults)?;
+
     *state.last_scrape.lock().unwrap() = None;
     state.preference_embedding_cache.lock().unwrap().clear();
+    local_embedding::clear_loaded_models()?;
 
-    // Remove last_scrape_epoch from settings.json so it stays cleared across restarts
-    let settings_path = app_data.join("settings.json");
-    if settings_path.exists() {
-        if let Ok(raw) = std::fs::read_to_string(&settings_path) {
-            if let Ok(mut map) = serde_json::from_str::<HashMap<String, String>>(&raw) {
-                map.remove("last_scrape_epoch");
-                map.insert("embeddingInitialized".to_string(), "false".to_string());
-                map.insert("embeddingModelLocked".to_string(), "false".to_string());
-                if let Ok(json) = serde_json::to_string_pretty(&map) {
-                    let _ = std::fs::write(&settings_path, json);
-                }
-            }
-        }
-    }
-
+    logging::info("System", "Clean reset completed", None);
     Ok(())
 }
 
@@ -1176,6 +1415,14 @@ async fn start_all_action(
         "Starting full pipeline action (per-category limit={})…",
         per_category_limit
     );
+    emit_process_stage(
+        &app,
+        "scrape",
+        "running",
+        "Starting pipeline",
+        None,
+        None,
+    )?;
     let runtime = resolve_runtime_llm_context(
         &app,
         LlmOverrideArgs {
@@ -1200,7 +1447,7 @@ async fn start_all_action(
         llm_config.model
     );
 
-    run_scrape_stage(&state, &runtime.resolved, cooldown_hours, &runtime.settings_path).await?;
+    run_scrape_stage(&app, &state, &runtime.resolved, cooldown_hours, &runtime.settings_path).await?;
 
     let items_to_enrich = collect_items_to_enrich(&state, per_category_limit, &runtime.resolved.visible_categories).await?;
     let result = run_enrichment_stage(
@@ -1213,6 +1460,15 @@ async fn start_all_action(
         items_to_enrich,
     )
     .await?;
+
+    emit_process_stage(
+        &app,
+        "persist",
+        "done",
+        "Pipeline complete",
+        Some(result.enriched_count),
+        Some(result.total),
+    )?;
 
     emit_enriched_news_sync_complete(&app, result)
 }
@@ -1257,10 +1513,10 @@ async fn reprocess_article(
         .map_err(|e| format!("DB read error: {}", e))?
         .ok_or_else(|| format!("Article not found: {}", article_id))?;
 
-    let (text, tags, snippet, ai_summary, thumbnail) =
+    let (text, snippet, ai_summary, thumbnail) =
         fetch_and_enrich_article_with_timeouts(llm.as_ref(), &item).await?;
 
-    let mut enriched = apply_enrichment_payload(item, text, tags, snippet, ai_summary, thumbnail, true);
+    let mut enriched = apply_enrichment_payload(item, text, snippet, ai_summary, thumbnail, true);
 
     enrich_media_and_embedding(
         &state.db,
@@ -1336,6 +1592,12 @@ async fn prepare_local_embedding_model(model: Option<String>) -> Result<local_em
     local_embedding::prepare_model(model.as_deref()).await
 }
 
+#[tauri::command]
+fn load_process_logs(limit: Option<usize>) -> Result<Vec<ProcessLogEvent>, String> {
+    let max = limit.unwrap_or(300).clamp(1, 2_000);
+    Ok(logging::load_recent(max))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     dotenv::dotenv().ok();
@@ -1343,6 +1605,10 @@ pub fn run() {
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_data_dir)?;
+            logging::init(app.handle(), &app_data_dir)
+                .map_err(|e| -> Box<dyn std::error::Error> {
+                    Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
+                })?;
             let embedding_cache_dir = app_data_dir.join("embedding_models");
             local_embedding::configure_cache_dir(embedding_cache_dir)
                 .map_err(|e| -> Box<dyn std::error::Error> {
@@ -1351,6 +1617,11 @@ pub fn run() {
             let db_path = format!("sqlite:{}", app_data_dir.join("news.db").to_string_lossy());
             println!("📁 Database path: {}", db_path);
             println!("📁 App data directory: {}", app_data_dir.to_string_lossy());
+            logging::info(
+                "System",
+                format!("Application started; app data dir is {}", app_data_dir.to_string_lossy()),
+                None,
+            );
             let pool = tauri::async_runtime::block_on(db::init_db(&db_path))
                 .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
             // Restore last scrape time from settings.json so the gate survives restarts.
@@ -1375,18 +1646,19 @@ pub fn run() {
                     if persisted_sort_mode == "score" {
                         let startup_embedding_model = settings_map
                             .get("localEmbeddingModel")
-                            .cloned()
-                            .or_else(|| settings_map.get("ollamaEmbeddingModel").cloned())
-                            .unwrap_or_else(|| DEFAULT_LOCAL_EMBEDDING_MODEL.to_string());
-                        let supported = local_embedding::ensure_model_supported(Some(&startup_embedding_model)).is_ok();
+                            .map(|v| v.trim().to_string())
+                            .filter(|v| !v.is_empty());
+                        let supported = startup_embedding_model
+                            .as_deref()
+                            .map(|model| local_embedding::ensure_model_supported(Some(model)).is_ok())
+                            .unwrap_or(false);
                         if !supported {
                             settings_map.insert("sortMode".to_string(), "date".to_string());
                             if let Ok(json) = serde_json::to_string_pretty(&settings_map) {
                                 let _ = std::fs::write(&settings_path, json);
                             }
                             println!(
-                                "Startup check: local embedding model '{}' is unsupported. Relevance sort was reset to date.",
-                                startup_embedding_model
+                                "Startup check: configured local embedding model is missing or unsupported. Relevance sort was reset to date."
                             );
                         }
                     }
@@ -1406,8 +1678,10 @@ pub fn run() {
             list_local_embedding_models,
             get_local_embedding_status,
             prepare_local_embedding_model,
+            load_process_logs,
             reprocess_article,
             open_url,
+            open_app_data_dir,
             save_setting,
             load_settings,
             purge_database

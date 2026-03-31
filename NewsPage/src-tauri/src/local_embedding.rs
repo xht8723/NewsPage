@@ -1,7 +1,7 @@
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
-use hf_hub::api::sync::ApiBuilder;
+use hf_hub::{Cache, api::sync::ApiBuilder};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -170,6 +170,22 @@ pub fn get_status() -> LocalEmbeddingStatus {
     }
 }
 
+pub fn clear_loaded_models() -> Result<(), String> {
+    if let Some(embedders) = EMBEDDERS.get() {
+        embedders
+            .lock()
+            .map_err(|_| "Embedding models lock poisoned".to_string())?
+            .clear();
+    }
+
+    let cache_message = CACHE_DIR
+        .get()
+        .map(|path| format!("Embedding cache reset at {}", path.to_string_lossy()))
+        .unwrap_or_else(|| "Embedding cache reset".to_string());
+    set_status("idle", None, cache_message);
+    Ok(())
+}
+
 pub fn list_supported_models() -> Vec<String> {
     MODEL_SPECS
         .iter()
@@ -197,6 +213,23 @@ pub fn ensure_model_supported(model: Option<&str>) -> Result<String, String> {
 // ---------------------------------------------------------------------------
 // Model loading
 // ---------------------------------------------------------------------------
+
+/// Resolves all three required model files from the local hf_hub disk cache
+/// without making any network requests. Returns `None` if any file is missing.
+///
+/// Uses the official `hf_hub::Cache` API so path resolution matches hf_hub's
+/// internal cache layout on all platforms, including Windows.
+fn find_cached_model_files(
+    cache_dir: &PathBuf,
+    hf_repo: &str,
+) -> Option<(PathBuf, PathBuf, PathBuf)> {
+    let cache = Cache::new(cache_dir.clone());
+    let repo = cache.model(hf_repo.to_string());
+    let config_path = repo.get("config.json")?;
+    let tokenizer_path = repo.get("tokenizer.json")?;
+    let weights_path = repo.get("model.safetensors")?;
+    Some((config_path, tokenizer_path, weights_path))
+}
 
 fn get_or_init_model(model_name: &str, allow_download: bool) -> Result<(), String> {
     let model_name = model_name.to_ascii_lowercase();
@@ -234,36 +267,51 @@ fn get_or_init_model(model_name: &str, allow_download: bool) -> Result<(), Strin
         ));
     }
 
-    set_status(
-        "downloading",
-        Some(model_name.clone()),
-        format!("Downloading model '{}'…", model_name),
-    );
-
     let cache_dir = configured_cache_dir()?;
 
-    let api = ApiBuilder::new()
-        .with_cache_dir(cache_dir)
-        .with_progress(true)
-        .build()
-        .map_err(|e| format!("Failed to create HuggingFace API client: {}", e))?;
-    let repo = api.model(spec.hf_repo.to_string());
+    // Fast path: all three model files are already in the local hf_hub disk cache.
+    // Skip the HuggingFace ETag round-trip entirely so startup works offline.
+    let (config_path, tokenizer_path, weights_path) =
+        if let Some(paths) = find_cached_model_files(&cache_dir, spec.hf_repo) {
+            set_status(
+                "loading",
+                Some(model_name.clone()),
+                format!("Loading cached model '{}'…", model_name),
+            );
+            paths
+        } else {
+            // Slow path: download from HuggingFace (first run or missing files).
+            set_status(
+                "downloading",
+                Some(model_name.clone()),
+                format!("Downloading model '{}'…", model_name),
+            );
 
-    let config_path = repo
-        .get("config.json")
-        .map_err(|e| format!("Failed to download config.json for '{}': {}", spec.hf_repo, e))?;
-    let tokenizer_path = repo
-        .get("tokenizer.json")
-        .map_err(|e| format!("Failed to download tokenizer.json for '{}': {}", spec.hf_repo, e))?;
-    let weights_path = repo
-        .get("model.safetensors")
-        .map_err(|e| format!("Failed to download model.safetensors for '{}': {}", spec.hf_repo, e))?;
+            let api = ApiBuilder::new()
+                .with_cache_dir(cache_dir)
+                .with_progress(true)
+                .build()
+                .map_err(|e| format!("Failed to create HuggingFace API client: {}", e))?;
+            let repo = api.model(spec.hf_repo.to_string());
 
-    set_status(
-        "loading",
-        Some(model_name.clone()),
-        format!("Loading model '{}'…", model_name),
-    );
+            let cfg = repo
+                .get("config.json")
+                .map_err(|e| format!("Failed to download config.json for '{}': {}", spec.hf_repo, e))?;
+            let tok = repo
+                .get("tokenizer.json")
+                .map_err(|e| format!("Failed to download tokenizer.json for '{}': {}", spec.hf_repo, e))?;
+            let wts = repo
+                .get("model.safetensors")
+                .map_err(|e| format!("Failed to download model.safetensors for '{}': {}", spec.hf_repo, e))?;
+
+            set_status(
+                "loading",
+                Some(model_name.clone()),
+                format!("Loading model '{}'…", model_name),
+            );
+
+            (cfg, tok, wts)
+        };
 
     let device = Device::Cpu;
 

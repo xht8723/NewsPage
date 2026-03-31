@@ -51,11 +51,9 @@ export function resolveSourceIcon(sourceName: string, sourceIcon: string): strin
 
 export function mapBackendNewsItem(item: BackendNewsItem): NewsArticle {
   const parsedTimestamp = Date.parse(item.date);
-  const normalizedTags = item.tags.length > 0 ? item.tags : [item.source_name || "Update"];
   return {
     id: item.id,
     category: toTopicCategory(item.category),
-    tags: normalizedTags,
     title: item.title,
     snippet: item.snippet || "",
     aiSummary: item.ai_summary || "",

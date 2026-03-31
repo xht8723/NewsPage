@@ -174,9 +174,6 @@ fn parse_rss_items(xml: &str) -> Vec<AutomatonNewsItem> {
             vec![author]
         };
 
-        // Collect <category> tags as item tags
-        let tags = collect_rss_categories(item_xml);
-
         // Try to extract thumbnail from <description> content (contains <img>)
         let thumbnail = xml_tag_content(item_xml, "description")
             .map(|d| strip_cdata(d))
@@ -194,7 +191,6 @@ fn parse_rss_items(xml: &str) -> Vec<AutomatonNewsItem> {
             source_icon: SOURCE_ICON.to_string(),
             authors,
             thumbnail,
-            tags,
             category: CATEGORY.to_string(),
             ai_summary: String::new(),
             og_content: String::new(),
@@ -204,25 +200,6 @@ fn parse_rss_items(xml: &str) -> Vec<AutomatonNewsItem> {
     }
 
     items
-}
-
-fn collect_rss_categories(item_xml: &str) -> Vec<String> {
-    let mut tags = Vec::new();
-    let mut search = item_xml;
-    while let Some(start) = search.find("<category>") {
-        let rest = &search[start + 10..];
-        if let Some(end) = rest.find("</category>") {
-            let raw = &rest[..end];
-            let tag = strip_cdata(raw);
-            if !tag.is_empty() {
-                tags.push(tag);
-            }
-            search = &rest[end + 11..];
-        } else {
-            break;
-        }
-    }
-    tags
 }
 
 fn normalize_rss_date(date_str: &str) -> String {
@@ -278,7 +255,6 @@ fn parse_html_items(html: &str) -> Vec<AutomatonNewsItem> {
     let title_sel = Selector::parse("h2 a, h3 a").unwrap();
     let time_sel = Selector::parse("time").unwrap();
     let author_sel = Selector::parse("a[href*='/author/']").unwrap();
-    let tag_sel = Selector::parse("a[href*='/tag/']").unwrap();
     let img_sel = Selector::parse("img").unwrap();
 
     let mut items = Vec::new();
@@ -327,20 +303,6 @@ fn parse_html_items(html: &str) -> Vec<AutomatonNewsItem> {
             })
             .collect();
 
-        // Tags
-        let mut seen_tags = HashSet::new();
-        let tags: Vec<String> = root
-            .select(&tag_sel)
-            .filter_map(|a| {
-                let tag: String = a.text().collect::<String>().trim().to_string();
-                if !tag.is_empty() && seen_tags.insert(tag.clone()) {
-                    Some(tag)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
         // Thumbnail
         let thumbnail = root
             .select(&img_sel)
@@ -364,7 +326,6 @@ fn parse_html_items(html: &str) -> Vec<AutomatonNewsItem> {
             source_icon: SOURCE_ICON.to_string(),
             authors,
             thumbnail,
-            tags,
             category: CATEGORY.to_string(),
             ai_summary: String::new(),
             og_content: String::new(),
@@ -529,13 +490,6 @@ mod tests {
     }
 
     #[test]
-    fn rss_parser_extracts_tags() {
-        let items = parse_rss_items(RSS_FIXTURE);
-        assert!(items[0].tags.contains(&"Indie Games".to_string()));
-        assert!(items[0].tags.contains(&"News".to_string()));
-    }
-
-    #[test]
     fn rss_parser_extracts_thumbnail_from_description() {
         let items = parse_rss_items(RSS_FIXTURE);
         assert_eq!(
@@ -635,12 +589,6 @@ mod tests {
     }
 
     #[test]
-    fn html_parser_extracts_tags() {
-        let items = parse_html_items(HTML_FIXTURE);
-        assert_eq!(items[0].tags, vec!["Indie Games"]);
-    }
-
-    #[test]
     fn html_parser_extracts_thumbnail() {
         let items = parse_html_items(HTML_FIXTURE);
         assert_eq!(
@@ -674,7 +622,6 @@ mod tests {
             source_icon: SOURCE_ICON.to_string(),
             authors: Vec::new(),
             thumbnail: String::new(),
-            tags: Vec::new(),
             category: CATEGORY.to_string(),
             ai_summary: String::new(),
             og_content: String::new(),
@@ -749,12 +696,11 @@ mod tests {
         );
         for (i, item) in items.iter().take(5).enumerate() {
             println!(
-                "[{}] {}\n    URL : {}\n    Date: {}\n    Tags: {:?}\n",
+                "[{}] {}\n    URL : {}\n    Date: {}\n",
                 i + 1,
                 item.title,
                 item.url,
                 item.date,
-                item.tags,
             );
         }
     }
@@ -775,12 +721,11 @@ mod tests {
         );
         for (i, item) in items.iter().take(5).enumerate() {
             println!(
-                "[{}] {}\n    URL : {}\n    Date: {}\n    Tags: {:?}\n",
+                "[{}] {}\n    URL : {}\n    Date: {}\n",
                 i + 1,
                 item.title,
                 item.url,
                 item.date,
-                item.tags,
             );
         }
     }

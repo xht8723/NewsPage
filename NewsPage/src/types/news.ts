@@ -4,7 +4,6 @@ import type { LayoutMode } from "../constants/news";
 export interface NewsArticle {
   id: string;
   category: TopicCategory;
-  tags: string[];
   title: string;
   snippet: string;
   aiSummary: string;
@@ -27,7 +26,6 @@ export interface BackendNewsItem {
   source_icon: string;
   authors: string[];
   thumbnail: string;
-  tags: string[];
   category: string;
   ai_summary: string;
   og_content: string;
@@ -38,6 +36,7 @@ export interface BackendNewsItem {
 export interface UserSettings {
   newsLimit: number;
   scrapeCooldownHours: number;
+    llmBatchSize: number;
   llmProvider: string;
   ollamaAddress: string;
   ollamaModel: string;
@@ -62,6 +61,23 @@ export interface LocalEmbeddingStatus {
   active_model: string | null;
   cache_dir: string;
   message: string;
+}
+
+export interface ProcessLogEntry {
+  timestamp_utc: string;
+  level: string;
+  category: string;
+  message: string;
+  count?: number | null;
+}
+
+export interface ProcessStageEvent {
+  stage: string;
+  state: string;
+  message: string;
+  current?: number | null;
+  total?: number | null;
+  emitted_at_utc: string;
 }
 
 export interface CardContextMenuState {

@@ -84,11 +84,6 @@ export function ArticleDetailModal({
               <span>{selectedArticle.sourceName}</span>
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
-              {selectedArticle.tags.map((tag, tagIndex) => (
-                <span key={`${selectedArticle.id}-detail-tag-${tagIndex}`} className="rounded-full bg-zinc-500/20 px-3 py-1 text-[10px] font-bold uppercase tracking-widest opacity-70">
-                  {tag}
-                </span>
-              ))}
               <span className="rounded-full bg-zinc-500/20 px-3 py-1 text-[10px] font-bold uppercase tracking-widest opacity-70">{selectedArticle.date}</span>
             </div>
           </div>

@@ -1,4 +1,5 @@
-import { RefreshCw, Settings, X } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { FolderOpen, RefreshCw, Settings, X } from "lucide-react";
 import type React from "react";
 import type { Dispatch, SetStateAction } from "react";
 import {
@@ -25,11 +26,13 @@ interface SettingsModalProps {
   isRefreshingModels: boolean;
   refreshOllamaModels: (address: string, preferredModel?: string) => Promise<void>;
   localEmbeddingModels: string[];
+  selectedEmbeddingModel: string;
+  onSelectEmbeddingModel: Dispatch<SetStateAction<string>>;
   localEmbeddingStatus: LocalEmbeddingStatus | null;
   isPreparingLocalEmbeddingModel: boolean;
   onPrepareLocalEmbeddingModel: (model: string) => Promise<void>;
-  embeddingInitialized: boolean;
-  embeddingModelLocked: boolean;
+  isEmbeddingReady: boolean;
+  isEmbeddingConfigured: boolean;
   purgeConfirmStep: 0 | 1 | 2;
   setPurgeConfirmStep: Dispatch<SetStateAction<0 | 1 | 2>>;
   isPurging: boolean;
@@ -52,11 +55,12 @@ export function SettingsModal({
   isRefreshingModels,
   refreshOllamaModels,
   localEmbeddingModels,
+  selectedEmbeddingModel,
+  onSelectEmbeddingModel,
   localEmbeddingStatus,
   isPreparingLocalEmbeddingModel,
   onPrepareLocalEmbeddingModel,
-  embeddingInitialized,
-  embeddingModelLocked,
+  isEmbeddingConfigured,
   purgeConfirmStep,
   setPurgeConfirmStep,
   isPurging,
@@ -68,14 +72,18 @@ export function SettingsModal({
     return null;
   }
 
-  const embeddingIsBusy = isPreparingLocalEmbeddingModel || localEmbeddingStatus?.state === "downloading";
-  const embeddingSelectionLocked = embeddingInitialized && embeddingModelLocked;
+  const embeddingIsBusy =
+    isPreparingLocalEmbeddingModel
+    || localEmbeddingStatus?.state === "downloading"
+    || localEmbeddingStatus?.state === "loading";
+  const embeddingSelectionLocked = isEmbeddingConfigured;
+  const effectiveEmbeddingModel = isEmbeddingConfigured ? settings.localEmbeddingModel : selectedEmbeddingModel;
   const selectedModelReady =
     localEmbeddingStatus?.state === "ready" &&
-    (localEmbeddingStatus.active_model ?? "").toLowerCase() === settings.localEmbeddingModel.toLowerCase();
-  const downloadButtonDisabled = embeddingIsBusy || selectedModelReady;
-  const embeddingModelTooltip = embeddingSelectionLocked
-    ? "Embedding model is locked after first successful setup to keep relevance sorting consistent. Purge Database in Danger Zone to unlock."
+    (localEmbeddingStatus.active_model ?? "").toLowerCase() === effectiveEmbeddingModel.toLowerCase();
+  const downloadButtonDisabled = embeddingIsBusy || isEmbeddingConfigured;
+  const embeddingModelTooltip = isEmbeddingConfigured
+    ? "Embedding model is locked after setup to keep relevance sorting consistent. Use Clean Reset in the Danger Zone to choose a different model."
     : "Select the local embedding model used for relevance sorting.";
 
   return (
@@ -143,6 +151,26 @@ export function SettingsModal({
                     }`}
                   />
                 </div>
+                  <div>
+                    <label className="mb-1.5 block text-xs font-medium opacity-70">LLM batch size</label>
+                    <p className="mb-1.5 text-xs opacity-50">Articles sent to the LLM per request. Lower values suit models with small context windows.</p>
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={settings.llmBatchSize}
+                      onChange={(e) => {
+                        const val = Math.min(20, Math.max(1, Number(e.target.value)));
+                        setSettings((s) => ({ ...s, llmBatchSize: val }));
+                        saveSetting("llmBatchSize", String(val));
+                      }}
+                      className={`w-full rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
+                        isDarkMode
+                          ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                          : "border-zinc-300 bg-zinc-200 text-zinc-900"
+                      }`}
+                    />
+                  </div>
               </div>
             </div>
 
@@ -152,13 +180,12 @@ export function SettingsModal({
                 <div>
                   <label className="mb-1.5 block text-xs font-medium opacity-70">Local Embedding Model (Relevance)</label>
                   <select
-                    value={settings.localEmbeddingModel}
+                    value={effectiveEmbeddingModel}
                     disabled={embeddingSelectionLocked}
                     title={embeddingModelTooltip}
                     onChange={(e) => {
                       const val = e.target.value;
-                      setSettings((s) => ({ ...s, localEmbeddingModel: val }));
-                      saveSetting("localEmbeddingModel", val);
+                      onSelectEmbeddingModel(val);
                     }}
                     className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
                       isDarkMode
@@ -171,20 +198,18 @@ export function SettingsModal({
                       const label = info ? `${model}  (${info.size}, ${info.dims}d, ${info.langs})` : model;
                       return <option key={`embed-${model}`} value={model}>{label}</option>;
                     })}
-                    {localEmbeddingModels.length === 0 && <option value={settings.localEmbeddingModel}>{settings.localEmbeddingModel}</option>}
+                    {localEmbeddingModels.length === 0 && <option value={effectiveEmbeddingModel}>{effectiveEmbeddingModel}</option>}
                   </select>
                   {!embeddingSelectionLocked && (
                     <p className={`mt-2 text-[11px] ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
-                      {!embeddingInitialized
-                        ? "First launch setup: choose your embedding model and click Download Model."
-                        : "Embedding model selection is unlocked."}
+                      Choose your embedding model and click Download Model. The model is only saved after the download succeeds.
                     </p>
                   )}
                   <div className="mt-2 flex items-start justify-end">
                     <button
                       type="button"
                       disabled={downloadButtonDisabled}
-                      onClick={() => void onPrepareLocalEmbeddingModel(settings.localEmbeddingModel)}
+                      onClick={() => void onPrepareLocalEmbeddingModel(effectiveEmbeddingModel)}
                       className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
                         isDarkMode
                           ? `border-zinc-700 bg-zinc-800 text-zinc-200 ${downloadButtonDisabled ? "" : "hover:bg-zinc-700"}`
@@ -192,7 +217,7 @@ export function SettingsModal({
                       } shrink-0 disabled:opacity-50`}
                     >
                       <RefreshCw size={12} className={embeddingIsBusy ? "animate-spin" : ""} />
-                      {embeddingIsBusy ? "Downloading..." : selectedModelReady ? "Downloaded" : "Download Model"}
+                      {embeddingIsBusy ? "Preparing..." : selectedModelReady ? "Downloaded" : "Download Model"}
                     </button>
                   </div>
                   <p className={`mt-2 break-all text-[11px] ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
@@ -205,6 +230,20 @@ export function SettingsModal({
                       <div className={`h-2 w-full animate-pulse ${isDarkMode ? "bg-emerald-500/70" : "bg-emerald-500"}`} />
                     </div>
                   )}
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => void invoke("open_app_data_dir")}
+                    className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                      isDarkMode
+                        ? "border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                        : "border-zinc-300 bg-zinc-100 text-zinc-700 hover:bg-zinc-200"
+                    }`}
+                  >
+                    <FolderOpen className="h-4 w-4 shrink-0" />
+                    Open App Data Folder
+                  </button>
                 </div>
               </div>
             </div>
@@ -488,9 +527,9 @@ export function SettingsModal({
           <div>
             <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-red-500">Danger Zone</p>
             <div className={`rounded-xl border border-red-500/30 p-4 ${isDarkMode ? "bg-red-950/20" : "bg-red-50"}`}>
-              <p className="mb-1 text-sm font-semibold">Purge Database</p>
+              <p className="mb-1 text-sm font-semibold">Clean Reset</p>
               <p className={`mb-4 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
-                Permanently deletes all news articles and cached thumbnails. This cannot be undone. It also unlocks embedding model selection.
+                Permanently deletes articles, cached thumbnails, embedding models, and settings, then recreates a fresh default setup. This cannot be undone.
               </p>
 
               {purgeConfirmStep === 0 && (
@@ -499,7 +538,7 @@ export function SettingsModal({
                   onClick={() => setPurgeConfirmStep(1)}
                   className="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-red-700"
                 >
-                  Purge Database
+                  Clean Reset
                 </button>
               )}
 
@@ -550,7 +589,7 @@ export function SettingsModal({
                       }}
                       className="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-red-700 disabled:opacity-50"
                     >
-                      {isPurging ? "Purging..." : "Yes, delete everything"}
+                      {isPurging ? "Resetting..." : "Yes, clean reset"}
                     </button>
                     <button
                       type="button"
