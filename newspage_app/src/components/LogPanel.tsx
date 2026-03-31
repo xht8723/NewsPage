@@ -107,7 +107,7 @@ export function LogPanel({ isDarkMode, logs, isOpen, onClear, onClose }: LogPane
           </div>
         </header>
 
-        <div ref={containerRef} className="news-scroll min-h-0 flex-1 space-y-2 overflow-y-auto p-3 font-mono text-xs leading-5">
+        <div ref={containerRef} className={`min-h-0 flex-1 space-y-2 overflow-y-auto p-3 font-mono text-xs leading-5 ${isDarkMode ? "news-scroll news-scroll-dark" : "news-scroll news-scroll-light"}`}>
           {logs.length === 0 ? (
             <p className="text-zinc-500">No logs yet.</p>
           ) : (
@@ -127,7 +127,7 @@ export function LogPanel({ isDarkMode, logs, isOpen, onClear, onClose }: LogPane
                       {entry.level}
                     </span>
                   </div>
-                  <p className={`mt-1 ${isDarkMode ? "text-zinc-200" : "text-zinc-700"}`}>{entry.message}</p>
+                  <p className={`mt-1 break-words ${isDarkMode ? "text-zinc-200" : "text-zinc-700"}`}>{entry.message}</p>
                 </div>
               );
             })

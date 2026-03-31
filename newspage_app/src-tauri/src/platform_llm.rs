@@ -157,54 +157,77 @@ impl LLMProviderImpl for OllamaProvider {
     }
 
     async fn enrich(&self, title: &str, text: &str) -> Result<(String, String), String> {
+        let results = self.enrich_batch(&[(title.to_string(), text.to_string())]).await;
+        results.into_iter().next().unwrap_or_else(|| Err("No result from batch".to_string()))
+    }
+
+    async fn enrich_batch(
+        &self,
+        articles: &[(String, String)],
+    ) -> Vec<Result<(String, String), String>> {
+        if articles.is_empty() {
+            return vec![];
+        }
+
         use ollama_rs::generation::completion::request::GenerationRequest;
         use ollama_rs::Ollama;
 
-        let (host, port) = self.parse_address()?;
+        let (host, port) = match self.parse_address() {
+            Ok((h, p)) => (h, p),
+            Err(e) => return articles.iter().map(|_| Err(e.clone())).collect(),
+        };
+
         let model = self.model.trim();
         if model.is_empty() {
-            return Err("Ollama model cannot be empty".to_string());
+            let err = "Ollama model cannot be empty".to_string();
+            return articles.iter().map(|_| Err(err.clone())).collect();
         }
 
         let ollama = Ollama::new(host, port);
+        let n = articles.len();
+        let s = if n == 1 { "" } else { "s" };
 
-        // --- Prompt 1: Snippet ---
-        let prompt_snippet = format!(
-            "You are a news summarizer. Write exactly ONE sentence that captures the most important point of the article below\n\
-			Rules:\n\
-			- Output ONLY the single sentence. No explanation. No prefix.\n\
-			- Be concise and factual.\n\n\
-			Title: {}\n\
-			Article: {}",
-            title, text
+        let mut prompt = format!(
+            "You are to summarize news articles. You will process exactly {n} article{s}.\n\
+                 For each article, produce exactly:\n\
+             SNIPPET: 1-3 short sentences introducing the article content.\n\
+             SUMMARY: 1-8 bullet points, each starting with \"- \"\n\
+             IMPORTANT: Answer in the same language as each article provided. Do not translate; match the original language of each article exactly.\n\n\
+             Use this EXACT output format for each article:\n\n\
+             ===ARTICLE 1===\n\
+             SNIPPET:\n\
+             SUMMARY:\n\
+             - Point 1\n\
+             - Point 2\n\n\
+             ===ARTICLE 2===\n\
+             SNIPPET: ...\n\
+             SUMMARY:\n\
+             - ...\n\n\
+             ---\n\n"
         );
-        let snippet_response = ollama
-            .generate(GenerationRequest::new(model.to_string(), prompt_snippet))
-            .await
-            .map_err(|e| format!("Ollama snippet error: {}", e))?;
 
-        let snippet = snippet_response.response.trim().to_string();
+        for (i, (title, text)) in articles.iter().enumerate() {
+            let truncated = truncate_at_char_boundary(text, 4000);
+            prompt.push_str(&format!(
+                "[ARTICLE {}]\nTitle: {}\nText: {}\n\n",
+                i + 1, title, truncated
+            ));
+        }
 
-        // --- Prompt 2: Summary ---
-        let prompt_summary = format!(
-            "You are a precise news summarizer. Write a clear, well-structured summary of the article below.\n\
-			Rules:\n\
-			- Write 3 to 10 bullet points.\n\
-			- Each bullet point starts with '- ' and is one concise sentence.\n\
-			- Cover the key who, what, when, where, and why across the bullets.\n\
-			- Output ONLY the bullet points. No titles. No intro text.\n\n\
-			Title: {}\n\
-			Article: {}",
-            title, text
-        );
-        let summary_response = ollama
-            .generate(GenerationRequest::new(model.to_string(), prompt_summary))
-            .await
-            .map_err(|e| format!("Ollama summary error: {}", e))?;
+        println!("[llm-batch] sending batch of {} articles to Ollama", n);
 
-        let ai_summary = summary_response.response.trim().to_string();
+        let response = match ollama.generate(GenerationRequest::new(model.to_string(), prompt)).await {
+            Ok(r) => r,
+            Err(e) => {
+                let err = format!("Ollama batch request failed: {}", e);
+                return articles.iter().map(|_| Err(err.clone())).collect();
+            }
+        };
 
-        Ok((snippet, ai_summary))
+        let full_text = response.response.trim();
+        println!("[llm-batch] received response ({} chars), parsing {} articles", full_text.len(), n);
+
+        parse_batch_response(full_text, n)
     }
 
     async fn test_connection(&self) -> Result<bool, String> {
@@ -252,6 +275,18 @@ impl LLMProviderImpl for OpenAIProvider {
     }
 
     async fn enrich(&self, title: &str, text: &str) -> Result<(String, String), String> {
+        let results = self.enrich_batch(&[(title.to_string(), text.to_string())]).await;
+        results.into_iter().next().unwrap_or_else(|| Err("No result from batch".to_string()))
+    }
+
+    async fn enrich_batch(
+        &self,
+        articles: &[(String, String)],
+    ) -> Vec<Result<(String, String), String>> {
+        if articles.is_empty() {
+            return vec![];
+        }
+
         #[derive(Serialize, Deserialize)]
         struct Message {
             role: String,
@@ -275,77 +310,85 @@ impl LLMProviderImpl for OpenAIProvider {
             choices: Vec<Choice>,
         }
 
+        let n = articles.len();
+        let s = if n == 1 { "" } else { "s" };
+        let mut prompt = format!(
+            "You are to summarize news articles. You will process exactly {n} article{s}.\n\
+                 For each article, produce exactly:\n\
+             SNIPPET: 1-3 short sentences introducing the article content.\n\
+             SUMMARY: 1-8 bullet points, each starting with \"- \"\n\
+             IMPORTANT: Answer in the same language as each article provided. Do not translate; match the original language of each article exactly.\n\n\
+             Use this EXACT output format for each article:\n\n\
+             ===ARTICLE 1===\n\
+             SNIPPET:\n\
+             SUMMARY:\n\
+             - Point 1\n\
+             - Point 2\n\n\
+             ===ARTICLE 2===\n\
+             SNIPPET: ...\n\
+             SUMMARY:\n\
+             - ...\n\n\
+             ---\n\n"
+        );
+
+        for (i, (title, text)) in articles.iter().enumerate() {
+            let truncated = truncate_at_char_boundary(text, 4000);
+            prompt.push_str(&format!(
+                "[ARTICLE {}]\nTitle: {}\nText: {}\n\n",
+                i + 1, title, truncated
+            ));
+        }
+
+        println!("[llm-batch] sending batch of {} articles to OpenAI", n);
+
         let client = reqwest::Client::new();
-
-        // Get snippet
-        let snippet_prompt = format!(
-            "Write exactly ONE sentence that captures the most important point.\n\
-			Output ONLY the sentence. No explanation.\n\n\
-			Title: {}\nArticle: {}",
-            title, text
-        );
-
-        let snippet_req = ChatRequest {
+        let req = ChatRequest {
             model: self.model.clone(),
             messages: vec![Message {
                 role: "user".to_string(),
-                content: snippet_prompt,
+                content: prompt,
             }],
             temperature: 0.7,
         };
 
-        let snippet_resp = client
+        let resp = match client
             .post("https://api.openai.com/v1/chat/completions")
             .bearer_auth(&self.api_key)
-            .json(&snippet_req)
+            .json(&req)
             .send()
             .await
-            .map_err(|e| format!("OpenAI snippet request failed: {}", e))?
-            .json::<ChatResponse>()
-            .await
-            .map_err(|e| format!("Failed to parse OpenAI snippet response: {}", e))?;
-
-        let snippet: String = snippet_resp
-            .choices
-            .first()
-            .map(|c| c.message.content.trim().to_string())
-            .unwrap_or_default();
-
-        // Get summary
-        let summary_prompt = format!(
-            "Write a clear summary as 3-10 bullet points.\n\
-			Each line starts with '- '. Output ONLY the bullet points.\n\n\
-			Title: {}\nArticle: {}",
-            title, text
-        );
-
-        let summary_req = ChatRequest {
-            model: self.model.clone(),
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: summary_prompt,
-            }],
-            temperature: 0.7,
+        {
+            Ok(r) => r,
+            Err(e) => {
+                let err = format!("OpenAI batch request failed: {}", e);
+                return articles.iter().map(|_| Err(err.clone())).collect();
+            }
         };
 
-        let summary_resp = client
-            .post("https://api.openai.com/v1/chat/completions")
-            .bearer_auth(&self.api_key)
-            .json(&summary_req)
-            .send()
-            .await
-            .map_err(|e| format!("OpenAI summary request failed: {}", e))?
-            .json::<ChatResponse>()
-            .await
-            .map_err(|e| format!("Failed to parse OpenAI summary response: {}", e))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            let err = format!("OpenAI batch request failed: status {} body {}", status, body);
+            return articles.iter().map(|_| Err(err.clone())).collect();
+        }
 
-        let ai_summary: String = summary_resp
+        let chat_resp = match resp.json::<ChatResponse>().await {
+            Ok(r) => r,
+            Err(e) => {
+                let err = format!("Failed to parse OpenAI batch response: {}", e);
+                return articles.iter().map(|_| Err(err.clone())).collect();
+            }
+        };
+
+        let full_text = chat_resp
             .choices
             .first()
-            .map(|c| c.message.content.trim().to_string())
-            .unwrap_or_default();
+            .map(|c| c.message.content.as_str())
+            .unwrap_or("");
 
-        Ok((snippet, ai_summary))
+        println!("[llm-batch] received response ({} chars), parsing {} articles", full_text.len(), n);
+
+        parse_batch_response(full_text, n)
     }
 
     async fn test_connection(&self) -> Result<bool, String> {
@@ -390,6 +433,18 @@ impl LLMProviderImpl for ClaudeProvider {
     }
 
     async fn enrich(&self, title: &str, text: &str) -> Result<(String, String), String> {
+        let results = self.enrich_batch(&[(title.to_string(), text.to_string())]).await;
+        results.into_iter().next().unwrap_or_else(|| Err("No result from batch".to_string()))
+    }
+
+    async fn enrich_batch(
+        &self,
+        articles: &[(String, String)],
+    ) -> Vec<Result<(String, String), String>> {
+        if articles.is_empty() {
+            return vec![];
+        }
+
         #[derive(Serialize)]
         struct TextContent {
             r#type: String,
@@ -421,85 +476,89 @@ impl LLMProviderImpl for ClaudeProvider {
             content: Vec<TextBlock>,
         }
 
+        let n = articles.len();
+        let s = if n == 1 { "" } else { "s" };
+        let mut prompt = format!(
+            "You are to summarize news articles. You will process exactly {n} article{s}.\n\
+                 For each article, produce exactly:\n\
+             SNIPPET: 1-3 short sentences introducing the article content.\n\
+             SUMMARY: 1-8 bullet points, each starting with \"- \"\n\
+             IMPORTANT: Answer in the same language as each article provided. Do not translate; match the original language of each article exactly.\n\n\
+             Use this EXACT output format for each article:\n\n\
+             ===ARTICLE 1===\n\
+             SNIPPET:\n\
+             SUMMARY:\n\
+             - Point 1\n\
+             - Point 2\n\n\
+             ===ARTICLE 2===\n\
+             SNIPPET: ...\n\
+             SUMMARY:\n\
+             - ...\n\n\
+             ---\n\n"
+        );
+
+        for (i, (title, text)) in articles.iter().enumerate() {
+            let truncated = truncate_at_char_boundary(text, 4000);
+            prompt.push_str(&format!(
+                "[ARTICLE {}]\nTitle: {}\nText: {}\n\n",
+                i + 1, title, truncated
+            ));
+        }
+
+        println!("[llm-batch] sending batch of {} articles to Claude", n);
+
         let client = reqwest::Client::new();
-
-        // Get snippet
-        let snippet_prompt = format!(
-            "Write exactly ONE sentence that captures the most important point.\n\
-			Output ONLY the sentence. No explanation.\n\n\
-			Title: {}\nArticle: {}",
-            title, text
-        );
-
-        let snippet_req = ClaudeRequest {
+        let req = ClaudeRequest {
             model: self.model.clone(),
-            max_tokens: 200,
+            max_tokens: 2000,
             messages: vec![Message {
                 role: "user".to_string(),
                 content: vec![TextContent {
                     r#type: "text".to_string(),
-                    text: snippet_prompt,
+                    text: prompt,
                 }],
             }],
         };
 
-        let snippet_resp = client
+        let resp = match client
             .post("https://api.anthropic.com/v1/messages")
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
-            .json(&snippet_req)
+            .json(&req)
             .send()
             .await
-            .map_err(|e| format!("Claude snippet request failed: {}", e))?
-            .json::<ClaudeResponse>()
-            .await
-            .map_err(|e| format!("Failed to parse Claude snippet response: {}", e))?;
-
-        let snippet: String = snippet_resp
-            .content
-            .first()
-            .map(|c| c.text.trim().to_string())
-            .unwrap_or_default();
-
-        // Get summary
-        let summary_prompt = format!(
-            "Write a clear summary as 3-10 bullet points.\n\
-			Each line starts with '- '. Output ONLY the bullet points.\n\n\
-			Title: {}\nArticle: {}",
-            title, text
-        );
-
-        let summary_req = ClaudeRequest {
-            model: self.model.clone(),
-            max_tokens: 500,
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: vec![TextContent {
-                    r#type: "text".to_string(),
-                    text: summary_prompt,
-                }],
-            }],
+        {
+            Ok(r) => r,
+            Err(e) => {
+                let err = format!("Claude batch request failed: {}", e);
+                return articles.iter().map(|_| Err(err.clone())).collect();
+            }
         };
 
-        let summary_resp = client
-            .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .json(&summary_req)
-            .send()
-            .await
-            .map_err(|e| format!("Claude summary request failed: {}", e))?
-            .json::<ClaudeResponse>()
-            .await
-            .map_err(|e| format!("Failed to parse Claude summary response: {}", e))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            let err = format!("Claude batch request failed: status {} body {}", status, body);
+            return articles.iter().map(|_| Err(err.clone())).collect();
+        }
 
-        let ai_summary: String = summary_resp
+        let claude_resp = match resp.json::<ClaudeResponse>().await {
+            Ok(r) => r,
+            Err(e) => {
+                let err = format!("Failed to parse Claude batch response: {}", e);
+                return articles.iter().map(|_| Err(err.clone())).collect();
+            }
+        };
+
+        let full_text = claude_resp
             .content
             .first()
-            .map(|c| c.text.trim().to_string())
-            .unwrap_or_default();
+            .map(|c| c.text.as_str())
+            .unwrap_or("");
 
-        Ok((snippet, ai_summary))
+        println!("[llm-batch] received response ({} chars), parsing {} articles", full_text.len(), n);
+
+        parse_batch_response(full_text, n)
     }
 
     async fn test_connection(&self) -> Result<bool, String> {
@@ -612,7 +671,8 @@ impl LLMProviderImpl for GeminiProvider {
                 "You are to summarize news articles. You will process exactly {n} article{s}.\n\
                  For each article, produce exactly:\n\
              SNIPPET: 1-3 short sentences introducing the article content.\n\
-             SUMMARY: 1-8 bullet points, each starting with \"- \"\n\n\
+             SUMMARY: 1-8 bullet points, each starting with \"- \"\n\
+             IMPORTANT: Answer in the same language as each article provided. Do not translate; match the original language of each article exactly.\n\n\
              Use this EXACT output format for each article:\n\n\
              ===ARTICLE 1===\n\
              SNIPPET:\n\
