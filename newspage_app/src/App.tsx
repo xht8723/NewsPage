@@ -972,7 +972,7 @@ function App(): React.JSX.Element {
   }
 
   return (
-    <div className={`min-h-screen transition-colors duration-300 ${isDarkMode ? "bg-zinc-950 text-zinc-400" : "bg-white text-zinc-800"}`}>
+    <div className={`min-h-screen transition-colors duration-300 ${isDarkMode ? "bg-zinc-950 text-zinc-400" : "bg-zinc-100 text-zinc-800"}`}>
       <aside className={`fixed left-0 top-0 z-20 hidden h-full w-64 flex-col border-r transition-colors md:flex ${isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-zinc-100 border-zinc-200"}`}>
         <div className="flex items-center gap-3 border-b border-inherit p-6">
           <div className={`${isDarkMode ? "bg-zinc-800 text-black" : "bg-zinc-150 text-white"} rounded-lg p-1 shadow-sm`}>
@@ -1235,13 +1235,13 @@ function App(): React.JSX.Element {
           <div className="flex items-center gap-2">
             <button
               onClick={() => { setShowSettings(true); void refreshLocalEmbeddingStatus(); }}
-              className={`rounded-full border p-2 transition-colors ${isDarkMode ? "border-zinc-800 hover:bg-zinc-800" : "border-zinc-300 bg-zinc-150 hover:bg-zinc-200"}`}
+              className={`rounded-full border p-2 transition-colors ${isDarkMode ? "border-zinc-800 hover:bg-zinc-800" : "border-zinc-300 bg-white hover:bg-zinc-200"}`}
             >
               <Settings size={18} />
             </button>
             <button
               onClick={() => setIsDarkMode(!isDarkMode)}
-              className={`rounded-full border p-2 transition-colors ${isDarkMode ? "border-zinc-800 hover:bg-zinc-800" : "border-zinc-300 bg-zinc-150 hover:bg-zinc-200"}`}
+              className={`rounded-full border p-2 transition-colors ${isDarkMode ? "border-zinc-800 hover:bg-zinc-800" : "border-zinc-300 bg-white hover:bg-zinc-200"}`}
             >
               {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
             </button>

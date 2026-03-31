@@ -1,37 +1,97 @@
 # NewsPage
 
-NewsPage is a desktop AI news reader built with Tauri, Rust, and React. It fetches current headlines, enriches them locally with Ollama, and presents structured summaries and tags in a fast native-style UI.
+NewsPage is a desktop news reader that fetches headlines from multiple sources, compresses them into bite-sized updates, and ranks them by what matters to you.
+
+The biggest value of NewsPage is personalized semantic sorting. Instead of only sorting by date or keyword matching, NewsPage uses embedding models to understand meaning, compare each story against your liked/disliked interests, and prioritize the most relevant news first.
 
 <img src="image/README/1774438004542.png" alt="NewsPage UI" style="width: 100%; max-width: 800px; height: auto;" />
 
 ## Key Features
 
-- Local AI enrichment with Ollama (model: `qwen2.5:3b`)
-- News ingestion through SerpAPI, then article parsing/enrichment in Rust
-- SQLite-backed storage with staged enrichment flow
-- Real-time frontend updates while enrichment is running
-- Thumbnail caching to app data for faster reloads
-- Detail view with structured AI summary and quick link to the original article
+- Interest-first feed: semantic ranking powered by embeddings
+- Clear reading: headlines are enriched into concise, structured snippets
+- Local-first workflow: desktop app with local storage and responsive UI
+- Configurable AI stack: provider settings are adjustable in-app
 
-## Stack
+## Tech Stack
 
-- Frontend: React + TypeScript + Vite + Tailwind
+- Frontend: React + TypeScript + Vite
 - Desktop shell: Tauri 2
 - Backend: Rust + Tokio + SQLx (SQLite)
-- AI runtime: Ollama via `ollama-rs`
+- LLM/Embeddings: provider abstraction with semantic embedding-based ranking
 
-## Quick Start
+## Prerequisites
 
-The full setup, build, and Ollama guide is in [NewsPage/README.md](NewsPage/README.md).
+Before building/running, install:
 
-In short:
+1. Node.js 20+ and npm
+2. Rust toolchain (stable) via rustup
+3. Tauri system dependencies
+4. Microsoft WebView2 Runtime (Windows)
+5. Optional local AI runtime only if you choose a local provider setup
 
-1. Install Node.js, Rust, and WebView2 runtime.
-2. Install and run Ollama, then pull `qwen2.5:3b`.
-3. Create `.env` with `SERP_API=...`.
-4. Run the app with `npm run tauri dev` inside `NewsPage`.
+Notes:
+
+- This repository's app root is `NewsPage/` (nested workspace layout).
+- Run npm commands from `f:/dev/NewsPage/NewsPage`.
+
+## Install Dependencies
+
+From `NewsPage/`:
+
+```bash
+npm install
+```
+
+## Run in Development
+
+1. In `NewsPage/`, start the Tauri app:
+
+```bash
+npm run tauri dev
+```
+
+This launches Vite + Rust backend together through Tauri. If your selected provider is local, start that local runtime before generating news.
+
+## Build Frontend Only
+
+From `NewsPage/`:
+
+```bash
+npm run build
+```
+
+This runs TypeScript compile + Vite production build and outputs to `NewsPage/dist/`.
+
+## Build Desktop App (Release)
+
+From `NewsPage/`:
+
+```bash
+npm run tauri build
+```
+
+Expected output artifacts are generated under:
+
+- `NewsPage/src-tauri/target/release/`
+- `NewsPage/src-tauri/target/release/bundle/`
+
+Bundle targets are configured as `all` in `src-tauri/tauri.conf.json`.
+
+## Useful Scripts
+
+From `NewsPage/package.json`:
+
+- `npm run dev`: run Vite frontend dev server
+- `npm run build`: TypeScript + Vite production build
+- `npm run test`: run Vitest tests
+- `npm run preview`: preview production frontend build
+- `npm run tauri dev`: run desktop app in development
+- `npm run tauri build`: build release desktop bundle
 
 ## Project Layout
 
-- `NewsPage/`: Tauri application source
+- `NewsPage/`: Tauri application source (frontend + Rust backend)
+- `NewsPage/src/`: React frontend
+- `NewsPage/src-tauri/`: Rust backend and Tauri config
 - `image/README/`: documentation images

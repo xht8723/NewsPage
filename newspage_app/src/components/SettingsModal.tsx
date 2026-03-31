@@ -358,6 +358,9 @@ export function SettingsModal({
                           ))
                         )}
                       </select>
+                      <p className={`mt-2 text-[11px] ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
+                        Very small model like granite4:350m would work fine. Avoid reasoning models.
+                      </p>
                     </div>
                   </>
                 )}

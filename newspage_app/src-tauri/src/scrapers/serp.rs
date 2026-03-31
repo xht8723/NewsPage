@@ -484,7 +484,6 @@ mod tests {
 
     #[tokio::test]
     async fn live_scrape_serp_when_env_is_available() {
-        dotenv::from_path("../../.env").ok();
         if std::env::var("SERP_API").is_err() {
             return;
         }
@@ -497,7 +496,6 @@ mod tests {
 
     #[tokio::test]
     async fn live_gaming_and_world_topics() {
-        dotenv::from_path("../../.env").ok();
         if std::env::var("SERP_API").is_err() {
             println!("SERP_API env var not set — skipping live test");
             return;

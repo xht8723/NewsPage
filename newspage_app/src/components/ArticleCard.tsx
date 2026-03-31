@@ -34,7 +34,7 @@ export function ArticleCard({
         onOpenContextMenu(item, event.clientX, event.clientY);
       }}
       className={`group cursor-pointer rounded-2xl border transition-all hover:shadow-lg ${
-        isDarkMode ? "border-zinc-800 bg-zinc-900 hover:border-zinc-600" : "border-zinc-200 bg-zinc-150 hover:border-zinc-300"
+        isDarkMode ? "border-zinc-800 bg-zinc-900 hover:border-zinc-600" : "border-zinc-200 bg-white hover:border-zinc-300"
       } ${isListLayout ? "flex flex-col gap-4 p-4 md:flex-row" : isCompactListLayout ? "flex flex-col gap-2 px-3 py-2.5" : "flex flex-col"}`}
     >
       {!isCompactListLayout && (

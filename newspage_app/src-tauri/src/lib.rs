@@ -1600,7 +1600,6 @@ fn load_process_logs(limit: Option<usize>) -> Result<Vec<ProcessLogEvent>, Strin
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    dotenv::dotenv().ok();
     tauri::Builder::default()
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
