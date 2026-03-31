@@ -32,12 +32,12 @@ Before building/running, install:
 
 Notes:
 
-- This repository's app root is `NewsPage/` (nested workspace layout).
-- Run npm commands from `f:/dev/NewsPage/NewsPage`.
+- This repository's app root is `newspage_app/` (nested workspace layout).
+- Run npm commands from `f:/dev/NewsPage/newspage_app`.
 
 ## Install Dependencies
 
-From `NewsPage/`:
+From `newspage_app/`:
 
 ```bash
 npm install
@@ -45,7 +45,7 @@ npm install
 
 ## Run in Development
 
-1. In `NewsPage/`, start the Tauri app:
+1. In `newspage_app/`, start the Tauri app:
 
 ```bash
 npm run tauri dev
@@ -55,17 +55,17 @@ This launches Vite + Rust backend together through Tauri. If your selected provi
 
 ## Build Frontend Only
 
-From `NewsPage/`:
+From `newspage_app/`:
 
 ```bash
 npm run build
 ```
 
-This runs TypeScript compile + Vite production build and outputs to `NewsPage/dist/`.
+This runs TypeScript compile + Vite production build and outputs to `newspage_app/dist/`.
 
 ## Build Desktop App (Release)
 
-From `NewsPage/`:
+From `newspage_app/`:
 
 ```bash
 npm run tauri build
@@ -73,14 +73,14 @@ npm run tauri build
 
 Expected output artifacts are generated under:
 
-- `NewsPage/src-tauri/target/release/`
-- `NewsPage/src-tauri/target/release/bundle/`
+- `newspage_app/src-tauri/target/release/`
+- `newspage_app/src-tauri/target/release/bundle/`
 
 Bundle targets are configured as `all` in `src-tauri/tauri.conf.json`.
 
 ## Useful Scripts
 
-From `NewsPage/package.json`:
+From `newspage_app/package.json`:
 
 - `npm run dev`: run Vite frontend dev server
 - `npm run build`: TypeScript + Vite production build
@@ -91,7 +91,7 @@ From `NewsPage/package.json`:
 
 ## Project Layout
 
-- `NewsPage/`: Tauri application source (frontend + Rust backend)
-- `NewsPage/src/`: React frontend
-- `NewsPage/src-tauri/`: Rust backend and Tauri config
+- `newspage_app/`: Tauri application source (frontend + Rust backend)
+- `newspage_app/src/`: React frontend
+- `newspage_app/src-tauri/`: Rust backend and Tauri config
 - `image/README/`: documentation images
