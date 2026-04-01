@@ -4,7 +4,7 @@ NewsPage is a desktop news reader that fetches headlines from multiple sources, 
 
 The biggest value of NewsPage is personalized semantic sorting. Instead of only sorting by date or keyword matching, NewsPage uses embedding models to understand meaning, compare each story against your liked/disliked interests, and prioritize the most relevant news first.
 
-<img src="image/README/1774438004542.png" alt="NewsPage UI" style="width: 100%; max-width: 800px; height: auto;" />
+<img src="image\README\1775037971969.png" alt="NewsPage UI" style="width: 100%; max-width: 800px; height: auto;" />
 
 ## Key Features
 
