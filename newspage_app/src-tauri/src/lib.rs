@@ -1,4 +1,11 @@
-use crate::db::{get_article_by_id, get_unenriched_articles_by_category, list_unenriched_categories, mark_enriched, upsert_article};
+use crate::db::{
+    get_article_by_id,
+    get_unenriched_articles_by_category_and_language,
+    list_unenriched_categories,
+    list_unenriched_languages_by_category,
+    mark_enriched,
+    upsert_article,
+};
 use crate::news_item::{NewsItem, RankedNewsItem};
 use crate::article_extract::fetch_article_text_and_thumbnail;
 use crate::logging::ProcessLogEvent;
@@ -249,7 +256,7 @@ async fn fetch_and_enrich_article_with_timeouts(
 
     let (snippet, ai_summary) = tokio::time::timeout(
         Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
-        llm.enrich(&item.title, &text),
+        llm.enrich(&item.title, &text, Some(item.language.as_str())),
     )
     .await
     .map_err(|_| {
@@ -686,16 +693,16 @@ async fn run_scrape_stage(
     Ok(())
 }
 
-async fn collect_items_to_enrich(
+async fn collect_items_to_enrich_by_language(
     state: &AppState,
     per_category_limit: i64,
     visible_categories: &HashMap<String, bool>,
-) -> Result<Vec<NewsItem>, String> {
+) -> Result<Vec<(String, Vec<NewsItem>)>, String> {
     let categories = list_unenriched_categories(&state.db)
         .await
         .map_err(|e| format!("DB category read error: {}", e))?;
 
-    let mut items_to_enrich = Vec::new();
+    let mut grouped_items: HashMap<String, Vec<NewsItem>> = HashMap::new();
     for category in categories {
         // Skip hidden categories (case-insensitive match against frontend keys)
         if !visible_categories.is_empty() {
@@ -710,17 +717,41 @@ async fn collect_items_to_enrich(
             }
         }
 
-        let mut category_items = get_unenriched_articles_by_category(
-            &state.db,
-            &category,
-            per_category_limit,
-        )
-        .await
-        .map_err(|e| format!("DB read error for category '{}': {}", category, e))?;
-        items_to_enrich.append(&mut category_items);
+        let languages = list_unenriched_languages_by_category(&state.db, &category)
+            .await
+            .map_err(|e| format!("DB language read error for category '{}': {}", category, e))?;
+
+        for language in languages {
+            let normalized_language = if language.trim().is_empty() {
+                "unknown".to_string()
+            } else {
+                language
+            };
+
+            let mut category_items = get_unenriched_articles_by_category_and_language(
+                &state.db,
+                &category,
+                &normalized_language,
+                per_category_limit,
+            )
+            .await
+            .map_err(|e| {
+                format!(
+                    "DB read error for category '{}' language '{}': {}",
+                    category, normalized_language, e
+                )
+            })?;
+
+            grouped_items
+                .entry(normalized_language)
+                .or_default()
+                .append(&mut category_items);
+        }
     }
 
-    Ok(items_to_enrich)
+    let mut language_groups = grouped_items.into_iter().collect::<Vec<(String, Vec<NewsItem>)>>();
+    language_groups.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(language_groups)
 }
 
 struct EnrichmentStageResult {
@@ -736,9 +767,12 @@ async fn run_enrichment_stage(
     image_cache_dir: &Path,
     settings: &ResolvedLlmSettings,
     per_category_limit: i64,
-    items_to_enrich: Vec<NewsItem>,
+    items_to_enrich_by_language: Vec<(String, Vec<NewsItem>)>,
 ) -> Result<EnrichmentStageResult, String> {
-    let total = items_to_enrich.len();
+    let total: usize = items_to_enrich_by_language
+        .iter()
+        .map(|(_, items)| items.len())
+        .sum();
     println!(
         "Enriching {} unenriched items this run (up to {} per category, batch size {})",
             total, per_category_limit, settings.llm_batch_size
@@ -780,99 +814,119 @@ async fn run_enrichment_stage(
     let mut first_error: Option<String> = None;
     let mut global_index: usize = 0;
 
-    // Process in batches of settings.llm_batch_size
-    for batch in items_to_enrich.chunks(settings.llm_batch_size) {
-        let batch_items: Vec<NewsItem> = batch.to_vec();
-        let batch_len = batch_items.len();
+    // Process in language-homogeneous batches so CN/EN do not mix in one LLM call.
+    for (language, items_to_enrich) in items_to_enrich_by_language {
+        logging::info(
+            "Enrichment",
+            format!(
+                "Starting language group '{}' with {} item(s)",
+                language,
+                items_to_enrich.len()
+            ),
+            Some(items_to_enrich.len()),
+        );
+
+        for batch in items_to_enrich.chunks(settings.llm_batch_size) {
+            let batch_items: Vec<NewsItem> = batch.to_vec();
+            let batch_len = batch_items.len();
 
         // Phase 1: Fetch article texts and thumbnails for the batch
-        println!("[batch] fetching text for {} articles...", batch_len);
-        logging::info(
-            "Extract",
-            format!("Fetching text and thumbnails for batch of {} article(s)", batch_len),
-            Some(batch_len),
-        );
-        let mut fetched: Vec<(NewsItem, Result<(String, Option<String>), String>)> =
-            Vec::with_capacity(batch_len);
+            println!("[batch:{}] fetching text for {} articles...", language, batch_len);
+            logging::info(
+                "Extract",
+                format!(
+                    "Fetching text and thumbnails for '{}' batch of {} article(s)",
+                    language, batch_len
+                ),
+                Some(batch_len),
+            );
+            let mut fetched: Vec<(NewsItem, Result<(String, Option<String>), String>)> =
+                Vec::with_capacity(batch_len);
 
-        for item in &batch_items {
-            let result = tokio::time::timeout(
-                Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
-                article_extract::fetch_article_text_and_thumbnail(&item.url),
-            )
-            .await;
+            for item in &batch_items {
+                let result = tokio::time::timeout(
+                    Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
+                    article_extract::fetch_article_text_and_thumbnail(&item.url),
+                )
+                .await;
 
-            let fetch_result = match result {
-                Ok(r) => r,
-                Err(_) => Err(format!(
-                    "Timed out fetching article '{}' after {}s",
-                    item.title, ARTICLE_PROCESS_TIMEOUT_SECS
-                )),
-            };
-            fetched.push((item.clone(), fetch_result));
-        }
+                let fetch_result = match result {
+                    Ok(r) => r,
+                    Err(_) => Err(format!(
+                        "Timed out fetching article '{}' after {}s",
+                        item.title, ARTICLE_PROCESS_TIMEOUT_SECS
+                    )),
+                };
+                fetched.push((item.clone(), fetch_result));
+            }
 
         // Phase 2: Collect successfully fetched articles for batch LLM call
-        let mut llm_inputs: Vec<(usize, String, String)> = Vec::new(); // (batch_index, title, text)
-        for (i, (item, result)) in fetched.iter().enumerate() {
-            match result {
-                Ok((text, _)) => {
-                    llm_inputs.push((i, item.title.clone(), text.clone()));
-                }
-                Err(err) => {
-                    println!("Failed to fetch article text: {}", err);
-                    logging::warn("Extract", format!("Text fetch failed: {}", err), None);
-                    if first_error.is_none() {
-                        first_error = Some(err.clone());
+            let mut llm_inputs: Vec<(usize, String, String)> = Vec::new(); // (batch_index, title, text)
+            for (i, (item, result)) in fetched.iter().enumerate() {
+                match result {
+                    Ok((text, _)) => {
+                        llm_inputs.push((i, item.title.clone(), text.clone()));
+                    }
+                    Err(err) => {
+                        println!("Failed to fetch article text: {}", err);
+                        logging::warn("Extract", format!("Text fetch failed: {}", err), None);
+                        if first_error.is_none() {
+                            first_error = Some(err.clone());
+                        }
                     }
                 }
             }
-        }
 
-        emit_process_stage(
-            app,
-            "extract",
-            "running",
-            "Extraction batch completed",
-            Some(global_index.saturating_add(batch_len).min(total)),
-            Some(total),
-        )?;
-
-        // Call enrich_batch with all successfully fetched articles
-        let llm_results = if !llm_inputs.is_empty() {
-            let articles_for_llm: Vec<(String, String)> = llm_inputs
-                .iter()
-                .map(|(_, title, text)| (title.clone(), text.clone()))
-                .collect();
-
-            println!("[batch] calling LLM enrich_batch for {} articles...", articles_for_llm.len());
-            logging::info(
-                "Enrichment",
-                format!("Sending {} article(s) to LLM batch enrich", articles_for_llm.len()),
-                Some(articles_for_llm.len()),
-            );
             emit_process_stage(
                 app,
-                "enrich",
+                "extract",
                 "running",
-                format!("Enriching {} article(s) in current batch", articles_for_llm.len()),
-                Some(global_index),
+                format!("Extraction batch completed ({})", language),
+                Some(global_index.saturating_add(batch_len).min(total)),
                 Some(total),
             )?;
-            llm.enrich_batch(&articles_for_llm).await
-        } else {
-            vec![]
-        };
+
+        // Call enrich_batch with all successfully fetched articles
+            let llm_results = if !llm_inputs.is_empty() {
+                let articles_for_llm: Vec<(String, String)> = llm_inputs
+                    .iter()
+                    .map(|(_, title, text)| (title.clone(), text.clone()))
+                    .collect();
+
+                println!("[batch:{}] calling LLM enrich_batch for {} articles...", language, articles_for_llm.len());
+                logging::info(
+                    "Enrichment",
+                    format!(
+                        "Sending {} '{}' article(s) to LLM batch enrich",
+                        articles_for_llm.len(), language
+                    ),
+                    Some(articles_for_llm.len()),
+                );
+                emit_process_stage(
+                    app,
+                    "enrich",
+                    "running",
+                    format!(
+                        "Enriching {} article(s) in current '{}' batch",
+                        articles_for_llm.len(), language
+                    ),
+                    Some(global_index),
+                    Some(total),
+                )?;
+                llm.enrich_batch(&articles_for_llm, Some(language.as_str())).await
+            } else {
+                vec![]
+            };
 
         // Phase 3: Apply results, cache thumbnails, persist
-        let mut llm_result_idx = 0;
-        for (i, (item, fetch_result)) in fetched.into_iter().enumerate() {
-            global_index += 1;
+            let mut llm_result_idx = 0;
+            for (i, (item, fetch_result)) in fetched.into_iter().enumerate() {
+                global_index += 1;
 
             // Check if this item had a successful text fetch
-            let is_in_llm_batch = llm_inputs.iter().any(|(idx, _, _)| *idx == i);
+                let is_in_llm_batch = llm_inputs.iter().any(|(idx, _, _)| *idx == i);
 
-            if !is_in_llm_batch {
+                if !is_in_llm_batch {
                 // Text fetch failed — mark as failed, will retry next run
                 println!("Failed to enrich item (will retry next run): text fetch failed for '{}'", item.title);
                 logging::warn(
@@ -883,71 +937,71 @@ async fn run_enrichment_stage(
                 if first_error.is_none() {
                     first_error = Some(format!("Text fetch failed for '{}'", item.title));
                 }
-                continue;
-            }
+                    continue;
+                }
 
-            let (text, thumbnail) = fetch_result.unwrap(); // Safe: we know it succeeded
+                let (text, thumbnail) = fetch_result.unwrap(); // Safe: we know it succeeded
 
             // Get the LLM result for this article
-            let llm_result = if llm_result_idx < llm_results.len() {
-                llm_result_idx += 1;
-                llm_results[llm_result_idx - 1].clone()
-            } else {
-                Err("Missing LLM result".to_string())
-            };
+                let llm_result = if llm_result_idx < llm_results.len() {
+                    llm_result_idx += 1;
+                    llm_results[llm_result_idx - 1].clone()
+                } else {
+                    Err("Missing LLM result".to_string())
+                };
 
-            match llm_result {
-                Ok((snippet, ai_summary)) => {
-                    let mut enriched = apply_enrichment_payload(
-                        item, text, snippet, ai_summary, thumbnail, false,
-                    );
+                match llm_result {
+                    Ok((snippet, ai_summary)) => {
+                        let mut enriched = apply_enrichment_payload(
+                            item, text, snippet, ai_summary, thumbnail, false,
+                        );
 
-                    enrich_media_and_embedding(
-                        &state.db,
-                        image_cache_dir,
-                        &mut enriched,
-                        &settings.local_embedding_model,
-                    )
-                    .await;
+                        enrich_media_and_embedding(
+                            &state.db,
+                            image_cache_dir,
+                            &mut enriched,
+                            &settings.local_embedding_model,
+                        )
+                        .await;
 
-                    enriched.is_enriched = true;
-                    emit_process_stage(
-                        app,
-                        "persist",
-                        "running",
-                        format!("Persisting '{}'", enriched.title),
-                        Some(global_index),
-                        Some(total),
-                    )?;
-                    persist_enriched_article(&state.db, &enriched).await?;
-                    enriched_count += 1;
+                        enriched.is_enriched = true;
+                        emit_process_stage(
+                            app,
+                            "persist",
+                            "running",
+                            format!("Persisting '{}'", enriched.title),
+                            Some(global_index),
+                            Some(total),
+                        )?;
+                        persist_enriched_article(&state.db, &enriched).await?;
+                        enriched_count += 1;
 
-                    emit_enriched_news_updated(app, &enriched, global_index, total, enriched_count)?;
-                    println!("Enriched: {}", enriched.title);
-                    logging::info(
-                        "Enrichment",
-                        format!("Enriched '{}' successfully", enriched.title),
-                        Some(enriched_count),
-                    );
-                    emit_process_stage(
-                        app,
-                        "persist",
-                        "running",
-                        format!("Persisted '{}'", enriched.title),
-                        Some(enriched_count),
-                        Some(total),
-                    )?;
-                }
-                Err(err) => {
-                    println!("Failed to enrich item (will retry next run): {}", err);
-                    logging::warn("Enrichment", format!("LLM enrich failed: {}", err), None);
-                    if first_error.is_none() {
-                        first_error = Some(err);
+                        emit_enriched_news_updated(app, &enriched, global_index, total, enriched_count)?;
+                        println!("Enriched: {}", enriched.title);
+                        logging::info(
+                            "Enrichment",
+                            format!("Enriched '{}' successfully", enriched.title),
+                            Some(enriched_count),
+                        );
+                        emit_process_stage(
+                            app,
+                            "persist",
+                            "running",
+                            format!("Persisted '{}'", enriched.title),
+                            Some(enriched_count),
+                            Some(total),
+                        )?;
+                    }
+                    Err(err) => {
+                        println!("Failed to enrich item (will retry next run): {}", err);
+                        logging::warn("Enrichment", format!("LLM enrich failed: {}", err), None);
+                        if first_error.is_none() {
+                            first_error = Some(err);
+                        }
                     }
                 }
             }
         }
-
     }
 
     emit_process_stage(
@@ -1449,7 +1503,12 @@ async fn start_all_action(
 
     run_scrape_stage(&app, &state, &runtime.resolved, cooldown_hours, &runtime.settings_path).await?;
 
-    let items_to_enrich = collect_items_to_enrich(&state, per_category_limit, &runtime.resolved.visible_categories).await?;
+    let items_to_enrich_by_language = collect_items_to_enrich_by_language(
+        &state,
+        per_category_limit,
+        &runtime.resolved.visible_categories,
+    )
+    .await?;
     let result = run_enrichment_stage(
         &app,
         &state,
@@ -1457,7 +1516,7 @@ async fn start_all_action(
         &runtime.image_cache_dir,
         &runtime.resolved,
         per_category_limit,
-        items_to_enrich,
+        items_to_enrich_by_language,
     )
     .await?;
 
@@ -1702,8 +1761,8 @@ mod helper_tests {
             source_name: "Source".to_string(),
             source_icon: "".to_string(),
             authors: vec![],
+            language: "en".to_string(),
             thumbnail: "".to_string(),
-            tags: vec![],
             category: "world".to_string(),
             ai_summary: "".to_string(),
             og_content: "".to_string(),
@@ -1742,7 +1801,6 @@ mod helper_tests {
         let enriched_non_overwrite = apply_enrichment_payload(
             base.clone(),
             "fresh content".to_string(),
-            vec!["tag1".to_string()],
             "fresh snippet".to_string(),
             "fresh summary".to_string(),
             None,
@@ -1750,18 +1808,16 @@ mod helper_tests {
         );
 
         assert_eq!(enriched_non_overwrite.og_content, "fresh content");
-        assert_eq!(enriched_non_overwrite.tags, vec!["tag1".to_string()]);
+        assert_eq!(enriched_non_overwrite.snippet, "fresh snippet");
 
         let mut already_filled = base;
         already_filled.og_content = "existing content".to_string();
-        already_filled.tags = vec!["existing-tag".to_string()];
         already_filled.snippet = "existing snippet".to_string();
         already_filled.ai_summary = "existing summary".to_string();
 
         let enriched_keep_existing = apply_enrichment_payload(
             already_filled.clone(),
             "new content".to_string(),
-            vec!["new-tag".to_string()],
             "new snippet".to_string(),
             "new summary".to_string(),
             None,
@@ -1769,12 +1825,11 @@ mod helper_tests {
         );
 
         assert_eq!(enriched_keep_existing.og_content, "existing content");
-        assert_eq!(enriched_keep_existing.tags, vec!["existing-tag".to_string()]);
+        assert_eq!(enriched_keep_existing.snippet, "existing snippet");
 
         let enriched_force_overwrite = apply_enrichment_payload(
             already_filled,
             "new content".to_string(),
-            vec!["new-tag".to_string()],
             "new snippet".to_string(),
             "new summary".to_string(),
             None,
@@ -1782,7 +1837,7 @@ mod helper_tests {
         );
 
         assert_eq!(enriched_force_overwrite.og_content, "new content");
-        assert_eq!(enriched_force_overwrite.tags, vec!["new-tag".to_string()]);
+        assert_eq!(enriched_force_overwrite.snippet, "new snippet");
     }
 
     #[test]

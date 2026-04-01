@@ -309,7 +309,15 @@ fn parse_rss_items(xml: &str) -> Vec<RssItem> {
 // Conversion to NewsItem
 // ---------------------------------------------------------------------------
 
-fn rss_item_to_news_item(rss: &RssItem, category: &str) -> NewsItem {
+fn region_language(region: &RegionConfig) -> &'static str {
+    match region.id {
+        "chinese" => "zh-CN",
+        "canada" => "en-CA",
+        _ => "unknown",
+    }
+}
+
+fn rss_item_to_news_item(rss: &RssItem, category: &str, language: &str) -> NewsItem {
     NewsItem {
         id: generate_article_id(&rss.link, &rss.title),
         title: rss.title.clone(),
@@ -318,6 +326,7 @@ fn rss_item_to_news_item(rss: &RssItem, category: &str) -> NewsItem {
         source_name: rss.source_name.clone(),
         source_icon: rss.source_icon.clone(),
         authors: Vec::new(),
+        language: language.to_string(),
         thumbnail: rss.thumbnail.clone(),
         category: category.to_string(),
         ai_summary: String::new(),
@@ -393,7 +402,7 @@ async fn scrape_region(
                             continue;
                         }
                     }
-                    let news = rss_item_to_news_item(rss_item, topic.category);
+                    let news = rss_item_to_news_item(rss_item, topic.category, region_language(region));
                     if seen_ids.insert(news.id.clone()) {
                         out.push(news);
                         added += 1;
@@ -539,12 +548,19 @@ mod tests {
             source_icon: "https://example.com/icon.png".to_string(),
             thumbnail: "https://example.com/thumb.jpg".to_string(),
         };
-        let news = rss_item_to_news_item(&rss, "world");
+        let news = rss_item_to_news_item(&rss, "world", "en-CA");
         assert_eq!(news.category, "world");
+        assert_eq!(news.language, "en-CA");
         assert_eq!(news.title, "Test Article");
         assert_eq!(news.thumbnail, "https://example.com/thumb.jpg");
         assert!(!news.id.is_empty());
         assert!(!news.is_enriched);
+    }
+
+    #[test]
+    fn maps_google_region_to_expected_language() {
+        assert_eq!(region_language(&CANADA), "en-CA");
+        assert_eq!(region_language(&CHINESE), "zh-CN");
     }
 
     #[test]

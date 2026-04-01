@@ -91,6 +91,7 @@ pub trait LLMProviderImpl: Send + Sync {
         &self,
         title: &str,
         text: &str,
+        language_hint: Option<&str>,
     ) -> Result<(String, String), String>;
 
     /// Batch-enrich multiple articles in a single API call.
@@ -98,10 +99,11 @@ pub trait LLMProviderImpl: Send + Sync {
     async fn enrich_batch(
         &self,
         articles: &[(String, String)],
+        language_hint: Option<&str>,
     ) -> Vec<Result<(String, String), String>> {
         let mut results = Vec::with_capacity(articles.len());
         for (title, text) in articles {
-            results.push(self.enrich(title, text).await);
+            results.push(self.enrich(title, text, language_hint).await);
         }
         results
     }
@@ -111,6 +113,50 @@ pub trait LLMProviderImpl: Send + Sync {
 
     /// Get provider name
     fn provider_name(&self) -> &str;
+}
+
+fn build_batch_prompt_header(n: usize, language_hint: Option<&str>) -> String {
+    let s = if n == 1 { "" } else { "s" };
+    let normalized = language_hint
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+
+    let language_instruction = if normalized.starts_with("zh") {
+        "\
+你是新闻摘要助手。请使用中文完成本批次摘要。
+要求：
+- 每篇文章输出 SNIPPET （一句话总结）和 SUMMARY（1-8条要点）。
+- SUMMARY 的每一条必须以 \"- \" 开头。
+- 保留事实，不要虚构，不要翻译成英文。
+- 即使指令是中文，输出标签必须保持为 SNIPPET 和 SUMMARY。"
+    } else if normalized.starts_with("en") {
+        "\
+You are summarizing an English-language batch.
+Requirements:
+- For each article output SNIPPET (1 very short sentence) and SUMMARY (1-8 bullet points).
+- Each SUMMARY line must start with \"- \".
+- Keep factual fidelity and do not translate to another language.
+- Keep output labels exactly as SNIPPET and SUMMARY."
+    } else {
+        "\
+You are to summarize news articles.
+IMPORTANT: Answer in the same language as each article provided. Do not translate; match the original language exactly."
+    };
+
+    format!(
+        "{language_instruction}\n\nYou will process exactly {n} article{s}.\n\
+Use this EXACT output format for each article:\n\n\
+===ARTICLE 1===\n\
+SNIPPET:\n\
+SUMMARY:\n\
+- Point 1\n\
+- Point 2\n\n\
+===ARTICLE 2===\n\
+SNIPPET: ...\n\
+SUMMARY:\n\
+- ...\n\n\
+---\n\n"
+    )
 }
 
 /// Ollama local provider
@@ -156,14 +202,22 @@ impl LLMProviderImpl for OllamaProvider {
             .collect())
     }
 
-    async fn enrich(&self, title: &str, text: &str) -> Result<(String, String), String> {
-        let results = self.enrich_batch(&[(title.to_string(), text.to_string())]).await;
+    async fn enrich(
+        &self,
+        title: &str,
+        text: &str,
+        language_hint: Option<&str>,
+    ) -> Result<(String, String), String> {
+        let results = self
+            .enrich_batch(&[(title.to_string(), text.to_string())], language_hint)
+            .await;
         results.into_iter().next().unwrap_or_else(|| Err("No result from batch".to_string()))
     }
 
     async fn enrich_batch(
         &self,
         articles: &[(String, String)],
+        language_hint: Option<&str>,
     ) -> Vec<Result<(String, String), String>> {
         if articles.is_empty() {
             return vec![];
@@ -185,26 +239,8 @@ impl LLMProviderImpl for OllamaProvider {
 
         let ollama = Ollama::new(host, port);
         let n = articles.len();
-        let s = if n == 1 { "" } else { "s" };
 
-        let mut prompt = format!(
-            "You are to summarize news articles. You will process exactly {n} article{s}.\n\
-                 For each article, produce exactly:\n\
-             SNIPPET: 1-3 short sentences introducing the article content.\n\
-             SUMMARY: 1-8 bullet points, each starting with \"- \"\n\
-             IMPORTANT: Answer in the same language as each article provided. Do not translate; match the original language of each article exactly.\n\n\
-             Use this EXACT output format for each article:\n\n\
-             ===ARTICLE 1===\n\
-             SNIPPET:\n\
-             SUMMARY:\n\
-             - Point 1\n\
-             - Point 2\n\n\
-             ===ARTICLE 2===\n\
-             SNIPPET: ...\n\
-             SUMMARY:\n\
-             - ...\n\n\
-             ---\n\n"
-        );
+        let mut prompt = build_batch_prompt_header(n, language_hint);
 
         for (i, (title, text)) in articles.iter().enumerate() {
             let truncated = truncate_at_char_boundary(text, 4000);
@@ -274,14 +310,22 @@ impl LLMProviderImpl for OpenAIProvider {
         Ok(OPENAI_MODELS.iter().map(|s| s.to_string()).collect())
     }
 
-    async fn enrich(&self, title: &str, text: &str) -> Result<(String, String), String> {
-        let results = self.enrich_batch(&[(title.to_string(), text.to_string())]).await;
+    async fn enrich(
+        &self,
+        title: &str,
+        text: &str,
+        language_hint: Option<&str>,
+    ) -> Result<(String, String), String> {
+        let results = self
+            .enrich_batch(&[(title.to_string(), text.to_string())], language_hint)
+            .await;
         results.into_iter().next().unwrap_or_else(|| Err("No result from batch".to_string()))
     }
 
     async fn enrich_batch(
         &self,
         articles: &[(String, String)],
+        language_hint: Option<&str>,
     ) -> Vec<Result<(String, String), String>> {
         if articles.is_empty() {
             return vec![];
@@ -311,25 +355,7 @@ impl LLMProviderImpl for OpenAIProvider {
         }
 
         let n = articles.len();
-        let s = if n == 1 { "" } else { "s" };
-        let mut prompt = format!(
-            "You are to summarize news articles. You will process exactly {n} article{s}.\n\
-                 For each article, produce exactly:\n\
-             SNIPPET: 1-3 short sentences introducing the article content.\n\
-             SUMMARY: 1-8 bullet points, each starting with \"- \"\n\
-             IMPORTANT: Answer in the same language as each article provided. Do not translate; match the original language of each article exactly.\n\n\
-             Use this EXACT output format for each article:\n\n\
-             ===ARTICLE 1===\n\
-             SNIPPET:\n\
-             SUMMARY:\n\
-             - Point 1\n\
-             - Point 2\n\n\
-             ===ARTICLE 2===\n\
-             SNIPPET: ...\n\
-             SUMMARY:\n\
-             - ...\n\n\
-             ---\n\n"
-        );
+        let mut prompt = build_batch_prompt_header(n, language_hint);
 
         for (i, (title, text)) in articles.iter().enumerate() {
             let truncated = truncate_at_char_boundary(text, 4000);
@@ -432,14 +458,22 @@ impl LLMProviderImpl for ClaudeProvider {
         Ok(CLAUDE_MODELS.iter().map(|s| s.to_string()).collect())
     }
 
-    async fn enrich(&self, title: &str, text: &str) -> Result<(String, String), String> {
-        let results = self.enrich_batch(&[(title.to_string(), text.to_string())]).await;
+    async fn enrich(
+        &self,
+        title: &str,
+        text: &str,
+        language_hint: Option<&str>,
+    ) -> Result<(String, String), String> {
+        let results = self
+            .enrich_batch(&[(title.to_string(), text.to_string())], language_hint)
+            .await;
         results.into_iter().next().unwrap_or_else(|| Err("No result from batch".to_string()))
     }
 
     async fn enrich_batch(
         &self,
         articles: &[(String, String)],
+        language_hint: Option<&str>,
     ) -> Vec<Result<(String, String), String>> {
         if articles.is_empty() {
             return vec![];
@@ -477,25 +511,7 @@ impl LLMProviderImpl for ClaudeProvider {
         }
 
         let n = articles.len();
-        let s = if n == 1 { "" } else { "s" };
-        let mut prompt = format!(
-            "You are to summarize news articles. You will process exactly {n} article{s}.\n\
-                 For each article, produce exactly:\n\
-             SNIPPET: 1-3 short sentences introducing the article content.\n\
-             SUMMARY: 1-8 bullet points, each starting with \"- \"\n\
-             IMPORTANT: Answer in the same language as each article provided. Do not translate; match the original language of each article exactly.\n\n\
-             Use this EXACT output format for each article:\n\n\
-             ===ARTICLE 1===\n\
-             SNIPPET:\n\
-             SUMMARY:\n\
-             - Point 1\n\
-             - Point 2\n\n\
-             ===ARTICLE 2===\n\
-             SNIPPET: ...\n\
-             SUMMARY:\n\
-             - ...\n\n\
-             ---\n\n"
-        );
+        let mut prompt = build_batch_prompt_header(n, language_hint);
 
         for (i, (title, text)) in articles.iter().enumerate() {
             let truncated = truncate_at_char_boundary(text, 4000);
@@ -637,14 +653,22 @@ impl LLMProviderImpl for GeminiProvider {
         Ok(GEMINI_MODELS.iter().map(|s| s.to_string()).collect())
     }
 
-    async fn enrich(&self, title: &str, text: &str) -> Result<(String, String), String> {
-        let results = self.enrich_batch(&[(title.to_string(), text.to_string())]).await;
+    async fn enrich(
+        &self,
+        title: &str,
+        text: &str,
+        language_hint: Option<&str>,
+    ) -> Result<(String, String), String> {
+        let results = self
+            .enrich_batch(&[(title.to_string(), text.to_string())], language_hint)
+            .await;
         results.into_iter().next().unwrap_or_else(|| Err("No result from batch".to_string()))
     }
 
     async fn enrich_batch(
         &self,
         articles: &[(String, String)],
+        language_hint: Option<&str>,
     ) -> Vec<Result<(String, String), String>> {
         if articles.is_empty() {
             return vec![];
@@ -666,25 +690,7 @@ impl LLMProviderImpl for GeminiProvider {
         struct GeminiResponse { candidates: Vec<Candidate> }
 
         let n = articles.len();
-            let s = if n == 1 { "" } else { "s" };
-            let mut prompt = format!(
-                "You are to summarize news articles. You will process exactly {n} article{s}.\n\
-                 For each article, produce exactly:\n\
-             SNIPPET: 1-3 short sentences introducing the article content.\n\
-             SUMMARY: 1-8 bullet points, each starting with \"- \"\n\
-             IMPORTANT: Answer in the same language as each article provided. Do not translate; match the original language of each article exactly.\n\n\
-             Use this EXACT output format for each article:\n\n\
-             ===ARTICLE 1===\n\
-             SNIPPET:\n\
-             SUMMARY:\n\
-             - Point 1\n\
-             - Point 2\n\n\
-             ===ARTICLE 2===\n\
-             SNIPPET: ...\n\
-             SUMMARY:\n\
-             - ...\n\n\
-             ---\n\n"
-        );
+            let mut prompt = build_batch_prompt_header(n, language_hint);
 
         for (i, (title, text)) in articles.iter().enumerate() {
             // Truncate text to ~4000 bytes at a valid char boundary

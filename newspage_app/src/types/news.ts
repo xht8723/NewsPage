@@ -4,6 +4,7 @@ import type { LayoutMode } from "../constants/news";
 export interface NewsArticle {
   id: string;
   category: TopicCategory;
+  language: string;
   title: string;
   snippet: string;
   aiSummary: string;
@@ -25,6 +26,7 @@ export interface BackendNewsItem {
   source_name: string;
   source_icon: string;
   authors: string[];
+  language: string;
   thumbnail: string;
   category: string;
   ai_summary: string;

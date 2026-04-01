@@ -9,6 +9,7 @@ pub struct NewsItem {
     pub source_name: String,
     pub source_icon: String,
     pub authors: Vec<String>,
+    pub language: String,
     pub thumbnail: String,
     pub category: String,
     pub ai_summary: String,

@@ -169,6 +169,7 @@ pub fn extract_news_item_fields(item_html: &str) -> Option<AnnNewsItem> {
         source_name: ANN_SOURCE_NAME.to_string(),
         source_icon: ANN_SOURCE_ICON.to_string(),
         authors: Vec::new(),
+        language: "en".to_string(),
         thumbnail,
         category: "anime".to_string(),
         ai_summary: String::new(),
