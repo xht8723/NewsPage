@@ -2,6 +2,7 @@ import type React from "react";
 import { ArrowLeft } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useImageFallback } from "../hooks/useImageFallback";
+import { useLiveTranslation, type TranslationRuntimeConfig } from "../hooks/useLiveTranslation";
 import type { NewsArticle } from "../types/news";
 import { getTagColor } from "../utils/newsMeta";
 
@@ -9,6 +10,9 @@ interface ArticleDetailModalProps {
   selectedArticle: NewsArticle | null;
   isDarkMode: boolean;
   reprocessingArticleId: string | null;
+  liveTranslationEnabled: boolean;
+  translationTargetLanguage: "en" | "zh-CN";
+  translationRuntime: TranslationRuntimeConfig;
   onClose: () => void;
   onOpenUrl: (url: string) => void;
   onReprocessArticle: (article: NewsArticle) => void;
@@ -18,11 +22,29 @@ export function ArticleDetailModal({
   selectedArticle,
   isDarkMode,
   reprocessingArticleId,
+  liveTranslationEnabled,
+  translationTargetLanguage,
+  translationRuntime,
   onClose,
   onOpenUrl,
   onReprocessArticle,
 }: ArticleDetailModalProps): React.JSX.Element | null {
   const onThumbnailError = useImageFallback("https://placehold.co/1200x640/27272a/a1a1aa?text=News");
+
+  const translatedTitle = useLiveTranslation({
+    text: selectedArticle?.title ?? "",
+    sourceLanguage: selectedArticle?.language ?? "en",
+    targetLanguage: translationTargetLanguage,
+    enabled: liveTranslationEnabled,
+    runtime: translationRuntime,
+  });
+  const translatedSummary = useLiveTranslation({
+    text: selectedArticle?.aiSummary ?? "",
+    sourceLanguage: selectedArticle?.language ?? "en",
+    targetLanguage: translationTargetLanguage,
+    enabled: liveTranslationEnabled,
+    runtime: translationRuntime,
+  });
 
   if (!selectedArticle) {
     return null;
@@ -66,7 +88,7 @@ export function ArticleDetailModal({
               {selectedArticle.category}
             </span>
             <h2 className={`text-3xl font-black leading-tight md:text-5xl ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>
-              {selectedArticle.title}
+              {translatedTitle}
             </h2>
             <div className={`mt-4 flex items-center gap-3 text-xs font-black uppercase tracking-widest ${
               isDarkMode ? "text-zinc-500" : "text-zinc-600"
@@ -105,7 +127,7 @@ export function ArticleDetailModal({
                 ),
               }}
             >
-              {selectedArticle.aiSummary}
+              {translatedSummary}
             </ReactMarkdown>
           </div>
 

@@ -9,6 +9,7 @@ import {
   Search,
   RefreshCw,
   Settings,
+  Languages,
   SlidersHorizontal,
   EyeOff,
   GripVertical,
@@ -39,6 +40,7 @@ import { ArticleDetailModal } from "./components/ArticleDetailModal";
 import { CalendarModal } from "./components/CalendarModal";
 import { LogPanel } from "./components/LogPanel";
 import { SourceBlacklistModal } from "./components/SourceBlacklistModal";
+import type { TranslationRuntimeConfig } from "./hooks/useLiveTranslation";
 import { addSourceToBlacklist, normalizeSourceName, parseSourceBlacklist, toNormalizedSourceSet } from "./utils/sourceBlacklist";
 import "./App.css";
 
@@ -61,7 +63,7 @@ function createDefaultSettings(): UserSettings {
   return {
     newsLimit: 5,
     scrapeCooldownHours: 2,
-      llmBatchSize: 5,
+    llmBatchSize: 5,
     llmProvider: "ollama",
     ollamaAddress: "http://127.0.0.1:11434",
     ollamaModel: "qwen2.5:3b",
@@ -80,6 +82,8 @@ function createDefaultSettings(): UserSettings {
     dislikedConcepts: "",
     sortMode: "date",
     layout: "grid",
+    liveTranslationEnabled: false,
+    translationTargetLanguage: "en",
   };
 }
 
@@ -91,6 +95,7 @@ function App(): React.JSX.Element {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [showCalendar, setShowCalendar] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showTranslatePanel, setShowTranslatePanel] = useState(false);
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [selectedArticle, setSelectedArticle] = useState<NewsArticle | null>(null);
   const [visibleCategories, setVisibleCategories] = useState<Record<TopicCategory, boolean>>(DEFAULT_VISIBLE_CATEGORIES);
@@ -100,6 +105,7 @@ function App(): React.JSX.Element {
   const [dragPointer, setDragPointer] = useState<{ x: number; y: number } | null>(null);
   const [categoryContextMenu, setCategoryContextMenu] = useState<{ x: number; y: number; category: TopicCategory } | null>(null);
   const categoryButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const translatePanelRef = useRef<HTMLDivElement | null>(null);
   const refreshTimeoutRef = useRef<number | null>(null);
   const [enrichmentProgress, setEnrichmentProgress] = useState<{ current: number; total: number; enriched: number } | null>(null);
   const [enrichmentError, setEnrichmentError] = useState<string | null>(null);
@@ -194,7 +200,7 @@ function App(): React.JSX.Element {
           ...defaults,
           newsLimit: saved.newsLimit ? Math.min(50, Math.max(1, Number(saved.newsLimit))) : defaults.newsLimit,
           scrapeCooldownHours: saved.scrapeCooldownHours ? Math.min(24, Math.max(0, Number(saved.scrapeCooldownHours))) : defaults.scrapeCooldownHours,
-            llmBatchSize: saved.llmBatchSize ? Math.min(20, Math.max(1, Number(saved.llmBatchSize))) : defaults.llmBatchSize,
+          llmBatchSize: saved.llmBatchSize ? Math.min(20, Math.max(1, Number(saved.llmBatchSize))) : defaults.llmBatchSize,
           llmProvider: saved.llmProvider?.trim() ? saved.llmProvider : defaults.llmProvider,
           ollamaAddress: saved.ollamaAddress?.trim() ? saved.ollamaAddress : defaults.ollamaAddress,
           ollamaModel: saved.ollamaModel?.trim() ? saved.ollamaModel : defaults.ollamaModel,
@@ -213,6 +219,8 @@ function App(): React.JSX.Element {
           dislikedConcepts: saved.dislikedConcepts ?? defaults.dislikedConcepts,
           sortMode: nextSortMode,
           layout: nextLayout ?? defaults.layout,
+          liveTranslationEnabled: saved.liveTranslationEnabled === "true",
+          translationTargetLanguage: saved.translationTargetLanguage === "zh-CN" ? "zh-CN" : "en",
         }));
         setSelectedEmbeddingModel(savedLocalEmbeddingModel || DEFAULT_EMBEDDING_MODEL);
         if (nextLayout) {
@@ -564,6 +572,31 @@ function App(): React.JSX.Element {
       setContextMenu(null);
     }
   }, [reprocessingArticleId, settings]);
+
+  useEffect(() => {
+    if (!showTranslatePanel) {
+      return;
+    }
+
+    const handleDocumentMouseDown = (event: MouseEvent) => {
+      const panel = translatePanelRef.current;
+      if (panel && !panel.contains(event.target as Node)) {
+        setShowTranslatePanel(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleDocumentMouseDown);
+    return () => {
+      document.removeEventListener("mousedown", handleDocumentMouseDown);
+    };
+  }, [showTranslatePanel]);
+
+  const translationRuntime = useMemo<TranslationRuntimeConfig>(() => ({
+    provider: settings.llmProvider,
+    model: getSelectedModel(settings),
+    apiKey: getSelectedApiKey(settings),
+    endpoint: getSelectedEndpoint(settings),
+  }), [settings]);
 
   const availableCategories = useMemo(
     () => ["All", ...categoryOrder.filter((category) => visibleCategories[category])] as Category[],
@@ -1264,13 +1297,61 @@ function App(): React.JSX.Element {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="relative flex items-center gap-2">
             <button
               onClick={() => { setShowSettings(true); void refreshLocalEmbeddingStatus(); }}
               className={`rounded-full border p-2 transition-colors ${isDarkMode ? "border-zinc-800 hover:bg-zinc-800" : "border-zinc-300 bg-white hover:bg-zinc-200"}`}
             >
               <Settings size={18} />
             </button>
+            <div ref={translatePanelRef} className="relative">
+              <button
+                onClick={() => setShowTranslatePanel((current) => !current)}
+                className={`rounded-full border p-2 transition-colors ${isDarkMode ? "border-zinc-800 hover:bg-zinc-800" : "border-zinc-300 bg-white hover:bg-zinc-200"}`}
+                title="Live translation"
+              >
+                <Languages size={18} />
+              </button>
+              {showTranslatePanel && (
+                <div
+                  className={`absolute right-0 top-12 z-40 w-60 rounded-xl border p-3 shadow-xl ${
+                    isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-200" : "border-zinc-300 bg-white text-zinc-800"
+                  }`}
+                >
+                  <p className={`mb-2 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+                    Live translation
+                  </p>
+                  <label className="mb-1 block text-xs font-semibold opacity-80">Target language</label>
+                  <select
+                    value={settings.translationTargetLanguage}
+                    onChange={(event) => {
+                      const nextLanguage = event.target.value === "zh-CN" ? "zh-CN" : "en";
+                      setSettings((current) => ({ ...current, translationTargetLanguage: nextLanguage }));
+                      saveSetting("translationTargetLanguage", nextLanguage);
+                    }}
+                    className={`mb-3 w-full rounded-lg border px-2.5 py-2 text-sm focus:outline-none ${
+                      isDarkMode ? "border-zinc-700 bg-zinc-800 text-zinc-100" : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                    }`}
+                  >
+                    <option value="en">English</option>
+                    <option value="zh-CN">Chinese</option>
+                  </select>
+                  <label className="flex items-center justify-between gap-2 text-xs font-semibold">
+                    <span>Enable live translation</span>
+                    <input
+                      type="checkbox"
+                      checked={settings.liveTranslationEnabled}
+                      onChange={(event) => {
+                        const enabled = event.target.checked;
+                        setSettings((current) => ({ ...current, liveTranslationEnabled: enabled }));
+                        saveSetting("liveTranslationEnabled", enabled ? "true" : "false");
+                      }}
+                      className="h-4 w-4"
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
             <button
               onClick={() => setIsDarkMode(!isDarkMode)}
               className={`rounded-full border p-2 transition-colors ${isDarkMode ? "border-zinc-800 hover:bg-zinc-800" : "border-zinc-300 bg-white hover:bg-zinc-200"}`}
@@ -1326,6 +1407,9 @@ function App(): React.JSX.Element {
                     layout={layout}
                     isDarkMode={isDarkMode}
                     sortMode={settings.sortMode}
+                    liveTranslationEnabled={settings.liveTranslationEnabled}
+                    translationTargetLanguage={settings.translationTargetLanguage}
+                    translationRuntime={translationRuntime}
                     onSelect={setSelectedArticle}
                     onOpenContextMenu={(article, x, y) => {
                       setContextMenu({ article, x, y });
@@ -1402,6 +1486,9 @@ function App(): React.JSX.Element {
         selectedArticle={selectedArticle}
         isDarkMode={isDarkMode}
         reprocessingArticleId={reprocessingArticleId}
+        liveTranslationEnabled={settings.liveTranslationEnabled}
+        translationTargetLanguage={settings.translationTargetLanguage}
+        translationRuntime={translationRuntime}
         onClose={() => setSelectedArticle(null)}
         onOpenUrl={(url) => {
           void invoke("open_url", { url });

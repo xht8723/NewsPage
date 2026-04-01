@@ -38,7 +38,7 @@ export interface BackendNewsItem {
 export interface UserSettings {
   newsLimit: number;
   scrapeCooldownHours: number;
-    llmBatchSize: number;
+  llmBatchSize: number;
   llmProvider: string;
   ollamaAddress: string;
   ollamaModel: string;
@@ -57,6 +57,8 @@ export interface UserSettings {
   dislikedConcepts: string;
   sortMode: string;
   layout: LayoutMode;
+  liveTranslationEnabled: boolean;
+  translationTargetLanguage: "en" | "zh-CN";
 }
 
 export interface LocalEmbeddingStatus {

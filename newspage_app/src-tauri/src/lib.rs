@@ -380,6 +380,7 @@ struct AppState {
     db: SqlitePool,
     last_scrape: Mutex<Option<SystemTime>>,
     preference_embedding_cache: Mutex<HashMap<String, Vec<f32>>>,
+    translation_cache: Mutex<HashMap<String, String>>,
     settings_path: PathBuf,
 }
 
@@ -1702,6 +1703,70 @@ async fn test_provider_connection(provider: String, api_key: Option<String>, end
 }
 
 #[tauri::command]
+async fn translate_text(
+    state: tauri::State<'_, AppState>,
+    text: String,
+    source_language: String,
+    target_language: String,
+    provider: String,
+    model: String,
+    api_key: Option<String>,
+    endpoint: Option<String>,
+) -> Result<String, String> {
+    let trimmed_text = text.trim();
+    if trimmed_text.is_empty() {
+        return Ok(text);
+    }
+
+    let source = source_language.trim();
+    let target = target_language.trim();
+    if source.eq_ignore_ascii_case(target) {
+        return Ok(text);
+    }
+
+    let provider_normalized = provider.trim().to_ascii_lowercase();
+    let model_normalized = model.trim().to_string();
+    let endpoint_normalized = endpoint
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let key = format!(
+        "{}::{}::{}::{}::{}::{}",
+        provider_normalized,
+        model_normalized,
+        endpoint_normalized,
+        source.to_ascii_lowercase(),
+        target.to_ascii_lowercase(),
+        trimmed_text
+    );
+
+    if let Some(cached) = state.translation_cache.lock().unwrap().get(&key).cloned() {
+        return Ok(cached);
+    }
+
+    let llm_provider = platform_llm::LLMProvider::from_str(&provider);
+    let config = platform_llm::LLMConfig {
+        provider: llm_provider,
+        api_key,
+        endpoint,
+        model,
+    };
+    let llm = platform_llm::create_provider(&config)?;
+    let translated = llm
+        .translate_text(trimmed_text, source, target)
+        .await?;
+
+    let mut cache = state.translation_cache.lock().unwrap();
+    if cache.len() > 5000 {
+        cache.clear();
+    }
+    cache.insert(key, translated.clone());
+
+    Ok(translated)
+}
+
+#[tauri::command]
 fn get_provider_options() -> Vec<&'static str> {
     platform_llm::LLMProvider::options()
 }
@@ -1763,6 +1828,7 @@ pub fn run() {
                 db: pool,
                 last_scrape: Mutex::new(last_scrape),
                 preference_embedding_cache: Mutex::new(HashMap::new()),
+                translation_cache: Mutex::new(HashMap::new()),
                 settings_path: settings_path.clone(),
             });
 
@@ -1803,6 +1869,7 @@ pub fn run() {
             list_ollama_models,
             list_provider_models,
             test_provider_connection,
+            translate_text,
             get_provider_options,
             list_local_embedding_models,
             get_local_embedding_status,

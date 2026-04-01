@@ -94,6 +94,14 @@ pub trait LLMProviderImpl: Send + Sync {
         language_hint: Option<&str>,
     ) -> Result<(String, String), String>;
 
+    /// Translate raw display text from source language into target language.
+    async fn translate_text(
+        &self,
+        text: &str,
+        source_language: &str,
+        target_language: &str,
+    ) -> Result<String, String>;
+
     /// Batch-enrich multiple articles in a single API call.
     /// Default implementation falls back to sequential `enrich()` calls.
     async fn enrich_batch(
@@ -113,6 +121,12 @@ pub trait LLMProviderImpl: Send + Sync {
 
     /// Get provider name
     fn provider_name(&self) -> &str;
+}
+
+fn build_translation_prompt(text: &str, source_language: &str, target_language: &str) -> String {
+    format!(
+        "Translate the following text from {source_language} to {target_language}. Keep factual meaning unchanged. Preserve markdown structure (headings, bullet points, links, emphasis) when present. Return only the translated text with no explanations.\n\n{text}"
+    )
 }
 
 fn build_batch_prompt_header(n: usize, language_hint: Option<&str>) -> String {
@@ -266,6 +280,34 @@ impl LLMProviderImpl for OllamaProvider {
         parse_batch_response(full_text, n)
     }
 
+    async fn translate_text(
+        &self,
+        text: &str,
+        source_language: &str,
+        target_language: &str,
+    ) -> Result<String, String> {
+        use ollama_rs::generation::completion::request::GenerationRequest;
+        use ollama_rs::Ollama;
+
+        let (host, port) = self.parse_address()?;
+        let model = self.model.trim();
+        if model.is_empty() {
+            return Err("Ollama model cannot be empty".to_string());
+        }
+
+        let prompt = build_translation_prompt(text, source_language, target_language);
+        let ollama = Ollama::new(host, port);
+        let response = ollama
+            .generate(GenerationRequest::new(model.to_string(), prompt))
+            .await
+            .map_err(|e| format!("Ollama translation request failed: {}", e))?;
+        let translated = response.response.trim().to_string();
+        if translated.is_empty() {
+            return Err("Ollama translation response was empty".to_string());
+        }
+        Ok(translated)
+    }
+
     async fn test_connection(&self) -> Result<bool, String> {
         let (host, port) = self.parse_address()?;
         let url = format!("{}:{}/api/tags", host, port);
@@ -415,6 +457,81 @@ impl LLMProviderImpl for OpenAIProvider {
         println!("[llm-batch] received response ({} chars), parsing {} articles", full_text.len(), n);
 
         parse_batch_response(full_text, n)
+    }
+
+    async fn translate_text(
+        &self,
+        text: &str,
+        source_language: &str,
+        target_language: &str,
+    ) -> Result<String, String> {
+        #[derive(Serialize)]
+        struct Message {
+            role: String,
+            content: String,
+        }
+
+        #[derive(Serialize)]
+        struct ChatRequest {
+            model: String,
+            messages: Vec<Message>,
+            temperature: f32,
+        }
+
+        #[derive(Deserialize)]
+        struct ChoiceMessage {
+            content: String,
+        }
+
+        #[derive(Deserialize)]
+        struct Choice {
+            message: ChoiceMessage,
+        }
+
+        #[derive(Deserialize)]
+        struct ChatResponse {
+            choices: Vec<Choice>,
+        }
+
+        let prompt = build_translation_prompt(text, source_language, target_language);
+        let client = reqwest::Client::new();
+        let req = ChatRequest {
+            model: self.model.clone(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: prompt,
+            }],
+            temperature: 0.1,
+        };
+
+        let resp = client
+            .post("https://api.openai.com/v1/chat/completions")
+            .bearer_auth(&self.api_key)
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| format!("OpenAI translation request failed: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("OpenAI translation failed: status {} body {}", status, body));
+        }
+
+        let response = resp
+            .json::<ChatResponse>()
+            .await
+            .map_err(|e| format!("Failed to parse OpenAI translation response: {}", e))?;
+        let translated = response
+            .choices
+            .first()
+            .map(|choice| choice.message.content.trim().to_string())
+            .unwrap_or_default();
+
+        if translated.is_empty() {
+            return Err("OpenAI translation response was empty".to_string());
+        }
+        Ok(translated)
     }
 
     async fn test_connection(&self) -> Result<bool, String> {
@@ -575,6 +692,86 @@ impl LLMProviderImpl for ClaudeProvider {
         println!("[llm-batch] received response ({} chars), parsing {} articles", full_text.len(), n);
 
         parse_batch_response(full_text, n)
+    }
+
+    async fn translate_text(
+        &self,
+        text: &str,
+        source_language: &str,
+        target_language: &str,
+    ) -> Result<String, String> {
+        #[derive(Serialize)]
+        struct TextContent {
+            r#type: String,
+            text: String,
+        }
+
+        #[derive(Serialize)]
+        struct Message {
+            role: String,
+            content: Vec<TextContent>,
+        }
+
+        #[derive(Serialize)]
+        struct ClaudeRequest {
+            model: String,
+            max_tokens: u32,
+            messages: Vec<Message>,
+        }
+
+        #[derive(Deserialize)]
+        struct TextBlock {
+            text: String,
+        }
+
+        #[derive(Deserialize)]
+        struct ClaudeResponse {
+            content: Vec<TextBlock>,
+        }
+
+        let prompt = build_translation_prompt(text, source_language, target_language);
+        let client = reqwest::Client::new();
+        let req = ClaudeRequest {
+            model: self.model.clone(),
+            max_tokens: 2000,
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: vec![TextContent {
+                    r#type: "text".to_string(),
+                    text: prompt,
+                }],
+            }],
+        };
+
+        let resp = client
+            .post("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| format!("Claude translation request failed: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Claude translation failed: status {} body {}", status, body));
+        }
+
+        let response = resp
+            .json::<ClaudeResponse>()
+            .await
+            .map_err(|e| format!("Failed to parse Claude translation response: {}", e))?;
+        let translated = response
+            .content
+            .first()
+            .map(|item| item.text.trim().to_string())
+            .unwrap_or_default();
+
+        if translated.is_empty() {
+            return Err("Claude translation response was empty".to_string());
+        }
+        Ok(translated)
     }
 
     async fn test_connection(&self) -> Result<bool, String> {
@@ -756,6 +953,94 @@ impl LLMProviderImpl for GeminiProvider {
 
         // Parse the response by splitting on ===ARTICLE N=== markers
         parse_batch_response(full_text, n)
+    }
+
+    async fn translate_text(
+        &self,
+        text: &str,
+        source_language: &str,
+        target_language: &str,
+    ) -> Result<String, String> {
+        #[derive(Serialize)]
+        struct Part {
+            text: String,
+        }
+
+        #[derive(Serialize)]
+        struct Content {
+            role: String,
+            parts: Vec<Part>,
+        }
+
+        #[derive(Serialize)]
+        struct GeminiRequest {
+            contents: Vec<Content>,
+        }
+
+        #[derive(Deserialize)]
+        struct TextPart {
+            text: String,
+        }
+
+        #[derive(Deserialize)]
+        struct CandidateContent {
+            parts: Vec<TextPart>,
+        }
+
+        #[derive(Deserialize)]
+        struct Candidate {
+            content: CandidateContent,
+        }
+
+        #[derive(Deserialize)]
+        struct GeminiResponse {
+            candidates: Vec<Candidate>,
+        }
+
+        let prompt = build_translation_prompt(text, source_language, target_language);
+        let client = reqwest::Client::new();
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+            self.model
+        );
+
+        let req = GeminiRequest {
+            contents: vec![Content {
+                role: "user".to_string(),
+                parts: vec![Part { text: prompt }],
+            }],
+        };
+
+        let resp = client
+            .post(&url)
+            .header("x-goog-api-key", &self.api_key)
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| format!("Gemini translation request failed: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Gemini translation failed: status {} body {}", status, body));
+        }
+
+        let response = resp
+            .json::<GeminiResponse>()
+            .await
+            .map_err(|e| format!("Failed to parse Gemini translation response: {}", e))?;
+
+        let translated = response
+            .candidates
+            .first()
+            .and_then(|candidate| candidate.content.parts.first())
+            .map(|part| part.text.trim().to_string())
+            .unwrap_or_default();
+
+        if translated.is_empty() {
+            return Err("Gemini translation response was empty".to_string());
+        }
+        Ok(translated)
     }
 
     async fn test_connection(&self) -> Result<bool, String> {

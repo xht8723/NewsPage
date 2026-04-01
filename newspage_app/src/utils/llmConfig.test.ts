@@ -24,6 +24,8 @@ const baseSettings: UserSettings = {
   dislikedConcepts: "",
   sortMode: "date",
   layout: "grid",
+  liveTranslationEnabled: false,
+  translationTargetLanguage: "en",
 };
 
 describe("llmConfig", () => {

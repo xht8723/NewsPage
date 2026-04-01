@@ -1,6 +1,7 @@
 import { ChevronRight } from "lucide-react";
 import type { LayoutMode } from "../constants/news";
 import { useImageFallback } from "../hooks/useImageFallback";
+import { useLiveTranslation, type TranslationRuntimeConfig } from "../hooks/useLiveTranslation";
 import type { NewsArticle } from "../types/news";
 import { getTagColor } from "../utils/newsMeta";
 
@@ -9,6 +10,9 @@ interface ArticleCardProps {
   layout: LayoutMode;
   isDarkMode: boolean;
   sortMode: string;
+  liveTranslationEnabled: boolean;
+  translationTargetLanguage: "en" | "zh-CN";
+  translationRuntime: TranslationRuntimeConfig;
   onSelect: (article: NewsArticle) => void;
   onOpenContextMenu: (article: NewsArticle, x: number, y: number) => void;
 }
@@ -18,12 +22,29 @@ export function ArticleCard({
   layout,
   isDarkMode,
   sortMode,
+  liveTranslationEnabled,
+  translationTargetLanguage,
+  translationRuntime,
   onSelect,
   onOpenContextMenu,
 }: ArticleCardProps): React.JSX.Element {
   const isListLayout = layout === "list";
   const isCompactListLayout = layout === "compact_list";
   const onThumbnailError = useImageFallback("https://placehold.co/640x360/27272a/a1a1aa?text=News");
+  const translatedTitle = useLiveTranslation({
+    text: item.title,
+    sourceLanguage: item.language,
+    targetLanguage: translationTargetLanguage,
+    enabled: liveTranslationEnabled,
+    runtime: translationRuntime,
+  });
+  const translatedSnippet = useLiveTranslation({
+    text: item.snippet,
+    sourceLanguage: item.language,
+    targetLanguage: translationTargetLanguage,
+    enabled: liveTranslationEnabled,
+    runtime: translationRuntime,
+  });
 
   return (
     <div
@@ -76,7 +97,7 @@ export function ArticleCard({
             isDarkMode ? "text-zinc-100 group-hover:text-white" : "text-zinc-900"
           }`}
         >
-          {item.title}
+          {translatedTitle}
         </h3>
         <p
           className={`${isCompactListLayout ? "mb-3" : "mb-5"} text-sm leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-600"}`}
@@ -89,7 +110,7 @@ export function ArticleCard({
             }
             : undefined}
         >
-          {item.snippet}
+          {translatedSnippet}
         </p>
         <div className="mt-auto flex items-center justify-between gap-3">
           <div className={`flex min-w-0 items-center gap-2 ${isCompactListLayout ? "text-[9px]" : "text-[10px]"} font-black uppercase tracking-widest ${

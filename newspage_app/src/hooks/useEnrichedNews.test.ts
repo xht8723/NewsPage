@@ -24,6 +24,8 @@ const baseSettings: UserSettings = {
   dislikedConcepts: " nft , mobile gacha",
   sortMode: "date",
   layout: "grid",
+  liveTranslationEnabled: false,
+  translationTargetLanguage: "en",
 };
 
 describe("useEnrichedNews helper logic", () => {
