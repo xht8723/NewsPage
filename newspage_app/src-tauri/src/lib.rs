@@ -14,7 +14,7 @@ use crate::scrapers::gl_rss::list_region_ids;
 use chrono::{DateTime, Local, Utc};
 use sqlx::sqlite::SqlitePool;
 use std::path::{Path, PathBuf};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
@@ -380,6 +380,7 @@ struct AppState {
     db: SqlitePool,
     last_scrape: Mutex<Option<SystemTime>>,
     preference_embedding_cache: Mutex<HashMap<String, Vec<f32>>>,
+    settings_path: PathBuf,
 }
 
 #[derive(Default)]
@@ -409,8 +410,9 @@ struct ResolvedLlmSettings {
     ollama_model: String,
     local_embedding_model: String,
     selected_regions: Vec<String>,
-        visible_categories: HashMap<String, bool>,
-        llm_batch_size: usize,
+    visible_categories: HashMap<String, bool>,
+    source_blacklist: HashSet<String>,
+    llm_batch_size: usize,
 }
 
 struct RuntimeLlmContext {
@@ -424,6 +426,26 @@ fn read_settings_map(settings_path: &Path) -> HashMap<String, String> {
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_default()
+}
+
+fn normalize_source_name_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn parse_source_blacklist(settings_map: &HashMap<String, String>) -> HashSet<String> {
+    let parsed = settings_map
+        .get("sourceBlacklist")
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok());
+
+    match parsed {
+        Some(serde_json::Value::Array(values)) => values
+            .into_iter()
+            .filter_map(|value| value.as_str().map(str::to_string))
+            .map(|source| normalize_source_name_key(&source))
+            .filter(|source| !source.is_empty())
+            .collect(),
+        _ => HashSet::new(),
+    }
 }
 
 fn resolve_runtime_llm_context(
@@ -507,6 +529,7 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
         .get("visibleCategories")
         .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_default();
+    let saved_source_blacklist = parse_source_blacklist(settings_map);
 
     ResolvedLlmSettings {
         llm_provider: resolve_setting_value(overrides.llm_provider, saved_llm_provider),
@@ -525,12 +548,13 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
             saved_local_embedding_model,
         ),
         selected_regions: saved_selected_regions,
-           visible_categories: saved_visible_categories,
-           llm_batch_size: settings_map
-              .get("llmBatchSize")
-              .and_then(|v| v.parse::<usize>().ok())
-              .map(|n| n.clamp(1, 20))
-              .unwrap_or(5),
+        visible_categories: saved_visible_categories,
+        source_blacklist: saved_source_blacklist,
+        llm_batch_size: settings_map
+            .get("llmBatchSize")
+            .and_then(|v| v.parse::<usize>().ok())
+            .map(|n| n.clamp(1, 20))
+            .unwrap_or(5),
     }
 }
 
@@ -663,10 +687,26 @@ async fn run_scrape_stage(
             format!("{} fetched {} items", stage_result.stage_name, stage_result.items.len()),
             Some(stage_result.items.len()),
         );
+        let mut skipped_blacklisted = 0usize;
         for item in &stage_result.items {
+            let source_key = normalize_source_name_key(&item.source_name);
+            if !source_key.is_empty() && resolved.source_blacklist.contains(&source_key) {
+                skipped_blacklisted += 1;
+                continue;
+            }
             upsert_article(&state.db, item)
                 .await
                 .map_err(|e| format!("DB upsert error: {}", e))?;
+        }
+        if skipped_blacklisted > 0 {
+            logging::info(
+                "Scrape",
+                format!(
+                    "Skipped {} blacklisted article(s) in {}",
+                    skipped_blacklisted, stage_result.stage_name
+                ),
+                Some(skipped_blacklisted),
+            );
         }
         emit_process_stage(
             app,
@@ -697,6 +737,7 @@ async fn collect_items_to_enrich_by_language(
     state: &AppState,
     per_category_limit: i64,
     visible_categories: &HashMap<String, bool>,
+    source_blacklist: &HashSet<String>,
 ) -> Result<Vec<(String, Vec<NewsItem>)>, String> {
     let categories = list_unenriched_categories(&state.db)
         .await
@@ -741,6 +782,23 @@ async fn collect_items_to_enrich_by_language(
                     category, normalized_language, e
                 )
             })?;
+
+            let before_filter_count = category_items.len();
+            category_items.retain(|item| {
+                let source_key = normalize_source_name_key(&item.source_name);
+                source_key.is_empty() || !source_blacklist.contains(&source_key)
+            });
+            let skipped_blacklisted = before_filter_count.saturating_sub(category_items.len());
+            if skipped_blacklisted > 0 {
+                logging::info(
+                    "Extract",
+                    format!(
+                        "Skipped {} blacklisted article(s) for category '{}' language '{}'",
+                        skipped_blacklisted, category, normalized_language
+                    ),
+                    Some(skipped_blacklisted),
+                );
+            }
 
             grouped_items
                 .entry(normalized_language)
@@ -1152,6 +1210,8 @@ async fn get_enriched_news(
         .collect();
 
     let use_scoring = sort_mode == "score" && (!liked.is_empty() || !disliked.is_empty());
+    let settings_map = read_settings_map(&state.settings_path);
+    let source_blacklist = parse_source_blacklist(&settings_map);
 
     if use_scoring {
         let embedding_model = local_embedding_model
@@ -1238,6 +1298,10 @@ async fn get_enriched_news(
 
         let mut ranked: Vec<RankedNewsItem> = rows
             .into_iter()
+            .filter(|(item, _)| {
+                let source_key = normalize_source_name_key(&item.source_name);
+                source_key.is_empty() || !source_blacklist.contains(&source_key)
+            })
             .map(|(item, emb)| {
                 let score = emb
                     .as_deref()
@@ -1277,6 +1341,10 @@ async fn get_enriched_news(
         };
 
         let mut items = items;
+        items.retain(|item| {
+            let source_key = normalize_source_name_key(&item.source_name);
+            source_key.is_empty() || !source_blacklist.contains(&source_key)
+        });
         if let Some(ref date_utc_day) = date {
             items.retain(|item| is_on_utc_day(&item.date, date_utc_day));
         }
@@ -1313,6 +1381,7 @@ fn default_settings_map() -> HashMap<String, String> {
     map.insert("claudeModel".to_string(), DEFAULT_CLAUDE_MODEL.to_string());
     map.insert("geminiModel".to_string(), DEFAULT_GEMINI_MODEL.to_string());
     map.insert("selectedRegions".to_string(), "[]".to_string());
+    map.insert("sourceBlacklist".to_string(), "[]".to_string());
     map.insert("likedConcepts".to_string(), "".to_string());
     map.insert("dislikedConcepts".to_string(), "".to_string());
     map.insert("sortMode".to_string(), "date".to_string());
@@ -1507,6 +1576,7 @@ async fn start_all_action(
         &state,
         per_category_limit,
         &runtime.resolved.visible_categories,
+        &runtime.resolved.source_blacklist,
     )
     .await?;
     let result = run_enrichment_stage(
@@ -1693,6 +1763,7 @@ pub fn run() {
                 db: pool,
                 last_scrape: Mutex::new(last_scrape),
                 preference_embedding_cache: Mutex::new(HashMap::new()),
+                settings_path: settings_path.clone(),
             });
 
             if let Ok(raw) = std::fs::read_to_string(&settings_path) {
@@ -1847,6 +1918,20 @@ mod helper_tests {
         let thirty_minutes_ago = SystemTime::now() - Duration::from_secs(30 * 60);
         assert!(!should_run_scrape(Some(thirty_minutes_ago), 1));
         assert!(should_run_scrape(Some(thirty_minutes_ago), 0));
+    }
+
+    #[test]
+    fn parse_source_blacklist_handles_case_and_invalid_items() {
+        let mut map = HashMap::new();
+        map.insert(
+            "sourceBlacklist".to_string(),
+            "[\"Reuters\", \"reuters\", \" BBC \", 42, null]".to_string(),
+        );
+
+        let parsed = parse_source_blacklist(&map);
+        assert!(parsed.contains("reuters"));
+        assert!(parsed.contains("bbc"));
+        assert_eq!(parsed.len(), 2);
     }
 }
 

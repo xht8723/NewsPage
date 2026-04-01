@@ -38,6 +38,8 @@ import { SettingsModal } from "./components/SettingsModal";
 import { ArticleDetailModal } from "./components/ArticleDetailModal";
 import { CalendarModal } from "./components/CalendarModal";
 import { LogPanel } from "./components/LogPanel";
+import { SourceBlacklistModal } from "./components/SourceBlacklistModal";
+import { addSourceToBlacklist, normalizeSourceName, parseSourceBlacklist, toNormalizedSourceSet } from "./utils/sourceBlacklist";
 import "./App.css";
 
 type StageKey = "scrape" | "extract" | "enrich" | "persist";
@@ -73,6 +75,7 @@ function createDefaultSettings(): UserSettings {
     geminiApiKey: "",
     geminiModel: "gemini-2.5-flash",
     selectedRegions: [],
+    sourceBlacklist: [],
     likedConcepts: "",
     dislikedConcepts: "",
     sortMode: "date",
@@ -122,6 +125,7 @@ function App(): React.JSX.Element {
   const [isPurging, setIsPurging] = useState(false);
   const [showLayoutSwitcher, setShowLayoutSwitcher] = useState(true);
   const [showConfigPopup, setShowConfigPopup] = useState(false);
+  const [showSourceBlacklistManager, setShowSourceBlacklistManager] = useState(false);
   const [configPopupMessage, setConfigPopupMessage] = useState("");
   const [relevanceWarning, setRelevanceWarning] = useState<string | null>(null);
   const { saveSetting, cancelPendingSave } = useDebouncedSettingSaverController(500);
@@ -204,6 +208,7 @@ function App(): React.JSX.Element {
           geminiApiKey: saved.geminiApiKey ?? defaults.geminiApiKey,
           geminiModel: saved.geminiModel?.trim() ? saved.geminiModel : defaults.geminiModel,
           selectedRegions: saved.selectedRegions ? (() => { try { return JSON.parse(saved.selectedRegions) as string[]; } catch { return defaults.selectedRegions; } })() : defaults.selectedRegions,
+          sourceBlacklist: parseSourceBlacklist(saved.sourceBlacklist),
           likedConcepts: saved.likedConcepts ?? defaults.likedConcepts,
           dislikedConcepts: saved.dislikedConcepts ?? defaults.dislikedConcepts,
           sortMode: nextSortMode,
@@ -891,6 +896,31 @@ function App(): React.JSX.Element {
     saveSetting(field, value);
   };
 
+  const handleHideSourceFromFutureNews = useCallback((sourceName: string) => {
+    const normalizedSource = normalizeSourceName(sourceName);
+    if (!normalizedSource) {
+      setContextMenu(null);
+      return;
+    }
+
+    setSettings((current) => {
+      const nextBlacklist = addSourceToBlacklist(current.sourceBlacklist, sourceName);
+      saveSetting("sourceBlacklist", JSON.stringify(nextBlacklist));
+      return { ...current, sourceBlacklist: nextBlacklist };
+    });
+
+    setNews((current) => current.filter((item) => normalizeSourceName(item.sourceName) !== normalizedSource));
+    setSelectedArticle((current) => {
+      if (!current) {
+        return null;
+      }
+      return normalizeSourceName(current.sourceName) === normalizedSource ? null : current;
+    });
+    setContextMenu(null);
+  }, [saveSetting, setNews]);
+
+  const blacklistedSources = useMemo(() => toNormalizedSourceSet(settings.sourceBlacklist), [settings.sourceBlacklist]);
+
   const filteredNews = useMemo(() => {
     let sortedNews: NewsArticle[];
     if (settings.sortMode === "score") {
@@ -909,14 +939,16 @@ function App(): React.JSX.Element {
       });
     }
 
-    const dateFiltered = sortedNews.filter((item) => item.date === selectedDate);
+    const dateFiltered = sortedNews
+      .filter((item) => item.date === selectedDate)
+      .filter((item) => !blacklistedSources.has(normalizeSourceName(item.sourceName)));
 
     if (selectedCategory === "All") {
       return dateFiltered.filter((item) => visibleCategories[item.category]);
     }
 
     return dateFiltered.filter((item) => item.category === selectedCategory);
-  }, [news, selectedCategory, selectedDate, visibleCategories, settings.sortMode]);
+  }, [news, selectedCategory, selectedDate, visibleCategories, settings.sortMode, blacklistedSources]);
 
   if (startupPhase !== "ready") {
     const startupMessage = startupPhase === "loading-settings"
@@ -1312,6 +1344,7 @@ function App(): React.JSX.Element {
           contextMenu={contextMenu}
           isDarkMode={isDarkMode}
           reprocessingArticleId={reprocessingArticleId}
+          isSourceBlacklisted={blacklistedSources.has(normalizeSourceName(contextMenu.article.sourceName))}
           onClose={() => setContextMenu(null)}
           onReprocess={(articleId) => {
             const article = news.find((item) => item.id === articleId);
@@ -1319,6 +1352,7 @@ function App(): React.JSX.Element {
               void reprocessArticle(article);
             }
           }}
+          onHideSource={handleHideSourceFromFutureNews}
         />
       )}
 
@@ -1348,10 +1382,20 @@ function App(): React.JSX.Element {
         isPurging={isPurging}
         setIsPurging={setIsPurging}
         onPurgeDatabase={handleCleanReset}
+        onOpenSourceBlacklistManager={() => setShowSourceBlacklistManager(true)}
         onClose={() => {
           setShowSettings(false);
           setPurgeConfirmStep(0);
         }}
+      />
+
+      <SourceBlacklistModal
+        show={showSourceBlacklistManager}
+        isDarkMode={isDarkMode}
+        settings={settings}
+        setSettings={setSettings}
+        saveSetting={saveSetting}
+        onClose={() => setShowSourceBlacklistManager(false)}
       />
 
       <ArticleDetailModal

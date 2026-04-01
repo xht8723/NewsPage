@@ -38,6 +38,7 @@ interface SettingsModalProps {
   isPurging: boolean;
   setIsPurging: Dispatch<SetStateAction<boolean>>;
   onPurgeDatabase: () => Promise<void>;
+  onOpenSourceBlacklistManager: () => void;
   onClose: () => void;
 }
 
@@ -66,6 +67,7 @@ export function SettingsModal({
   isPurging,
   setIsPurging,
   onPurgeDatabase,
+  onOpenSourceBlacklistManager,
   onClose,
 }: SettingsModalProps): React.JSX.Element | null {
   if (!showSettings) {
@@ -153,7 +155,7 @@ export function SettingsModal({
                 </div>
                   <div>
                     <label className="mb-1.5 block text-xs font-medium opacity-70">LLM batch size</label>
-                    <p className="mb-1.5 text-xs opacity-50">Articles sent to the LLM per request. Lower values suit models with small context windows.</p>
+                    <p className="mb-1.5 text-xs opacity-50">How many articles for the LLM to process in a single batch.</p>
                     <input
                       type="number"
                       min={1}
@@ -499,7 +501,7 @@ export function SettingsModal({
 
           <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
             <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>News Regions</p>
-            <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>Select one or more regions to scrape Google News for. Each region fetches all available topic categories.</p>
+            <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>Select regions for news source</p>
             <div className="space-y-2">
               {AVAILABLE_REGIONS.map((region) => {
                 const checked = settings.selectedRegions.includes(region.id);
@@ -525,6 +527,24 @@ export function SettingsModal({
             {settings.selectedRegions.length === 0 && (
               <p className="mt-2 text-xs text-amber-500">No regions selected. Google News RSS will be skipped during scraping.</p>
             )}
+          </div>
+
+          <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
+            <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Source Blacklist</p>
+            <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
+              Blacklisted sources are skipped and hidden in future queries.
+            </p>
+            <button
+              type="button"
+              onClick={onOpenSourceBlacklistManager}
+              className={`rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+                isDarkMode
+                  ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                  : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
+              }`}
+            >
+              Manage Blacklist ({settings.sourceBlacklist.length})
+            </button>
           </div>
 
           <div>

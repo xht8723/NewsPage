@@ -52,6 +52,7 @@ export interface UserSettings {
   geminiApiKey: string;
   geminiModel: string;
   selectedRegions: string[];
+  sourceBlacklist: string[];
   likedConcepts: string;
   dislikedConcepts: string;
   sortMode: string;

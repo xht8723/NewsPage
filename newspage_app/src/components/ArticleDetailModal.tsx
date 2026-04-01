@@ -132,7 +132,7 @@ export function ArticleDetailModal({
                   : "bg-zinc-200 text-zinc-900 hover:bg-zinc-300"
               } disabled:cursor-not-allowed disabled:opacity-50`}
             >
-              {reprocessingArticleId === selectedArticle.id ? "Re-processing..." : "Re-process this card"}
+              {reprocessingArticleId === selectedArticle.id ? "Re-processing..." : "Re-process this news"}
             </button>
           </div>
         </div>

@@ -19,6 +19,7 @@ const baseSettings: UserSettings = {
   geminiApiKey: "gemini-key",
   geminiModel: "gemini-2.5-flash",
   selectedRegions: [] as string[],
+  sourceBlacklist: [] as string[],
   likedConcepts: "",
   dislikedConcepts: "",
   sortMode: "date",

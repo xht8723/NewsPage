@@ -19,6 +19,7 @@ const baseSettings: UserSettings = {
   geminiApiKey: "",
   geminiModel: "gemini-2.5-flash",
   selectedRegions: [] as string[],
+  sourceBlacklist: [] as string[],
   likedConcepts: "retro games,  indie dev ,",
   dislikedConcepts: " nft , mobile gacha",
   sortMode: "date",

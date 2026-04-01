@@ -6,16 +6,20 @@ interface CardContextMenuProps {
   contextMenu: CardContextMenuState;
   isDarkMode: boolean;
   reprocessingArticleId: string | null;
+  isSourceBlacklisted: boolean;
   onClose: () => void;
   onReprocess: (articleId: string) => void;
+  onHideSource: (sourceName: string) => void;
 }
 
 export function CardContextMenu({
   contextMenu,
   isDarkMode,
   reprocessingArticleId,
+  isSourceBlacklisted,
   onClose,
   onReprocess,
+  onHideSource,
 }: CardContextMenuProps): React.JSX.Element {
   const isCurrentCardReprocessing = reprocessingArticleId === contextMenu.article.id;
 
@@ -36,7 +40,22 @@ export function CardContextMenu({
             isDarkMode ? "hover:bg-zinc-800" : "hover:bg-zinc-200"
           } disabled:cursor-not-allowed disabled:opacity-50`}
         >
-          <span>{isCurrentCardReprocessing ? "Re-processing..." : "Re-process this card"}</span>
+          <span>{isCurrentCardReprocessing ? "Re-processing..." : "Re-process this news"}</span>
+          <ChevronRight size={14} />
+        </button>
+        <button
+          type="button"
+          disabled={isSourceBlacklisted}
+          onClick={() => onHideSource(contextMenu.article.sourceName)}
+          className={`mt-1 flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-bold transition-colors ${
+            isDarkMode ? "hover:bg-zinc-800" : "hover:bg-zinc-200"
+          } disabled:cursor-not-allowed disabled:opacity-50`}
+        >
+          <span>
+            {isSourceBlacklisted
+              ? `"${contextMenu.article.sourceName}" already hidden`
+              : `Hide future news from "${contextMenu.article.sourceName}"`}
+          </span>
           <ChevronRight size={14} />
         </button>
       </div>
