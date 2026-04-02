@@ -171,8 +171,8 @@ Use this EXACT output format for each article:\n\n\
 ===ARTICLE 1===\n\
 SNIPPET:\n\
 SUMMARY:\n\
-- Point 1\n\
-- Point 2\n\n\
+- <key point>\n\
+- <another key point>\n\n\
 ===ARTICLE 2===\n\
 SNIPPET: ...\n\
 SUMMARY:\n\
