@@ -174,24 +174,62 @@ export function SettingsModal({
                     />
                   </div>
                   <div>
-                    <label className="mb-1.5 block text-xs font-medium opacity-70">Max summary bullet points</label>
-                    <p className="mb-1.5 text-xs opacity-50">Maximum number of bullet points in each article summary.</p>
-                    <input
-                      type="number"
-                      min={1}
-                      max={20}
-                      value={settings.maxSummaryPoints ?? 8}
-                      onChange={(e) => {
-                        const val = Math.min(20, Math.max(1, Number(e.target.value)));
-                        setSettings((s) => ({ ...s, maxSummaryPoints: val }));
-                        saveSetting("maxSummaryPoints", String(val));
-                      }}
-                      className={`w-full rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
-                        isDarkMode
-                          ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                          : "border-zinc-300 bg-zinc-200 text-zinc-900"
-                      }`}
-                    />
+                    <label className="mb-1.5 block text-xs font-medium opacity-70">Summary bullet points</label>
+                    <p className="mb-1.5 text-xs opacity-50">Range of bullet points per article summary.</p>
+                    {(() => {
+                      const SLIDER_MIN = 1;
+                      const SLIDER_MAX = 20;
+                      const minVal = settings.minSummaryPoints ?? 1;
+                      const maxVal = settings.maxSummaryPoints ?? 8;
+                      const leftPct = ((minVal - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN)) * 100;
+                      const rightPct = ((maxVal - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN)) * 100;
+                      return (
+                        <div>
+                          <div className="relative h-6 w-full">
+                            {/* Track background */}
+                            <div className={`absolute top-1/2 h-1.5 w-full -translate-y-1/2 rounded-full ${isDarkMode ? "bg-zinc-700" : "bg-zinc-300"}`} />
+                            {/* Active range fill */}
+                            <div
+                              className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-emerald-500"
+                              style={{ left: `${leftPct}%`, width: `${rightPct - leftPct}%` }}
+                            />
+                            {/* Min thumb */}
+                            <input
+                              type="range"
+                              min={SLIDER_MIN}
+                              max={SLIDER_MAX}
+                              value={minVal}
+                              onChange={(e) => {
+                                const val = Math.min(Number(e.target.value), maxVal);
+                                setSettings((s) => ({ ...s, minSummaryPoints: val }));
+                                saveSetting("minSummaryPoints", String(val));
+                              }}
+                              className="pointer-events-none absolute top-0 h-6 w-full appearance-none bg-transparent [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-emerald-500 [&::-moz-range-thumb]:bg-white [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-emerald-500 [&::-webkit-slider-thumb]:bg-white"
+                              style={{ zIndex: minVal > SLIDER_MAX - 2 ? 5 : 3 }}
+                            />
+                            {/* Max thumb */}
+                            <input
+                              type="range"
+                              min={SLIDER_MIN}
+                              max={SLIDER_MAX}
+                              value={maxVal}
+                              onChange={(e) => {
+                                const val = Math.max(Number(e.target.value), minVal);
+                                setSettings((s) => ({ ...s, maxSummaryPoints: val }));
+                                saveSetting("maxSummaryPoints", String(val));
+                              }}
+                              className="pointer-events-none absolute top-0 h-6 w-full appearance-none bg-transparent [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-emerald-500 [&::-moz-range-thumb]:bg-white [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-emerald-500 [&::-webkit-slider-thumb]:bg-white"
+                              style={{ zIndex: 4 }}
+                            />
+                          </div>
+                          <div className="mt-1 flex items-center justify-between">
+                            <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{SLIDER_MIN}</span>
+                            <span className={`text-xs font-semibold ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>{minVal} &ndash; {maxVal} points</span>
+                            <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{SLIDER_MAX}</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
               </div>
             </div>

@@ -24,6 +24,8 @@ const baseSettings: UserSettings = {
   dislikedConcepts: "",
   sortMode: "date",
   layout: "grid",
+  minSummaryPoints: 1,
+  maxSummaryPoints: 8,
   liveTranslationEnabled: false,
   translationTargetLanguage: "en",
 };
@@ -75,6 +77,8 @@ describe("llmConfig", () => {
       ollamaAddress: "http://127.0.0.1:11434",
       ollamaModel: "qwen2.5:3b",
       localEmbeddingModel: "multilingual-e5-small",
+      minSummaryPoints: 1,
+      maxSummaryPoints: 8,
     });
   });
 });

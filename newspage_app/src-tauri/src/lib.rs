@@ -240,6 +240,7 @@ async fn persist_enriched_article(db_pool: &SqlitePool, enriched: &NewsItem) -> 
 async fn fetch_and_enrich_article_with_timeouts(
     llm: &dyn platform_llm::LLMProviderImpl,
     item: &NewsItem,
+    min_summary_points: u8,
     max_summary_points: u8,
 ) -> Result<(String, String, String, Option<String>), String> {
     let (text, thumbnail) = tokio::time::timeout(
@@ -257,7 +258,7 @@ async fn fetch_and_enrich_article_with_timeouts(
 
     let (snippet, ai_summary) = tokio::time::timeout(
         Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
-        llm.enrich(&item.title, &text, Some(item.language.as_str()), max_summary_points),
+        llm.enrich(&item.title, &text, Some(item.language.as_str()), min_summary_points, max_summary_points),
     )
     .await
     .map_err(|_| {
@@ -398,6 +399,7 @@ struct LlmOverrideArgs {
     ollama_model: Option<String>,
     ollama_embedding_model: Option<String>,
     local_embedding_model: Option<String>,
+    min_summary_points: Option<u8>,
     max_summary_points: Option<u8>,
 }
 
@@ -416,6 +418,7 @@ struct ResolvedLlmSettings {
     visible_categories: HashMap<String, bool>,
     source_blacklist: HashSet<String>,
     llm_batch_size: usize,
+    min_summary_points: u8,
     max_summary_points: u8,
 }
 
@@ -568,6 +571,15 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
             })
             .map(|n| n.clamp(1, 20))
             .unwrap_or(8),
+        min_summary_points: overrides
+            .min_summary_points
+            .or_else(|| {
+                settings_map
+                    .get("minSummaryPoints")
+                    .and_then(|v| v.parse::<u8>().ok())
+            })
+            .map(|n| n.clamp(1, 20))
+            .unwrap_or(1),
     }
 }
 
@@ -984,7 +996,7 @@ async fn run_enrichment_stage(
                     Some(global_index),
                     Some(total),
                 )?;
-                llm.enrich_batch(&articles_for_llm, Some(language.as_str()), settings.max_summary_points).await
+                llm.enrich_batch(&articles_for_llm, Some(language.as_str()), settings.min_summary_points, settings.max_summary_points).await
             } else {
                 vec![]
             };
@@ -1573,6 +1585,7 @@ async fn start_all_action(
             ollama_model,
             ollama_embedding_model: None,
             local_embedding_model,
+            min_summary_points: None,
             max_summary_points: None,
         },
     )?;
@@ -1646,6 +1659,7 @@ async fn reprocess_article(
             ollama_model,
             ollama_embedding_model: None,
             local_embedding_model,
+            min_summary_points: None,
             max_summary_points: None,
         },
     )?;
@@ -1658,7 +1672,7 @@ async fn reprocess_article(
         .ok_or_else(|| format!("Article not found: {}", article_id))?;
 
     let (text, snippet, ai_summary, thumbnail) =
-        fetch_and_enrich_article_with_timeouts(llm.as_ref(), &item, runtime.resolved.max_summary_points).await?;
+        fetch_and_enrich_article_with_timeouts(llm.as_ref(), &item, runtime.resolved.min_summary_points, runtime.resolved.max_summary_points).await?;
 
     let mut enriched = apply_enrichment_payload(item, text, snippet, ai_summary, thumbnail, true);
 

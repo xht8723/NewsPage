@@ -82,6 +82,8 @@ function createDefaultSettings(): UserSettings {
     dislikedConcepts: "",
     sortMode: "date",
     layout: "grid",
+    minSummaryPoints: 1,
+    maxSummaryPoints: 8,
     liveTranslationEnabled: false,
     translationTargetLanguage: "en",
   };
@@ -219,6 +221,8 @@ function App(): React.JSX.Element {
           dislikedConcepts: saved.dislikedConcepts ?? defaults.dislikedConcepts,
           sortMode: nextSortMode,
           layout: nextLayout ?? defaults.layout,
+          minSummaryPoints: saved.minSummaryPoints ? Math.min(20, Math.max(1, Number(saved.minSummaryPoints))) : defaults.minSummaryPoints,
+          maxSummaryPoints: saved.maxSummaryPoints ? Math.min(20, Math.max(1, Number(saved.maxSummaryPoints))) : defaults.maxSummaryPoints,
           liveTranslationEnabled: saved.liveTranslationEnabled === "true",
           translationTargetLanguage: saved.translationTargetLanguage === "zh-CN" ? "zh-CN" : "en",
         }));

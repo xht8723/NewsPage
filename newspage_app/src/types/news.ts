@@ -57,6 +57,7 @@ export interface UserSettings {
   dislikedConcepts: string;
   sortMode: string;
   layout: LayoutMode;
+  minSummaryPoints: number;
   maxSummaryPoints: number;
   liveTranslationEnabled: boolean;
   translationTargetLanguage: "en" | "zh-CN";
