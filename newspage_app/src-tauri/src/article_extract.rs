@@ -328,6 +328,25 @@ pub async fn fetch_article_text_and_thumbnail(
     let result = extract(&html, &Options::default())
         .map_err(|e| format!("trafilatura failed to extract text from '{}': {}", effective_url, e))?;
 
+    // Check if the extracted text is junk (JS wall, paywall, anti-bot, etc.)
+    if let Some(reason) = is_junk_article_text(&result.content_text) {
+        println!(
+            "[article-extract] junk text detected for {}: {} (text: \"{}\")",
+            effective_url,
+            reason,
+            &result.content_text[..result.content_text.len().min(120)]
+        );
+        logging::warn(
+            "Extract",
+            format!("Junk article text detected for {}: {}", effective_url, reason),
+            None,
+        );
+        return Err(format!(
+            "Extracted text from '{}' is not usable: {}",
+            effective_url, reason
+        ));
+    }
+
     logging::info(
         "Extract",
         format!("Article text extracted for {}", effective_url),
@@ -498,6 +517,56 @@ fn check_image_url(url: &str) -> Result<(), &'static str> {
         return Err("Google News logo (lh3.googleusercontent.com)");
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Junk article text detection
+// ---------------------------------------------------------------------------
+
+const MIN_ARTICLE_TEXT_LEN: usize = 80;
+
+/// Phrases that indicate the fetched HTML was a JS wall, paywall, anti-bot
+/// page, or other non-article content.  Checked case-insensitively against
+/// the extracted text.
+const JUNK_PHRASES: &[&str] = &[
+    "enable javascript",
+    "enable js",
+    "disable any ad blocker",
+    "disable ad blocker",
+    "disable your ad blocker",
+    "turn off your ad blocker",
+    "turn off ad blocker",
+    "javascript is required",
+    "javascript is disabled",
+    "javascript is not enabled",
+    "requires javascript",
+    "you need to enable javascript",
+    "browser does not support javascript",
+    "subscribe to continue reading",
+    "subscribe to read",
+    "access denied",
+    "403 forbidden",
+    "verify you are human",
+    "verify you are not a robot",
+    "complete the captcha",
+    "checking your browser",
+    "just a moment...",
+];
+
+/// Returns `Some(reason)` if the extracted article text looks like junk
+/// (JS wall, paywall, anti-bot page, etc.), or `None` if it looks legit.
+pub fn is_junk_article_text(text: &str) -> Option<&'static str> {
+    let trimmed = text.trim();
+    if trimmed.len() < MIN_ARTICLE_TEXT_LEN {
+        return Some("extracted text too short (< 80 chars)");
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    for phrase in JUNK_PHRASES {
+        if lower.contains(phrase) {
+            return Some("extracted text contains JS wall / paywall / anti-bot phrase");
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -895,6 +964,51 @@ mod tests {
     fn resolve_returns_none_for_normal_page() {
         let html = r#"<html><head><title>Normal</title></head><body><p>Hello</p></body></html>"#;
         assert_eq!(resolve_redirect_url(html), None);
+    }
+
+    // --- Junk article text detection tests ---
+
+    #[test]
+    fn junk_detect_too_short() {
+        assert!(is_junk_article_text("Short").is_some());
+        assert!(is_junk_article_text("").is_some());
+        assert!(is_junk_article_text("   ").is_some());
+    }
+
+    #[test]
+    fn junk_detect_js_wall() {
+        let text = "thestreet.comPlease enable JS and disable any ad blocker to view this page.";
+        assert!(is_junk_article_text(text).is_some());
+    }
+
+    #[test]
+    fn junk_detect_javascript_required() {
+        let text = "This website requires JavaScript to function properly. Please enable JavaScript in your browser settings and try again.";
+        assert!(is_junk_article_text(text).is_some());
+    }
+
+    #[test]
+    fn junk_detect_captcha() {
+        let text = "Please verify you are human by completing the captcha below. We need to make sure you are not a robot before proceeding.";
+        assert!(is_junk_article_text(text).is_some());
+    }
+
+    #[test]
+    fn junk_detect_access_denied() {
+        let text = "Access denied. You do not have permission to view this resource. Please contact the site administrator if you believe this is an error.";
+        assert!(is_junk_article_text(text).is_some());
+    }
+
+    #[test]
+    fn junk_passes_real_article() {
+        let text = "The Federal Reserve announced on Wednesday that it would hold interest rates steady, citing ongoing concerns about inflation and the labor market. Fed Chair Jerome Powell said the central bank remains committed to its dual mandate of price stability and maximum employment, and signaled that future rate decisions would depend on incoming economic data.";
+        assert!(is_junk_article_text(text).is_none());
+    }
+
+    #[test]
+    fn junk_passes_chinese_article() {
+        let text = "新华社北京电 国务院总理在主持召开国务院常务会议时强调，要进一步优化营商环境，持续深化改革开放，推动经济高质量发展。会议研究了促进民营经济发展的若干政策措施。";
+        assert!(is_junk_article_text(text).is_none());
     }
 
     // --- Google News URL decoder tests ---
