@@ -54,6 +54,7 @@ export function buildLLMArgs(settings: UserSettings): {
   ollamaAddress: string;
   ollamaModel: string;
   localEmbeddingModel: string;
+  maxSummaryPoints: number;
 } {
   return {
     llmProvider: settings.llmProvider,
@@ -66,5 +67,6 @@ export function buildLLMArgs(settings: UserSettings): {
     ollamaAddress: settings.ollamaAddress,
     ollamaModel: settings.ollamaModel,
     localEmbeddingModel: settings.localEmbeddingModel,
+    maxSummaryPoints: settings.maxSummaryPoints ?? 8,
   };
 }

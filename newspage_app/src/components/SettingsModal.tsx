@@ -173,6 +173,26 @@ export function SettingsModal({
                       }`}
                     />
                   </div>
+                  <div>
+                    <label className="mb-1.5 block text-xs font-medium opacity-70">Max summary bullet points</label>
+                    <p className="mb-1.5 text-xs opacity-50">Maximum number of bullet points in each article summary.</p>
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={settings.maxSummaryPoints ?? 8}
+                      onChange={(e) => {
+                        const val = Math.min(20, Math.max(1, Number(e.target.value)));
+                        setSettings((s) => ({ ...s, maxSummaryPoints: val }));
+                        saveSetting("maxSummaryPoints", String(val));
+                      }}
+                      className={`w-full rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
+                        isDarkMode
+                          ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                          : "border-zinc-300 bg-zinc-200 text-zinc-900"
+                      }`}
+                    />
+                  </div>
               </div>
             </div>
 

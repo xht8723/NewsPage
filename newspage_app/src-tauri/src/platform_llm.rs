@@ -92,6 +92,7 @@ pub trait LLMProviderImpl: Send + Sync {
         title: &str,
         text: &str,
         language_hint: Option<&str>,
+        max_summary_points: u8,
     ) -> Result<(String, String), String>;
 
     /// Translate raw display text from source language into target language.
@@ -108,10 +109,11 @@ pub trait LLMProviderImpl: Send + Sync {
         &self,
         articles: &[(String, String)],
         language_hint: Option<&str>,
+        max_summary_points: u8,
     ) -> Vec<Result<(String, String), String>> {
         let mut results = Vec::with_capacity(articles.len());
         for (title, text) in articles {
-            results.push(self.enrich(title, text, language_hint).await);
+            results.push(self.enrich(title, text, language_hint, max_summary_points).await);
         }
         results
     }
@@ -129,32 +131,34 @@ fn build_translation_prompt(text: &str, source_language: &str, target_language: 
     )
 }
 
-fn build_batch_prompt_header(n: usize, language_hint: Option<&str>) -> String {
+fn build_batch_prompt_header(n: usize, language_hint: Option<&str>, max_points: u8) -> String {
     let s = if n == 1 { "" } else { "s" };
     let normalized = language_hint
         .map(|value| value.trim().to_ascii_lowercase())
         .unwrap_or_default();
 
     let language_instruction = if normalized.starts_with("zh") {
-        "\
+        format!("\
 你是新闻摘要助手。请使用中文完成本批次摘要。
 要求：
-- 每篇文章输出 SNIPPET （一句话总结）和 SUMMARY（1-8条要点）。
+- 每篇文章输出 SNIPPET （一句话总结）和 SUMMARY（1-{}条要点）。
 - SUMMARY 的每一条必须以 \"- \" 开头。
 - 保留事实，不要虚构，不要翻译成英文。
-- 即使指令是中文，输出标签必须保持为 SNIPPET 和 SUMMARY。"
+- 即使指令是中文，输出标签必须保持为 SNIPPET 和 SUMMARY。", max_points)
     } else if normalized.starts_with("en") {
-        "\
+        format!("\
 You are summarizing an English-language batch.
 Requirements:
-- For each article output SNIPPET (1 very short sentence) and SUMMARY (1-8 bullet points).
+- For each article output SNIPPET (1 very short sentence) and SUMMARY (1-{} bullet points).
 - Each SUMMARY line must start with \"- \".
 - Keep factual fidelity and do not translate to another language.
-- Keep output labels exactly as SNIPPET and SUMMARY."
+- Keep output labels exactly as SNIPPET and SUMMARY.", max_points)
     } else {
-        "\
+        format!("\
 You are to summarize news articles.
-IMPORTANT: Answer in the same language as each article provided. Do not translate; match the original language exactly."
+IMPORTANT: Answer in the same language as each article provided. Do not translate; match the original language exactly.
+- For each article output SNIPPET (1 very short sentence) and SUMMARY (1-{} bullet points).
+- Each SUMMARY line must start with \"- \".", max_points)
     };
 
     format!(
@@ -221,9 +225,10 @@ impl LLMProviderImpl for OllamaProvider {
         title: &str,
         text: &str,
         language_hint: Option<&str>,
+        max_summary_points: u8,
     ) -> Result<(String, String), String> {
         let results = self
-            .enrich_batch(&[(title.to_string(), text.to_string())], language_hint)
+            .enrich_batch(&[(title.to_string(), text.to_string())], language_hint, max_summary_points)
             .await;
         results.into_iter().next().unwrap_or_else(|| Err("No result from batch".to_string()))
     }
@@ -232,6 +237,7 @@ impl LLMProviderImpl for OllamaProvider {
         &self,
         articles: &[(String, String)],
         language_hint: Option<&str>,
+        max_summary_points: u8,
     ) -> Vec<Result<(String, String), String>> {
         if articles.is_empty() {
             return vec![];
@@ -254,7 +260,7 @@ impl LLMProviderImpl for OllamaProvider {
         let ollama = Ollama::new(host, port);
         let n = articles.len();
 
-        let mut prompt = build_batch_prompt_header(n, language_hint);
+        let mut prompt = build_batch_prompt_header(n, language_hint, max_summary_points);
 
         for (i, (title, text)) in articles.iter().enumerate() {
             let truncated = truncate_at_char_boundary(text, 4000);
@@ -357,9 +363,10 @@ impl LLMProviderImpl for OpenAIProvider {
         title: &str,
         text: &str,
         language_hint: Option<&str>,
+        max_summary_points: u8,
     ) -> Result<(String, String), String> {
         let results = self
-            .enrich_batch(&[(title.to_string(), text.to_string())], language_hint)
+            .enrich_batch(&[(title.to_string(), text.to_string())], language_hint, max_summary_points)
             .await;
         results.into_iter().next().unwrap_or_else(|| Err("No result from batch".to_string()))
     }
@@ -368,6 +375,7 @@ impl LLMProviderImpl for OpenAIProvider {
         &self,
         articles: &[(String, String)],
         language_hint: Option<&str>,
+        max_summary_points: u8,
     ) -> Vec<Result<(String, String), String>> {
         if articles.is_empty() {
             return vec![];
@@ -397,7 +405,7 @@ impl LLMProviderImpl for OpenAIProvider {
         }
 
         let n = articles.len();
-        let mut prompt = build_batch_prompt_header(n, language_hint);
+        let mut prompt = build_batch_prompt_header(n, language_hint, max_summary_points);
 
         for (i, (title, text)) in articles.iter().enumerate() {
             let truncated = truncate_at_char_boundary(text, 4000);
@@ -580,9 +588,10 @@ impl LLMProviderImpl for ClaudeProvider {
         title: &str,
         text: &str,
         language_hint: Option<&str>,
+        max_summary_points: u8,
     ) -> Result<(String, String), String> {
         let results = self
-            .enrich_batch(&[(title.to_string(), text.to_string())], language_hint)
+            .enrich_batch(&[(title.to_string(), text.to_string())], language_hint, max_summary_points)
             .await;
         results.into_iter().next().unwrap_or_else(|| Err("No result from batch".to_string()))
     }
@@ -591,6 +600,7 @@ impl LLMProviderImpl for ClaudeProvider {
         &self,
         articles: &[(String, String)],
         language_hint: Option<&str>,
+        max_summary_points: u8,
     ) -> Vec<Result<(String, String), String>> {
         if articles.is_empty() {
             return vec![];
@@ -628,7 +638,7 @@ impl LLMProviderImpl for ClaudeProvider {
         }
 
         let n = articles.len();
-        let mut prompt = build_batch_prompt_header(n, language_hint);
+        let mut prompt = build_batch_prompt_header(n, language_hint, max_summary_points);
 
         for (i, (title, text)) in articles.iter().enumerate() {
             let truncated = truncate_at_char_boundary(text, 4000);
@@ -855,9 +865,10 @@ impl LLMProviderImpl for GeminiProvider {
         title: &str,
         text: &str,
         language_hint: Option<&str>,
+        max_summary_points: u8,
     ) -> Result<(String, String), String> {
         let results = self
-            .enrich_batch(&[(title.to_string(), text.to_string())], language_hint)
+            .enrich_batch(&[(title.to_string(), text.to_string())], language_hint, max_summary_points)
             .await;
         results.into_iter().next().unwrap_or_else(|| Err("No result from batch".to_string()))
     }
@@ -866,6 +877,7 @@ impl LLMProviderImpl for GeminiProvider {
         &self,
         articles: &[(String, String)],
         language_hint: Option<&str>,
+        max_summary_points: u8,
     ) -> Vec<Result<(String, String), String>> {
         if articles.is_empty() {
             return vec![];
@@ -887,7 +899,7 @@ impl LLMProviderImpl for GeminiProvider {
         struct GeminiResponse { candidates: Vec<Candidate> }
 
         let n = articles.len();
-            let mut prompt = build_batch_prompt_header(n, language_hint);
+            let mut prompt = build_batch_prompt_header(n, language_hint, max_summary_points);
 
         for (i, (title, text)) in articles.iter().enumerate() {
             // Truncate text to ~4000 bytes at a valid char boundary
