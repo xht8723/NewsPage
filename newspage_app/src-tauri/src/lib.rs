@@ -416,7 +416,6 @@ struct ResolvedLlmSettings {
     ollama_model: String,
     local_embedding_model: String,
     selected_regions: Vec<String>,
-    visible_categories: HashMap<String, bool>,
     source_blacklist: HashSet<String>,
     llm_batch_size: usize,
     min_summary_points: u8,
@@ -533,10 +532,6 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
         .get("selectedRegions")
         .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_default();
-    let saved_visible_categories: HashMap<String, bool> = settings_map
-        .get("visibleCategories")
-        .and_then(|raw| serde_json::from_str(raw).ok())
-        .unwrap_or_default();
     let saved_source_blacklist = parse_source_blacklist(settings_map);
 
     ResolvedLlmSettings {
@@ -556,7 +551,6 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
             saved_local_embedding_model,
         ),
         selected_regions: saved_selected_regions,
-        visible_categories: saved_visible_categories,
         source_blacklist: saved_source_blacklist,
         llm_batch_size: settings_map
             .get("llmBatchSize")
@@ -774,7 +768,6 @@ async fn collect_items_to_enrich_by_language(
     state: &AppState,
     per_category_limit: i64,
     per_category_limits: &HashMap<String, i64>,
-    visible_categories: &HashMap<String, bool>,
     source_blacklist: &HashSet<String>,
 ) -> Result<Vec<(String, Vec<NewsItem>)>, String> {
     let categories = list_unenriched_categories(&state.db)
@@ -783,19 +776,6 @@ async fn collect_items_to_enrich_by_language(
 
     let mut grouped_items: HashMap<String, Vec<NewsItem>> = HashMap::new();
     for category in categories {
-        // Skip hidden categories (case-insensitive match against frontend keys)
-        if !visible_categories.is_empty() {
-            let is_visible = visible_categories
-                .iter()
-                .find(|(k, _)| k.eq_ignore_ascii_case(&category))
-                .map(|(_, v)| *v)
-                .unwrap_or(true); // default to visible if not in the map
-            if !is_visible {
-                println!("Skipping hidden category '{}' — not enriching", category);
-                continue;
-            }
-        }
-
         let languages = list_unenriched_languages_by_category(&state.db, &category)
             .await
             .map_err(|e| format!("DB language read error for category '{}': {}", category, e))?;
@@ -1459,6 +1439,15 @@ fn default_settings_map() -> HashMap<String, String> {
     map.insert("geminiModel".to_string(), DEFAULT_GEMINI_MODEL.to_string());
     map.insert("selectedRegions".to_string(), "[]".to_string());
     map.insert("sourceBlacklist".to_string(), "[]".to_string());
+    map.insert("rssHubInstanceDomain".to_string(), "https://rsshub.app/".to_string());
+    map.insert(
+        "selectedRssHubRoutes".to_string(),
+        "[\"github/trending/daily\",\"bilibili/hot-search\",\"weibo/hot-search\"]".to_string(),
+    );
+    map.insert(
+        "customRssFeeds".to_string(),
+        "[\"https://feeds.arstechnica.com/arstechnica/index\",\"https://www.theverge.com/rss/index.xml\",\"https://www.gematsu.com/feed\"]".to_string(),
+    );
     map.insert("likedConcepts".to_string(), "".to_string());
     map.insert("dislikedConcepts".to_string(), "".to_string());
     map.insert("sortMode".to_string(), "date".to_string());
@@ -1682,7 +1671,6 @@ async fn start_all_action(
         &state,
         per_category_limit,
         &per_category_limits,
-        &runtime.resolved.visible_categories,
         &runtime.resolved.source_blacklist,
     )
     .await?;

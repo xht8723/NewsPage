@@ -42,8 +42,18 @@ import { CalendarModal } from "./components/CalendarModal";
 import { LogPanel } from "./components/LogPanel";
 import { SourceBlacklistModal } from "./components/SourceBlacklistModal";
 import { CategoryLimitsModal } from "./components/CategoryLimitsModal";
+import { RssHubSettingsModal } from "./components/RssHubSettingsModal";
+import { CustomRssFeedModal } from "./components/CustomRssFeedModal";
 import type { TranslationRuntimeConfig } from "./hooks/useLiveTranslation";
 import { addSourceToBlacklist, normalizeSourceName, parseSourceBlacklist, toNormalizedSourceSet } from "./utils/sourceBlacklist";
+import {
+  DEFAULT_CUSTOM_RSS_FEEDS,
+  DEFAULT_RSSHUB_INSTANCE_DOMAIN,
+  DEFAULT_SELECTED_RSSHUB_ROUTES,
+  normalizeRssFeedUrl,
+  normalizeRssHubInstanceDomain,
+  parseJsonStringArraySetting,
+} from "./utils/rssSettings";
 import "./App.css";
 
 type StageKey = "scrape" | "extract" | "enrich" | "persist";
@@ -81,6 +91,9 @@ function createDefaultSettings(): UserSettings {
     geminiModel: "gemini-2.5-flash",
     selectedRegions: [],
     sourceBlacklist: [],
+    rssHubInstanceDomain: DEFAULT_RSSHUB_INSTANCE_DOMAIN,
+    selectedRssHubRoutes: [...DEFAULT_SELECTED_RSSHUB_ROUTES],
+    customRssFeeds: [...DEFAULT_CUSTOM_RSS_FEEDS],
     likedConcepts: "",
     dislikedConcepts: "",
     sortMode: "date",
@@ -139,6 +152,8 @@ function App(): React.JSX.Element {
   const [showConfigPopup, setShowConfigPopup] = useState(false);
   const [showSourceBlacklistManager, setShowSourceBlacklistManager] = useState(false);
   const [showCategoryLimitsManager, setShowCategoryLimitsManager] = useState(false);
+  const [showRssHubSettings, setShowRssHubSettings] = useState(false);
+  const [showCustomRssFeedSettings, setShowCustomRssFeedSettings] = useState(false);
   const [configPopupMessage, setConfigPopupMessage] = useState("");
   const [relevanceWarning, setRelevanceWarning] = useState<string | null>(null);
   const { saveSetting, cancelPendingSave } = useDebouncedSettingSaverController(500);
@@ -223,6 +238,9 @@ function App(): React.JSX.Element {
           geminiModel: saved.geminiModel?.trim() ? saved.geminiModel : defaults.geminiModel,
           selectedRegions: saved.selectedRegions ? (() => { try { return JSON.parse(saved.selectedRegions) as string[]; } catch { return defaults.selectedRegions; } })() : defaults.selectedRegions,
           sourceBlacklist: parseSourceBlacklist(saved.sourceBlacklist),
+          rssHubInstanceDomain: normalizeRssHubInstanceDomain(saved.rssHubInstanceDomain ?? defaults.rssHubInstanceDomain),
+          selectedRssHubRoutes: parseJsonStringArraySetting(saved.selectedRssHubRoutes, defaults.selectedRssHubRoutes),
+          customRssFeeds: parseJsonStringArraySetting(saved.customRssFeeds, defaults.customRssFeeds).map(normalizeRssFeedUrl).filter(Boolean),
           likedConcepts: saved.likedConcepts ?? defaults.likedConcepts,
           dislikedConcepts: saved.dislikedConcepts ?? defaults.dislikedConcepts,
           sortMode: nextSortMode,
@@ -1502,6 +1520,8 @@ function App(): React.JSX.Element {
         onPurgeDatabase={handleCleanReset}
         onOpenSourceBlacklistManager={() => setShowSourceBlacklistManager(true)}
         onOpenCategoryLimits={() => setShowCategoryLimitsManager(true)}
+        onOpenRssHubSettings={() => setShowRssHubSettings(true)}
+        onOpenCustomRssFeedSettings={() => setShowCustomRssFeedSettings(true)}
         onClose={() => {
           setShowSettings(false);
           setPurgeConfirmStep(0);
@@ -1524,6 +1544,24 @@ function App(): React.JSX.Element {
         setSettings={setSettings}
         saveSetting={saveSetting}
         onClose={() => setShowCategoryLimitsManager(false)}
+      />
+
+      <RssHubSettingsModal
+        show={showRssHubSettings}
+        isDarkMode={isDarkMode}
+        settings={settings}
+        setSettings={setSettings}
+        saveSetting={saveSetting}
+        onClose={() => setShowRssHubSettings(false)}
+      />
+
+      <CustomRssFeedModal
+        show={showCustomRssFeedSettings}
+        isDarkMode={isDarkMode}
+        settings={settings}
+        setSettings={setSettings}
+        saveSetting={saveSetting}
+        onClose={() => setShowCustomRssFeedSettings(false)}
       />
 
       <ArticleDetailModal

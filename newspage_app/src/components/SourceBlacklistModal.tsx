@@ -72,11 +72,11 @@ export function SourceBlacklistModal({
         >
           <div>
             <p className={`text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>
-              Source Blacklist
+              Media Outlet Blacklist
             </p>
             <h3 className="text-sm font-bold">Manage hidden news sources</h3>
           </div>
-          <button type="button" onClick={onClose} className="hover:opacity-60" aria-label="Close source blacklist manager">
+          <button type="button" onClick={onClose} className="hover:opacity-60" aria-label="Close media outlet blacklist manager">
             <X size={18} />
           </button>
         </div>

@@ -40,6 +40,8 @@ interface SettingsModalProps {
   onPurgeDatabase: () => Promise<void>;
   onOpenSourceBlacklistManager: () => void;
   onOpenCategoryLimits: () => void;
+  onOpenRssHubSettings: () => void;
+  onOpenCustomRssFeedSettings: () => void;
   onClose: () => void;
 }
 
@@ -70,6 +72,8 @@ export function SettingsModal({
   onPurgeDatabase,
   onOpenSourceBlacklistManager,
   onOpenCategoryLimits,
+  onOpenRssHubSettings,
+  onOpenCustomRssFeedSettings,
   onClose,
 }: SettingsModalProps): React.JSX.Element | null {
   if (!showSettings) {
@@ -313,10 +317,28 @@ export function SettingsModal({
               </div>
             </div>
 
+            <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
+              <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Media Outlet Blacklist</p>
+              <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
+                Blacklisted sources are skipped and hidden in future queries.
+              </p>
+              <button
+                type="button"
+                onClick={onOpenSourceBlacklistManager}
+                className={`rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+                  isDarkMode
+                    ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                    : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
+                }`}
+              >
+                Manage Blacklist ({settings.sourceBlacklist.length})
+              </button>
+            </div>
+
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
-                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>News Regions</p>
-                <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>Select regions for news source</p>
+                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Google News Regions</p>
+                <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>Select regions for Google News sources</p>
                 <div className="space-y-2">
                   {AVAILABLE_REGIONS.map((region) => {
                     const checked = settings.selectedRegions.includes(region.id);
@@ -349,21 +371,36 @@ export function SettingsModal({
               </div>
 
               <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
-                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Source Blacklist</p>
+                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>RSS Feed Settings</p>
                 <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
-                  Blacklisted sources are skipped and hidden in future queries.
+                  Configure RSSHub routes and manage custom RSS feeds saved to settings.json.
                 </p>
-                <button
-                  type="button"
-                  onClick={onOpenSourceBlacklistManager}
-                  className={`rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
-                    isDarkMode
-                      ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                      : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
-                  }`}
-                >
-                  Manage Blacklist ({settings.sourceBlacklist.length})
-                </button>
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={onOpenRssHubSettings}
+                    className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+                      isDarkMode
+                        ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                        : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
+                    }`}
+                  >
+                    <span>RSSHub Settings</span>
+                    <span className="text-[10px] opacity-70">{settings.selectedRssHubRoutes.length} selected</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onOpenCustomRssFeedSettings}
+                    className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+                      isDarkMode
+                        ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                        : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
+                    }`}
+                  >
+                    <span>Custom RSS Feed</span>
+                    <span className="text-[10px] opacity-70">{settings.customRssFeeds.length} saved</span>
+                  </button>
+                </div>
               </div>
             </div>
 

@@ -54,6 +54,9 @@ export interface UserSettings {
   geminiModel: string;
   selectedRegions: string[];
   sourceBlacklist: string[];
+  rssHubInstanceDomain: string;
+  selectedRssHubRoutes: string[];
+  customRssFeeds: string[];
   likedConcepts: string;
   dislikedConcepts: string;
   sortMode: string;
