@@ -11,22 +11,15 @@ import {
   Settings,
   Languages,
   SlidersHorizontal,
-  EyeOff,
-  GripVertical,
   Newspaper,
 } from "lucide-react";
 import {
-  CATEGORIES,
-  TOPIC_CATEGORIES,
   DEFAULT_EMBEDDING_MODEL,
   LOCAL_EMBEDDING_MODELS,
-  DEFAULT_VISIBLE_CATEGORIES,
-  type Category,
-  type TopicCategory,
   type LayoutMode,
   type OllamaConnectionState,
 } from "./constants/news";
-import type { NewsArticle, BackendNewsItem, UserSettings, CardContextMenuState, LocalEmbeddingStatus, ProcessLogEntry, ProcessStageEvent } from "./types/news";
+import type { NewsArticle, BackendNewsItem, UserSettings, CardContextMenuState, LocalEmbeddingStatus, ProcessLogEntry, ProcessStageEvent, FeedDefinition } from "./types/news";
 import { mapBackendNewsItem } from "./utils/newsMapper";
 import { formatDateLocal, offsetDateString, getProviderLabel } from "./utils/newsMeta";
 import { buildLLMArgs, getSelectedApiKey, getSelectedEndpoint, getSelectedModel } from "./utils/llmConfig";
@@ -44,14 +37,15 @@ import { SourceBlacklistModal } from "./components/SourceBlacklistModal";
 import { CategoryLimitsModal } from "./components/CategoryLimitsModal";
 import { RssHubSettingsModal } from "./components/RssHubSettingsModal";
 import { CustomRssFeedModal } from "./components/CustomRssFeedModal";
+import { FeedManagerPanel } from "./components/FeedManagerPanel";
 import type { TranslationRuntimeConfig } from "./hooks/useLiveTranslation";
 import { addSourceToBlacklist, normalizeSourceName, parseSourceBlacklist, toNormalizedSourceSet } from "./utils/sourceBlacklist";
 import {
   DEFAULT_CUSTOM_RSS_FEEDS,
   DEFAULT_RSSHUB_INSTANCE_DOMAIN,
   DEFAULT_SELECTED_RSSHUB_ROUTES,
-  normalizeRssFeedUrl,
   normalizeRssHubInstanceDomain,
+  parseCustomRssFeedsSetting,
   parseJsonStringArraySetting,
 } from "./utils/rssSettings";
 import "./App.css";
@@ -94,6 +88,7 @@ function createDefaultSettings(): UserSettings {
     rssHubInstanceDomain: DEFAULT_RSSHUB_INSTANCE_DOMAIN,
     selectedRssHubRoutes: [...DEFAULT_SELECTED_RSSHUB_ROUTES],
     customRssFeeds: [...DEFAULT_CUSTOM_RSS_FEEDS],
+    showFeedDeletionConfirmation: true,
     likedConcepts: "",
     dislikedConcepts: "",
     sortMode: "date",
@@ -108,7 +103,7 @@ function createDefaultSettings(): UserSettings {
 function App(): React.JSX.Element {
   const [loading, setLoading] = useState(false);
   const [stopping, setStopping] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState<Category>("All");
+  const [selectedFeedId, setSelectedFeedId] = useState("feed-all");
   const [layout, setLayout] = useState<LayoutMode>("grid");
   const [selectedDate, setSelectedDate] = useState(() => formatDateLocal(new Date()));
   const [isDarkMode, setIsDarkMode] = useState(true);
@@ -117,13 +112,6 @@ function App(): React.JSX.Element {
   const [showTranslatePanel, setShowTranslatePanel] = useState(false);
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [selectedArticle, setSelectedArticle] = useState<NewsArticle | null>(null);
-  const [visibleCategories, setVisibleCategories] = useState<Record<TopicCategory, boolean>>(DEFAULT_VISIBLE_CATEGORIES);
-  const [categoryOrder, setCategoryOrder] = useState<TopicCategory[]>([...TOPIC_CATEGORIES]);
-  const [draggedCategory, setDraggedCategory] = useState<TopicCategory | null>(null);
-  const [dragOverCategory, setDragOverCategory] = useState<Category | null>(null);
-  const [dragPointer, setDragPointer] = useState<{ x: number; y: number } | null>(null);
-  const [categoryContextMenu, setCategoryContextMenu] = useState<{ x: number; y: number; category: TopicCategory } | null>(null);
-  const categoryButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const translatePanelRef = useRef<HTMLDivElement | null>(null);
   const refreshTimeoutRef = useRef<number | null>(null);
   const [, setEnrichmentProgress] = useState<{ current: number; total: number; enriched: number } | null>(null);
@@ -154,6 +142,9 @@ function App(): React.JSX.Element {
   const [showCategoryLimitsManager, setShowCategoryLimitsManager] = useState(false);
   const [showRssHubSettings, setShowRssHubSettings] = useState(false);
   const [showCustomRssFeedSettings, setShowCustomRssFeedSettings] = useState(false);
+  const [feeds, setFeeds] = useState<FeedDefinition[]>([]);
+  const [pendingFeedDeletion, setPendingFeedDeletion] = useState<FeedDefinition | null>(null);
+  const [dontAskFeedDeleteAgain, setDontAskFeedDeleteAgain] = useState(false);
   const [configPopupMessage, setConfigPopupMessage] = useState("");
   const [relevanceWarning, setRelevanceWarning] = useState<string | null>(null);
   const { saveSetting, cancelPendingSave } = useDebouncedSettingSaverController(500);
@@ -240,7 +231,8 @@ function App(): React.JSX.Element {
           sourceBlacklist: parseSourceBlacklist(saved.sourceBlacklist),
           rssHubInstanceDomain: normalizeRssHubInstanceDomain(saved.rssHubInstanceDomain ?? defaults.rssHubInstanceDomain),
           selectedRssHubRoutes: parseJsonStringArraySetting(saved.selectedRssHubRoutes, defaults.selectedRssHubRoutes),
-          customRssFeeds: parseJsonStringArraySetting(saved.customRssFeeds, defaults.customRssFeeds).map(normalizeRssFeedUrl).filter(Boolean),
+          customRssFeeds: parseCustomRssFeedsSetting(saved.customRssFeeds, defaults.customRssFeeds),
+          showFeedDeletionConfirmation: saved.showFeedDeletionConfirmation !== "false",
           likedConcepts: saved.likedConcepts ?? defaults.likedConcepts,
           dislikedConcepts: saved.dislikedConcepts ?? defaults.dislikedConcepts,
           sortMode: nextSortMode,
@@ -256,41 +248,8 @@ function App(): React.JSX.Element {
         } else {
           setLayout(defaults.layout);
         }
-        if (saved.selectedCategory && (CATEGORIES as readonly string[]).includes(saved.selectedCategory)) {
-          setSelectedCategory(saved.selectedCategory as Category);
-        }
-
-        if (saved.visibleCategories) {
-          try {
-            const parsed = JSON.parse(saved.visibleCategories) as Partial<Record<TopicCategory, boolean>>;
-            const next: Record<TopicCategory, boolean> = { ...DEFAULT_VISIBLE_CATEGORIES };
-            for (const category of TOPIC_CATEGORIES) {
-              if (typeof parsed[category] === "boolean") {
-                next[category] = parsed[category] as boolean;
-              }
-            }
-
-            const hasAnyVisible = TOPIC_CATEGORIES.some((category) => next[category]);
-            setVisibleCategories(hasAnyVisible ? next : DEFAULT_VISIBLE_CATEGORIES);
-          } catch {
-            // Ignore invalid stored visibility JSON.
-          }
-        }
-
-        if (saved.categoryOrder) {
-          try {
-            const parsed = JSON.parse(saved.categoryOrder) as string[];
-            const valid = parsed.filter((c): c is TopicCategory =>
-              (TOPIC_CATEGORIES as readonly string[]).includes(c),
-            );
-            // Append any new categories not in the saved order
-            const missing = ([...TOPIC_CATEGORIES] as TopicCategory[]).filter((c) => !valid.includes(c));
-            if (valid.length > 0) {
-              setCategoryOrder([...valid, ...missing]);
-            }
-          } catch {
-            // Ignore invalid stored order JSON.
-          }
+        if (saved.selectedFeedId?.trim()) {
+          setSelectedFeedId(saved.selectedFeedId.trim());
         }
 
         if (persistedSortMode !== nextSortMode) {
@@ -419,17 +378,89 @@ function App(): React.JSX.Element {
   }, [saveSetting]);
 
   const { news, setNews, fetchEnrichedNews } = useEnrichedNews({
-    selectedCategory,
+    selectedFeedId,
     selectedDate,
     settings,
     disableRelevanceSort,
   });
+
+  const loadFeeds = useCallback(async () => {
+    try {
+      const rows = await invoke<FeedDefinition[]>("list_feeds");
+      setFeeds(rows);
+    } catch (error) {
+      console.warn("Failed to load feeds", error);
+    }
+  }, []);
+
+  const createFeed = useCallback(async (name: string, categories: string[]) => {
+    await invoke("create_feed_action", { request: { name, categories } });
+    await loadFeeds();
+  }, [loadFeeds]);
+
+  const renameFeed = useCallback(async (feedId: string, name: string) => {
+    await invoke("rename_feed_action", { request: { feed_id: feedId, name } });
+    await loadFeeds();
+  }, [loadFeeds]);
+
+  const deleteFeed = useCallback(async (feedId: string) => {
+    await invoke("delete_feed_action", { request: { feed_id: feedId } });
+    await loadFeeds();
+  }, [loadFeeds]);
+
+  const requestDeleteFeed = useCallback(async (feedId: string) => {
+    const target = feeds.find((feed) => feed.id === feedId);
+    if (!target) {
+      return;
+    }
+
+    if (!settings.showFeedDeletionConfirmation) {
+      await deleteFeed(feedId);
+      return;
+    }
+
+    setDontAskFeedDeleteAgain(false);
+    setPendingFeedDeletion(target);
+  }, [deleteFeed, feeds, settings.showFeedDeletionConfirmation]);
+
+  const toggleFeedVisibility = useCallback(async (feedId: string, isVisible: boolean) => {
+    await invoke("set_feed_visibility_action", { request: { feed_id: feedId, is_visible: isVisible } });
+    await loadFeeds();
+  }, [loadFeeds]);
+
+  const updateFeedCategories = useCallback(async (feedId: string, categories: string[]) => {
+    await invoke("set_feed_categories_action", { request: { feed_id: feedId, categories } });
+    await loadFeeds();
+  }, [loadFeeds]);
+
+  const reorderFeed = useCallback(async (feedId: string, direction: "up" | "down") => {
+    const ordered = [...feeds].sort((left, right) => left.sort_order - right.sort_order);
+    const index = ordered.findIndex((feed) => feed.id === feedId);
+    if (index < 0) {
+      return;
+    }
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= ordered.length) {
+      return;
+    }
+
+    const next = [...ordered];
+    [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+    await invoke("reorder_feeds_action", {
+      request: { feed_ids: next.map((feed) => feed.id) },
+    });
+    await loadFeeds();
+  }, [feeds, loadFeeds]);
 
   const fetchEnrichedNewsRef = useRef(fetchEnrichedNews);
 
   useEffect(() => {
     fetchEnrichedNewsRef.current = fetchEnrichedNews;
   }, [fetchEnrichedNews]);
+
+  useEffect(() => {
+    void loadFeeds();
+  }, [loadFeeds]);
 
   const handleCleanReset = useCallback(async () => {
     cancelPendingSave();
@@ -446,9 +477,7 @@ function App(): React.JSX.Element {
     setContextMenu(null);
     setSettings(defaults);
     setLayout(defaults.layout);
-    setSelectedCategory("All");
-    setVisibleCategories(DEFAULT_VISIBLE_CATEGORIES);
-    setCategoryOrder([...TOPIC_CATEGORIES]);
+    setSelectedFeedId("feed-all");
     setSelectedEmbeddingModel(DEFAULT_EMBEDDING_MODEL);
     setLocalEmbeddingStatus(null);
     setIsEmbeddingReady(false);
@@ -456,7 +485,8 @@ function App(): React.JSX.Element {
     setConfigPopupMessage("");
     setStartupErrorMessage("");
     setStartupPhase("ready");
-  }, [cancelPendingSave, setNews]);
+    await loadFeeds();
+  }, [cancelPendingSave, loadFeeds, setNews]);
 
   const scheduleRefresh = useCallback((filterByDate: boolean) => {
     if (refreshTimeoutRef.current !== null) {
@@ -637,9 +667,16 @@ function App(): React.JSX.Element {
     endpoint: getSelectedEndpoint(settings),
   }), [settings]);
 
-  const availableCategories = useMemo(
-    () => ["All", ...categoryOrder.filter((category) => visibleCategories[category])] as Category[],
-    [visibleCategories, categoryOrder],
+  const availableFeeds = useMemo(
+    () => [...feeds]
+      .filter((feed) => feed.is_visible)
+      .sort((left, right) => left.sort_order - right.sort_order),
+    [feeds],
+  );
+
+  const selectedFeedName = useMemo(
+    () => availableFeeds.find((feed) => feed.id === selectedFeedId)?.name ?? "All Topics",
+    [availableFeeds, selectedFeedId],
   );
 
   useEffect(() => {
@@ -763,10 +800,14 @@ function App(): React.JSX.Element {
   }, [appendUniqueProcessLog, scheduleRefresh, updateStageFromEvent]);
 
   useEffect(() => {
-    if (selectedCategory !== "All" && !visibleCategories[selectedCategory] && availableCategories.length > 0) {
-      setSelectedCategory(availableCategories[0]);
+    if (availableFeeds.length === 0) {
+      return;
     }
-  }, [availableCategories, selectedCategory, visibleCategories]);
+    const selectedStillVisible = availableFeeds.some((feed) => feed.id === selectedFeedId);
+    if (!selectedStillVisible) {
+      setSelectedFeedId(availableFeeds[0].id);
+    }
+  }, [availableFeeds, selectedFeedId]);
 
   useEffect(() => {
     if (!showSettings) {
@@ -876,79 +917,6 @@ function App(): React.JSX.Element {
     };
   }, []);
 
-  const toggleCategoryVisibility = (category: TopicCategory) => {
-    setVisibleCategories((current) => {
-      const visibleCount = TOPIC_CATEGORIES.filter((item) => current[item]).length;
-      if (current[category] && visibleCount === 1) {
-        return current;
-      }
-
-      const next = {
-        ...current,
-        [category]: !current[category],
-      };
-      saveSetting("visibleCategories", JSON.stringify(next));
-      return next;
-    });
-  };
-
-  const handleCategoryPointerDown = (e: React.PointerEvent, cat: TopicCategory) => {
-    if (e.button !== 0) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    setDraggedCategory(cat);
-    setDragPointer({ x: e.clientX, y: e.clientY });
-  };
-
-  const handleCategoryPointerMove = (e: React.PointerEvent) => {
-    if (!draggedCategory) return;
-    setDragPointer({ x: e.clientX, y: e.clientY });
-    // Release pointer capture temporarily to hit-test underlying elements
-    const target = e.currentTarget as HTMLElement;
-    target.releasePointerCapture(e.pointerId);
-    const el = document.elementFromPoint(e.clientX, e.clientY);
-    target.setPointerCapture(e.pointerId);
-    if (!el) { setDragOverCategory(null); return; }
-    for (const [name, btn] of categoryButtonRefs.current) {
-      if (btn.contains(el) && name !== draggedCategory && name !== "All") {
-        setDragOverCategory(name as Category);
-        return;
-      }
-    }
-    setDragOverCategory(null);
-  };
-
-  const handleCategoryPointerUp = () => {
-    if (!draggedCategory || !dragOverCategory || dragOverCategory === "All") {
-      setDraggedCategory(null);
-      setDragOverCategory(null);
-      setDragPointer(null);
-      return;
-    }
-
-    const targetCat = dragOverCategory as TopicCategory;
-    const draggedCat = draggedCategory;
-    setDraggedCategory(null);
-    setDragOverCategory(null);
-    setDragPointer(null);
-
-    setCategoryOrder((current) => {
-      const next = [...current];
-      const fromIdx = next.indexOf(draggedCat);
-      const toIdx = next.indexOf(targetCat);
-      if (fromIdx === -1 || toIdx === -1) return current;
-      next.splice(fromIdx, 1);
-      next.splice(toIdx, 0, draggedCat);
-      saveSetting("categoryOrder", JSON.stringify(next));
-      return next;
-    });
-  };
-
-  const handleCategoryContextMenu = (e: React.MouseEvent, cat: Category) => {
-    e.preventDefault();
-    if (cat === "All") return;
-    setCategoryContextMenu({ x: e.clientX, y: e.clientY, category: cat as TopicCategory });
-  };
-
   const setSortMode = (mode: "date" | "score") => {
     if (mode === "score" && !isEmbeddingReady) {
       return;
@@ -1016,12 +984,8 @@ function App(): React.JSX.Element {
       .filter((item) => item.date === selectedDate)
       .filter((item) => !blacklistedSources.has(normalizeSourceName(item.sourceName)));
 
-    if (selectedCategory === "All") {
-      return dateFiltered.filter((item) => visibleCategories[item.category]);
-    }
-
-    return dateFiltered.filter((item) => item.category === selectedCategory);
-  }, [news, selectedCategory, selectedDate, visibleCategories, settings.sortMode, blacklistedSources]);
+    return dateFiltered;
+  }, [news, selectedDate, settings.sortMode, blacklistedSources]);
 
   if (startupPhase !== "ready") {
     const startupMessage = startupPhase === "loading-settings"
@@ -1088,135 +1052,48 @@ function App(): React.JSX.Element {
 
         <nav className="hide-scrollbar flex-1 space-y-1.5 overflow-y-auto p-4">
           <div className="mb-3 flex items-center justify-between px-3">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Categories</p>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Feeds</p>
             <button
               onClick={() => setShowCategoryManager((current) => !current)}
               className={`inline-flex items-center rounded-full border p-1.5 transition-colors ${
                 isDarkMode ? "border-zinc-800 text-zinc-400 hover:bg-zinc-800" : "border-zinc-200 text-zinc-600 hover:bg-zinc-200"
               }`}
-              aria-label="Manage visible categories"
+              aria-label="Manage feeds"
             >
               <SlidersHorizontal size={12} />
             </button>
           </div>
 
-          {showCategoryManager && (
-            <div className={`mb-4 space-y-2 rounded-2xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/70" : "border-zinc-200 bg-zinc-150"}`}>
-              {categoryOrder.map((category) => {
-                const visibleCount = categoryOrder.filter((item) => visibleCategories[item]).length;
-                const isLastVisible = visibleCategories[category] && visibleCount === 1;
-
-                return (
-                  <button
-                    key={`${category}-visibility`}
-                    onClick={() => toggleCategoryVisibility(category)}
-                    disabled={isLastVisible}
-                    className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs font-bold transition-all ${
-                      visibleCategories[category]
-                        ? isDarkMode
-                          ? "bg-zinc-800 text-zinc-100"
-                          : "bg-zinc-200 text-zinc-900"
-                        : isDarkMode
-                          ? "bg-zinc-900 text-zinc-500"
-                          : "bg-zinc-150 text-zinc-500"
-                    } ${isLastVisible ? "cursor-not-allowed opacity-50" : "hover:opacity-90"}`}
-                  >
-                    <span>{category}</span>
-                    <span className="text-[10px] uppercase tracking-widest">{visibleCategories[category] ? "Shown" : "Hidden"}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          {availableCategories.map((cat) => {
-            const isDragging = draggedCategory === cat;
-            const isDropTarget = dragOverCategory === cat && draggedCategory && cat !== "All";
+          {availableFeeds.map((feed) => {
             return (
-              <div key={cat} className="relative">
-                {isDropTarget && (
-                  <div className={`absolute -top-1 left-3 right-3 h-0.5 rounded-full ${isDarkMode ? "bg-blue-400" : "bg-blue-500"}`} />
-                )}
+              <div key={feed.id} className="relative">
                 <button
-                  ref={(el) => { if (el) categoryButtonRefs.current.set(cat, el); else categoryButtonRefs.current.delete(cat); }}
-                  onPointerDown={cat !== "All" ? (e) => handleCategoryPointerDown(e, cat as TopicCategory) : undefined}
-                  onPointerMove={handleCategoryPointerMove}
-                  onPointerUp={handleCategoryPointerUp}
-                  onContextMenu={(e) => handleCategoryContextMenu(e, cat)}
                   onClick={() => {
-                    if (draggedCategory) return;
-                    setSelectedCategory(cat);
-                    void invoke("save_setting", { key: "selectedCategory", value: cat });
+                    setSelectedFeedId(feed.id);
+                    saveSetting("selectedFeedId", feed.id);
                   }}
                   className={`group flex w-full items-center gap-1 rounded-lg px-1.5 py-2 text-left text-sm font-medium transition-all select-none ${
-                    isDragging
-                      ? isDarkMode
-                        ? "bg-zinc-800/50 text-zinc-500 opacity-40"
-                        : "bg-zinc-200/50 text-zinc-400 opacity-40"
-                      : selectedCategory === cat
+                    selectedFeedId === feed.id
                         ? isDarkMode
                           ? "bg-zinc-800 text-zinc-100 ring-1 ring-zinc-700"
                           : "bg-zinc-200 text-zinc-900 ring-1 ring-zinc-300"
                         : "text-zinc-500 hover:bg-zinc-800/30 hover:text-zinc-300"
-                  } ${cat !== "All" ? "cursor-grab active:cursor-grabbing" : ""}`}
+                  }`}
                 >
-                  {cat !== "All" ? (
-                    <GripVertical size={14} className="shrink-0 text-zinc-600 opacity-0 group-hover:opacity-100 transition-opacity" />
-                  ) : (
-                    <span className="w-[14px] shrink-0" />
-                  )}
-                  <span className="flex-1">{cat}</span>
-                  {selectedCategory === cat && !draggedCategory && <ChevronRight size={14} className="shrink-0 mr-1" />}
+                  <span className="w-[14px] shrink-0" />
+                  <span className="flex-1">{feed.name}</span>
+                  {selectedFeedId === feed.id && <ChevronRight size={14} className="shrink-0 mr-1" />}
                 </button>
               </div>
             );
           })}
 
-          {availableCategories.length === 0 && (
+          {availableFeeds.length === 0 && (
             <div className="rounded-2xl border border-dashed border-zinc-700 px-3 py-4 text-xs text-zinc-500">
-              Select at least one topic to keep the feed visible.
+              Create or show at least one feed.
             </div>
           )}
         </nav>
-
-        {categoryContextMenu && (
-          <div className="fixed inset-0 z-50" onClick={() => setCategoryContextMenu(null)}>
-            <div
-              className={`absolute min-w-[180px] rounded-xl border p-2 shadow-2xl ${
-                isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-200" : "border-zinc-300 bg-zinc-150 text-zinc-900"
-              }`}
-              style={{ left: categoryContextMenu.x, top: categoryContextMenu.y }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <button
-                type="button"
-                onClick={() => {
-                  toggleCategoryVisibility(categoryContextMenu.category);
-                  setCategoryContextMenu(null);
-                }}
-                className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-bold transition-colors ${
-                  isDarkMode ? "hover:bg-zinc-800" : "hover:bg-zinc-200"
-                }`}
-              >
-                <EyeOff size={14} />
-                <span>Hide "{categoryContextMenu.category}"</span>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {draggedCategory && dragPointer && (
-          <div
-            className={`pointer-events-none fixed z-50 rounded-lg border px-3 py-2 text-sm font-medium shadow-xl ${
-              isDarkMode
-                ? "border-zinc-600 bg-zinc-800 text-zinc-100"
-                : "border-zinc-300 bg-white text-zinc-900"
-            }`}
-            style={{ left: dragPointer.x + 12, top: dragPointer.y - 14 }}
-          >
-            {draggedCategory}
-          </div>
-        )}
 
         <div className="space-y-4 border-t border-inherit p-4">
           <PreferencePanel
@@ -1277,9 +1154,9 @@ function App(): React.JSX.Element {
           }`}
         >
           <div>
-            <h2 className={`text-2xl font-black ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{selectedCategory} News</h2>
+            <h2 className={`text-2xl font-black ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{selectedFeedName} Feed</h2>
             <p className="text-xs font-medium text-zinc-500">
-              {selectedCategory === "All" ? `All briefings for ${selectedDate}` : `Session briefing for ${selectedDate}`}
+              {`Briefings for ${selectedDate}`}
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               {STAGE_ORDER.map((stage) => {
@@ -1564,6 +1441,93 @@ function App(): React.JSX.Element {
         onClose={() => setShowCustomRssFeedSettings(false)}
       />
 
+      {showCategoryManager && (
+        <div
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-black/65 p-4"
+          onClick={() => setShowCategoryManager(false)}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            className={`w-full max-w-4xl rounded-3xl border shadow-2xl ${
+              isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-100" : "border-zinc-300 bg-zinc-100 text-zinc-900"
+            }`}
+          >
+            <div className={`flex items-center justify-between border-b px-5 py-4 ${isDarkMode ? "border-zinc-800" : "border-zinc-200"}`}>
+              <div>
+                <p className={`text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+                  Feed Settings
+                </p>
+                <h3 className="text-sm font-bold">Manage feeds and topic assignments</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCategoryManager(false)}
+                className={`rounded-lg border px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                  isDarkMode ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700" : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
+                }`}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="max-h-[80vh] overflow-y-auto p-4">
+              <FeedManagerPanel
+                feeds={feeds}
+                isDarkMode={isDarkMode}
+                onCreateFeed={async (name, categories) => {
+                  try {
+                    await createFeed(name, categories);
+                  } catch (error) {
+                    setConfigPopupMessage(String(error));
+                    setShowConfigPopup(true);
+                  }
+                }}
+                onRenameFeed={async (feedId, name) => {
+                  try {
+                    await renameFeed(feedId, name);
+                  } catch (error) {
+                    setConfigPopupMessage(String(error));
+                    setShowConfigPopup(true);
+                  }
+                }}
+                onDeleteFeed={async (feedId) => {
+                  try {
+                    await requestDeleteFeed(feedId);
+                  } catch (error) {
+                    setConfigPopupMessage(String(error));
+                    setShowConfigPopup(true);
+                  }
+                }}
+                onToggleFeedVisibility={async (feedId, isVisible) => {
+                  try {
+                    await toggleFeedVisibility(feedId, isVisible);
+                  } catch (error) {
+                    setConfigPopupMessage(String(error));
+                    setShowConfigPopup(true);
+                  }
+                }}
+                onSetFeedCategories={async (feedId, categories) => {
+                  try {
+                    await updateFeedCategories(feedId, categories);
+                  } catch (error) {
+                    setConfigPopupMessage(String(error));
+                    setShowConfigPopup(true);
+                  }
+                }}
+                onReorderFeed={async (feedId, direction) => {
+                  try {
+                    await reorderFeed(feedId, direction);
+                  } catch (error) {
+                    setConfigPopupMessage(String(error));
+                    setShowConfigPopup(true);
+                  }
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       <ArticleDetailModal
         selectedArticle={selectedArticle}
         isDarkMode={isDarkMode}
@@ -1625,6 +1589,76 @@ function App(): React.JSX.Element {
                 }`}
               >
                 Open Settings
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingFeedDeletion && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setPendingFeedDeletion(null)}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            className={`w-full max-w-md rounded-2xl border p-6 shadow-2xl ${
+              isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-100" : "border-zinc-300 bg-zinc-150 text-zinc-900"
+            }`}
+          >
+            <p className={`mb-1 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>
+              Confirm deletion
+            </p>
+            <h4 className="mb-3 text-sm font-bold">Delete feed "{pendingFeedDeletion.name}"?</h4>
+            <p className={`mb-4 text-xs leading-relaxed ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>
+              This removes the feed definition and its topic mapping. Articles remain in the database.
+            </p>
+
+            <label className="mb-5 flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={dontAskFeedDeleteAgain}
+                onChange={(event) => setDontAskFeedDeleteAgain(event.target.checked)}
+                className={`h-4 w-4 rounded border ${
+                  isDarkMode
+                    ? "border-zinc-500 bg-zinc-800 accent-cyan-600"
+                    : "border-zinc-400 bg-white accent-emerald-500"
+                }`}
+              />
+              <span className="text-xs">Don't show this again</span>
+            </label>
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingFeedDeletion(null)}
+                className={`rounded-lg border px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+                  isDarkMode
+                    ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                    : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
+                }`}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await deleteFeed(pendingFeedDeletion.id);
+                    if (dontAskFeedDeleteAgain) {
+                      setSettings((current) => ({ ...current, showFeedDeletionConfirmation: false }));
+                      saveSetting("showFeedDeletionConfirmation", "false");
+                    }
+                    setPendingFeedDeletion(null);
+                  } catch (error) {
+                    setPendingFeedDeletion(null);
+                    setConfigPopupMessage(String(error));
+                    setShowConfigPopup(true);
+                  }
+                }}
+                className="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-red-700"
+              >
+                Delete Feed
               </button>
             </div>
           </div>

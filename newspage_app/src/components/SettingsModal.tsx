@@ -263,6 +263,26 @@ export function SettingsModal({
                         );
                       })()}
                     </div>
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium opacity-70">Deletion confirmation</label>
+                      <label className="flex cursor-pointer items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={settings.showFeedDeletionConfirmation}
+                          onChange={(event) => {
+                            const checked = event.target.checked;
+                            setSettings((current) => ({ ...current, showFeedDeletionConfirmation: checked }));
+                            saveSetting("showFeedDeletionConfirmation", checked ? "true" : "false");
+                          }}
+                          className={`h-4 w-4 rounded border ${
+                            isDarkMode
+                              ? "border-zinc-500 bg-zinc-800 accent-cyan-600"
+                              : "border-zinc-400 bg-white accent-emerald-500"
+                          }`}
+                        />
+                        <span className="text-sm">Show deletion confirmation</span>
+                      </label>
+                    </div>
                 </div>
               </div>
 

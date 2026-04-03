@@ -1,9 +1,18 @@
 use crate::db::{
+    count_visible_feeds,
+    create_feed,
+    delete_feed,
     get_article_by_id,
     get_unenriched_articles_by_category_and_language,
+    list_feeds_with_topics,
     list_unenriched_categories,
     list_unenriched_languages_by_category,
     mark_enriched,
+    rename_feed,
+    reorder_feeds,
+    seed_default_feeds,
+    set_feed_categories,
+    set_feed_visibility,
     upsert_article,
 };
 use crate::news_item::{NewsItem, RankedNewsItem};
@@ -38,6 +47,7 @@ const DEFAULT_CLAUDE_MODEL: &str = "claude-sonnet-4-6";
 const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
 const ARTICLE_PROCESS_TIMEOUT_SECS: u64 = 30;
 const RELEVANCE_UNAVAILABLE_TOKEN: &str = "RELEVANCE_EMBEDDING_UNAVAILABLE";
+const SYSTEM_ALL_TOPICS_FEED_ID: &str = "feed-all";
 
 #[derive(serde::Deserialize)]
 struct OllamaTagsResponse {
@@ -1232,6 +1242,7 @@ fn is_on_utc_day(date_value: &str, target_utc_day: &str) -> bool {
 #[tauri::command]
 async fn get_enriched_news(
     state: tauri::State<'_, AppState>,
+    feed_id: Option<String>,
     category: Option<String>,
     date: Option<String>,
     limit: Option<i64>,
@@ -1244,6 +1255,9 @@ async fn get_enriched_news(
     let limit = limit.unwrap_or(300).clamp(1, 1000);
     let offset = offset.unwrap_or(0).max(0);
 
+    let feed_id = feed_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
     let category = category
         .map(|value| value.trim().to_lowercase())
         .filter(|value| !value.is_empty());
@@ -1268,6 +1282,22 @@ async fn get_enriched_news(
     let use_scoring = sort_mode == "score" && (!liked.is_empty() || !disliked.is_empty());
     let settings_map = read_settings_map(&state.settings_path);
     let source_blacklist = parse_source_blacklist(&settings_map);
+    let feed_categories = if category.is_none() {
+        if let Some(ref selected_feed_id) = feed_id {
+            let categories = db::list_feed_categories(&state.db, selected_feed_id)
+                .await
+                .map_err(|e| format!("DB feed topic read error: {}", e))?;
+            if categories.is_empty() {
+                None
+            } else {
+                Some(categories.into_iter().collect::<HashSet<String>>())
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     if use_scoring {
         let embedding_model = local_embedding_model
@@ -1355,6 +1385,13 @@ async fn get_enriched_news(
         let mut ranked: Vec<RankedNewsItem> = rows
             .into_iter()
             .filter(|(item, _)| {
+                if let Some(ref allowed_categories) = feed_categories {
+                    allowed_categories.contains(&item.category.to_ascii_lowercase())
+                } else {
+                    true
+                }
+            })
+            .filter(|(item, _)| {
                 let source_key = normalize_source_name_key(&item.source_name);
                 source_key.is_empty() || !source_blacklist.contains(&source_key)
             })
@@ -1390,6 +1427,10 @@ async fn get_enriched_news(
             db::get_articles_by_category(&state.db, selected_category, limit, offset)
                 .await
                 .map_err(|e| format!("DB read error: {}", e))?
+        } else if feed_categories.is_some() {
+            db::list_articles(&state.db, 10_000, 0)
+                .await
+                .map_err(|e| format!("DB read error: {}", e))?
         } else {
             db::list_articles(&state.db, limit, offset)
                 .await
@@ -1397,6 +1438,16 @@ async fn get_enriched_news(
         };
 
         let mut items = items;
+        if let Some(ref allowed_categories) = feed_categories {
+            items.retain(|item| allowed_categories.contains(&item.category.to_ascii_lowercase()));
+            let start = offset as usize;
+            let end = (start + limit as usize).min(items.len());
+            items = if start < items.len() {
+                items[start..end].to_vec()
+            } else {
+                vec![]
+            };
+        }
         items.retain(|item| {
             let source_key = normalize_source_name_key(&item.source_name);
             source_key.is_empty() || !source_blacklist.contains(&source_key)
@@ -1410,6 +1461,159 @@ async fn get_enriched_news(
             .map(|item| RankedNewsItem { item, preference_score: 0.0 })
             .collect())
     }
+}
+
+#[derive(serde::Deserialize)]
+struct CreateFeedRequest {
+    name: String,
+    categories: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct RenameFeedRequest {
+    feed_id: String,
+    name: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ReorderFeedsRequest {
+    feed_ids: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct DeleteFeedRequest {
+    feed_id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct SetFeedVisibilityRequest {
+    feed_id: String,
+    is_visible: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct SetFeedCategoriesRequest {
+    feed_id: String,
+    categories: Vec<String>,
+}
+
+#[tauri::command]
+async fn list_feeds(state: tauri::State<'_, AppState>) -> Result<Vec<db::FeedDefinitionWithTopics>, String> {
+    list_feeds_with_topics(&state.db)
+        .await
+        .map_err(|e| format!("Failed to list feeds: {}", e))
+}
+
+#[tauri::command]
+async fn create_feed_action(
+    state: tauri::State<'_, AppState>,
+    request: CreateFeedRequest,
+) -> Result<db::FeedDefinitionWithTopics, String> {
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err("Feed name is required".to_string());
+    }
+    if request.categories.is_empty() {
+        return Err("Select at least one topic category for this feed".to_string());
+    }
+
+    create_feed(&state.db, name, &request.categories)
+        .await
+        .map_err(|e| format!("Failed to create feed: {}", e))
+}
+
+#[tauri::command]
+async fn rename_feed_action(
+    state: tauri::State<'_, AppState>,
+    request: RenameFeedRequest,
+) -> Result<(), String> {
+    let feed_id = request.feed_id.trim();
+    let name = request.name.trim();
+    if feed_id.is_empty() {
+        return Err("Feed id is required".to_string());
+    }
+    if name.is_empty() {
+        return Err("Feed name is required".to_string());
+    }
+
+    rename_feed(&state.db, feed_id, name)
+        .await
+        .map_err(|e| format!("Failed to rename feed: {}", e))
+}
+
+#[tauri::command]
+async fn reorder_feeds_action(
+    state: tauri::State<'_, AppState>,
+    request: ReorderFeedsRequest,
+) -> Result<(), String> {
+    if request.feed_ids.is_empty() {
+        return Err("Feed order cannot be empty".to_string());
+    }
+    reorder_feeds(&state.db, &request.feed_ids)
+        .await
+        .map_err(|e| format!("Failed to reorder feeds: {}", e))
+}
+
+#[tauri::command]
+async fn delete_feed_action(
+    state: tauri::State<'_, AppState>,
+    request: DeleteFeedRequest,
+) -> Result<(), String> {
+    let feed_id = request.feed_id.trim();
+    if feed_id.is_empty() {
+        return Err("Feed id is required".to_string());
+    }
+    if feed_id == SYSTEM_ALL_TOPICS_FEED_ID {
+        return Err("The default All Topics feed cannot be deleted".to_string());
+    }
+
+    delete_feed(&state.db, feed_id)
+        .await
+        .map_err(|e| format!("Failed to delete feed: {}", e))
+}
+
+#[tauri::command]
+async fn set_feed_visibility_action(
+    state: tauri::State<'_, AppState>,
+    request: SetFeedVisibilityRequest,
+) -> Result<(), String> {
+    let feed_id = request.feed_id.trim();
+    if feed_id.is_empty() {
+        return Err("Feed id is required".to_string());
+    }
+    if feed_id == SYSTEM_ALL_TOPICS_FEED_ID && !request.is_visible {
+        return Err("The default All Topics feed must remain visible".to_string());
+    }
+    if !request.is_visible {
+        let visible_count = count_visible_feeds(&state.db)
+            .await
+            .map_err(|e| format!("Failed to validate visibility state: {}", e))?;
+        if visible_count <= 1 {
+            return Err("At least one feed must stay visible".to_string());
+        }
+    }
+
+    set_feed_visibility(&state.db, feed_id, request.is_visible)
+        .await
+        .map_err(|e| format!("Failed to update feed visibility: {}", e))
+}
+
+#[tauri::command]
+async fn set_feed_categories_action(
+    state: tauri::State<'_, AppState>,
+    request: SetFeedCategoriesRequest,
+) -> Result<(), String> {
+    let feed_id = request.feed_id.trim();
+    if feed_id.is_empty() {
+        return Err("Feed id is required".to_string());
+    }
+    if request.categories.is_empty() {
+        return Err("A feed must contain at least one topic category".to_string());
+    }
+
+    set_feed_categories(&state.db, feed_id, &request.categories)
+        .await
+        .map_err(|e| format!("Failed to update feed categories: {}", e))
 }
 
 #[tauri::command]
@@ -1446,8 +1650,9 @@ fn default_settings_map() -> HashMap<String, String> {
     );
     map.insert(
         "customRssFeeds".to_string(),
-        "[\"https://feeds.arstechnica.com/arstechnica/index\",\"https://www.theverge.com/rss/index.xml\",\"https://www.gematsu.com/feed\"]".to_string(),
+        "[{\"name\":\"Ars Technica\",\"url\":\"https://feeds.arstechnica.com/arstechnica/index\"},{\"name\":\"The Verge\",\"url\":\"https://www.theverge.com/rss/index.xml\"},{\"name\":\"Gematsu\",\"url\":\"https://www.gematsu.com/feed\"}]".to_string(),
     );
+    map.insert("showFeedDeletionConfirmation".to_string(), "true".to_string());
     map.insert("likedConcepts".to_string(), "".to_string());
     map.insert("dislikedConcepts".to_string(), "".to_string());
     map.insert("sortMode".to_string(), "date".to_string());
@@ -1505,6 +1710,23 @@ async fn purge_database(app: tauri::AppHandle, state: tauri::State<'_, AppState>
         .execute(&state.db)
         .await
         .map_err(|e| format!("Failed to purge news table: {}", e))?;
+
+    sqlx::query("DELETE FROM feed_topic_map")
+        .execute(&state.db)
+        .await
+        .map_err(|e| format!("Failed to purge feed_topic_map table: {}", e))?;
+    sqlx::query("DELETE FROM feed_sources")
+        .execute(&state.db)
+        .await
+        .map_err(|e| format!("Failed to purge feed_sources table: {}", e))?;
+    sqlx::query("DELETE FROM feed_definitions")
+        .execute(&state.db)
+        .await
+        .map_err(|e| format!("Failed to purge feed_definitions table: {}", e))?;
+
+    seed_default_feeds(&state.db)
+        .await
+        .map_err(|e| format!("Failed to reseed default feeds: {}", e))?;
 
     let app_data = app
         .path()
@@ -1963,6 +2185,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_available_regions,
             get_enriched_news,
+            list_feeds,
+            create_feed_action,
+            rename_feed_action,
+            reorder_feeds_action,
+            delete_feed_action,
+            set_feed_visibility_action,
+            set_feed_categories_action,
             request_stop_action,
             start_all_action,
             test_ollama_connection,

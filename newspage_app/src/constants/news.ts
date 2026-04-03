@@ -11,25 +11,9 @@ export const TOPIC_CATEGORIES = [
   "Gaming",
 ] as const;
 
-export const CATEGORIES = ["All", ...TOPIC_CATEGORIES] as const;
-
-export type Category = (typeof CATEGORIES)[number];
 export type TopicCategory = (typeof TOPIC_CATEGORIES)[number];
 export type LayoutMode = "grid" | "list" | "compact_list";
 export type OllamaConnectionState = "unknown" | "ok" | "fail";
-
-export const DEFAULT_VISIBLE_CATEGORIES: Record<TopicCategory, boolean> = {
-  World: true,
-  Nation: true,
-  Business: true,
-  Technology: true,
-  Entertainment: true,
-  Science: true,
-  Sports: true,
-  Health: true,
-  Anime: true,
-  Gaming: true,
-};
 
 export const AVAILABLE_REGIONS = [
   { id: "canada", label: "Canada (English)" },

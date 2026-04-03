@@ -23,7 +23,8 @@ const baseSettings: UserSettings = {
   sourceBlacklist: [] as string[],
   rssHubInstanceDomain: "https://rsshub.app/",
   selectedRssHubRoutes: [] as string[],
-  customRssFeeds: [] as string[],
+  customRssFeeds: [],
+  showFeedDeletionConfirmation: true,
   likedConcepts: "retro games,  indie dev ,",
   dislikedConcepts: " nft , mobile gacha",
   sortMode: "date",
@@ -40,9 +41,10 @@ describe("useEnrichedNews helper logic", () => {
     expect(parseConceptList("")).toEqual([]);
   });
 
-  it("builds request args for All category", () => {
-    const args = buildEnrichedNewsRequestArgs("All", "2026-03-26", baseSettings, true);
+  it("builds request args for selected feed", () => {
+    const args = buildEnrichedNewsRequestArgs("feed-all", "2026-03-26", baseSettings, true);
     expect(args).toEqual({
+      feedId: "feed-all",
       category: null,
       date: "2026-03-26",
       limit: 500,
@@ -54,9 +56,10 @@ describe("useEnrichedNews helper logic", () => {
     });
   });
 
-  it("builds request args for specific category and optional date filter", () => {
-    const args = buildEnrichedNewsRequestArgs("Technology", "2026-03-26", baseSettings, false);
-    expect(args.category).toBe("technology");
+  it("builds request args with optional date filter", () => {
+    const args = buildEnrichedNewsRequestArgs("feed-technology", "2026-03-26", baseSettings, false);
+    expect(args.feedId).toBe("feed-technology");
+    expect(args.category).toBeNull();
     expect(args.date).toBeNull();
   });
 

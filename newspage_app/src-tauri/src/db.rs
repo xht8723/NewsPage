@@ -1,9 +1,88 @@
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::logging;
 use crate::news_item::NewsItem;
+
+const DEFAULT_FEED_TOPICS: &[(&str, &str)] = &[
+    ("world", "World"),
+    ("nation", "Nation"),
+    ("business", "Business"),
+    ("technology", "Technology"),
+    ("entertainment", "Entertainment"),
+    ("science", "Science"),
+    ("sports", "Sports"),
+    ("health", "Health"),
+    ("anime", "Anime"),
+    ("gaming", "Gaming"),
+];
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FeedDefinition {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub is_visible: bool,
+    pub sort_order: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FeedDefinitionWithTopics {
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub is_visible: bool,
+    pub sort_order: i64,
+    pub categories: Vec<String>,
+}
+
+fn normalize_feed_slug(value: &str) -> String {
+    let mut slug = value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+    while slug.contains("--") {
+        slug = slug.replace("--", "-");
+    }
+    slug.trim_matches('-').to_string()
+}
+
+fn normalize_categories(categories: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut output = Vec::new();
+    for category in categories {
+        let normalized = category.trim().to_ascii_lowercase();
+        if normalized.is_empty() || seen.contains(&normalized) {
+            continue;
+        }
+        seen.insert(normalized.clone());
+        output.push(normalized);
+    }
+    output
+}
+
+fn row_to_feed(row: &sqlx::sqlite::SqliteRow) -> FeedDefinition {
+    let is_visible: i64 = row.get("is_visible");
+    FeedDefinition {
+        id: row.get("id"),
+        name: row.get("name"),
+        slug: row.get("slug"),
+        is_visible: is_visible != 0,
+        sort_order: row.get("sort_order"),
+    }
+}
+
+fn generate_feed_id(slug: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("feed-{}-{}", slug, nanos)
+}
 
 /// Encode a `Vec<f32>` as a flat little-endian byte blob for SQLite BLOB storage.
 pub fn encode_embedding(vec: &[f32]) -> Vec<u8> {
@@ -53,8 +132,281 @@ let pool = SqlitePoolOptions::new()
 .connect_with(options)
 .await?;
 create_news_table(&pool).await?;
+create_feed_tables(&pool).await?;
+seed_default_feeds(&pool).await?;
 logging::info("DB", format!("Initialized SQLite database at {}", db_path), None);
 Ok(pool)
+}
+
+pub async fn create_feed_tables(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS feed_definitions (
+id TEXT PRIMARY KEY,
+name TEXT NOT NULL UNIQUE,
+slug TEXT NOT NULL UNIQUE,
+is_visible INTEGER NOT NULL DEFAULT 1,
+sort_order INTEGER NOT NULL DEFAULT 0,
+created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS feed_topic_map (
+feed_id TEXT NOT NULL,
+category TEXT NOT NULL,
+PRIMARY KEY(feed_id, category),
+FOREIGN KEY(feed_id) REFERENCES feed_definitions(id) ON DELETE CASCADE
+)",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS feed_sources (
+feed_id TEXT NOT NULL,
+source_type TEXT NOT NULL,
+source_ref TEXT NOT NULL,
+enabled INTEGER NOT NULL DEFAULT 1,
+PRIMARY KEY(feed_id, source_type, source_ref),
+FOREIGN KEY(feed_id) REFERENCES feed_definitions(id) ON DELETE CASCADE
+)",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_feed_definitions_sort_order ON feed_definitions(sort_order)")
+        .execute(pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_feed_topic_map_feed_id ON feed_topic_map(feed_id)")
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn seed_default_feeds(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let existing_count: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM feed_definitions")
+        .fetch_one(pool)
+        .await?;
+    if existing_count > 0 {
+        return Ok(());
+    }
+
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        "INSERT INTO feed_definitions(id, name, slug, is_visible, sort_order)
+VALUES (?1, ?2, ?3, 1, 0)",
+    )
+    .bind("feed-all")
+    .bind("All Topics")
+    .bind("all")
+    .execute(&mut *tx)
+    .await?;
+
+    for (category, _) in DEFAULT_FEED_TOPICS {
+        sqlx::query("INSERT INTO feed_topic_map(feed_id, category) VALUES (?1, ?2)")
+            .bind("feed-all")
+            .bind(category)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    for (index, (category, name)) in DEFAULT_FEED_TOPICS.iter().enumerate() {
+        let feed_id = format!("feed-{}", category);
+        sqlx::query(
+            "INSERT INTO feed_definitions(id, name, slug, is_visible, sort_order)
+VALUES (?1, ?2, ?3, 1, ?4)",
+        )
+        .bind(feed_id.as_str())
+        .bind(*name)
+        .bind(*category)
+        .bind((index + 1) as i64)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query("INSERT INTO feed_topic_map(feed_id, category) VALUES (?1, ?2)")
+            .bind(feed_id.as_str())
+            .bind(*category)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn list_feeds(pool: &SqlitePool) -> Result<Vec<FeedDefinition>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT id, name, slug, is_visible, sort_order
+ FROM feed_definitions
+ ORDER BY sort_order ASC, name ASC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.iter().map(row_to_feed).collect())
+}
+
+pub async fn list_feed_categories(pool: &SqlitePool, feed_id: &str) -> Result<Vec<String>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT category
+ FROM feed_topic_map
+ WHERE feed_id = ?1
+ ORDER BY category ASC",
+    )
+    .bind(feed_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.iter().map(|row| row.get::<String, _>("category")).collect())
+}
+
+pub async fn list_feeds_with_topics(pool: &SqlitePool) -> Result<Vec<FeedDefinitionWithTopics>, sqlx::Error> {
+    let feeds = list_feeds(pool).await?;
+    let mut output = Vec::with_capacity(feeds.len());
+    for feed in feeds {
+        let categories = list_feed_categories(pool, &feed.id).await?;
+        output.push(FeedDefinitionWithTopics {
+            id: feed.id,
+            name: feed.name,
+            slug: feed.slug,
+            is_visible: feed.is_visible,
+            sort_order: feed.sort_order,
+            categories,
+        });
+    }
+    Ok(output)
+}
+
+pub async fn create_feed(
+    pool: &SqlitePool,
+    name: &str,
+    categories: &[String],
+) -> Result<FeedDefinitionWithTopics, sqlx::Error> {
+    let normalized_name = name.trim();
+    let base_slug = normalize_feed_slug(normalized_name);
+    let mut slug = base_slug.clone();
+    let mut suffix = 2usize;
+    while sqlx::query_scalar::<_, i64>("SELECT COUNT(1) FROM feed_definitions WHERE slug = ?1")
+        .bind(slug.as_str())
+        .fetch_one(pool)
+        .await?
+        > 0
+    {
+        slug = format!("{}-{}", base_slug, suffix);
+        suffix += 1;
+    }
+
+    let next_sort_order: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM feed_definitions")
+        .fetch_one(pool)
+        .await?;
+    let id = generate_feed_id(&slug);
+    let normalized_categories = normalize_categories(categories);
+
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO feed_definitions(id, name, slug, is_visible, sort_order)
+VALUES (?1, ?2, ?3, 1, ?4)",
+    )
+    .bind(id.as_str())
+    .bind(normalized_name)
+    .bind(slug.as_str())
+    .bind(next_sort_order)
+    .execute(&mut *tx)
+    .await?;
+
+    for category in &normalized_categories {
+        sqlx::query("INSERT INTO feed_topic_map(feed_id, category) VALUES (?1, ?2)")
+            .bind(id.as_str())
+            .bind(category.as_str())
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+
+    Ok(FeedDefinitionWithTopics {
+        id,
+        name: normalized_name.to_string(),
+        slug,
+        is_visible: true,
+        sort_order: next_sort_order,
+        categories: normalized_categories,
+    })
+}
+
+pub async fn rename_feed(pool: &SqlitePool, feed_id: &str, new_name: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE feed_definitions SET name = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2")
+        .bind(new_name.trim())
+        .bind(feed_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn reorder_feeds(pool: &SqlitePool, feed_ids: &[String]) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    for (index, feed_id) in feed_ids.iter().enumerate() {
+        sqlx::query("UPDATE feed_definitions SET sort_order = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2")
+            .bind(index as i64)
+            .bind(feed_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn delete_feed(pool: &SqlitePool, feed_id: &str) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM feed_topic_map WHERE feed_id = ?1")
+        .bind(feed_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM feed_sources WHERE feed_id = ?1")
+        .bind(feed_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM feed_definitions WHERE id = ?1")
+        .bind(feed_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn set_feed_visibility(pool: &SqlitePool, feed_id: &str, is_visible: bool) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE feed_definitions SET is_visible = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2")
+        .bind(if is_visible { 1_i64 } else { 0_i64 })
+        .bind(feed_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_feed_categories(pool: &SqlitePool, feed_id: &str, categories: &[String]) -> Result<(), sqlx::Error> {
+    let normalized_categories = normalize_categories(categories);
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM feed_topic_map WHERE feed_id = ?1")
+        .bind(feed_id)
+        .execute(&mut *tx)
+        .await?;
+    for category in &normalized_categories {
+        sqlx::query("INSERT INTO feed_topic_map(feed_id, category) VALUES (?1, ?2)")
+            .bind(feed_id)
+            .bind(category.as_str())
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn count_visible_feeds(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT COUNT(1) FROM feed_definitions WHERE is_visible = 1")
+        .fetch_one(pool)
+        .await
 }
 
 pub async fn create_news_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {

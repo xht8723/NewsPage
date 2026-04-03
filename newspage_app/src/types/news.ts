@@ -35,6 +35,20 @@ export interface BackendNewsItem {
   preference_score?: number;
 }
 
+export interface FeedDefinition {
+  id: string;
+  name: string;
+  slug: string;
+  is_visible: boolean;
+  sort_order: number;
+  categories: string[];
+}
+
+export interface CustomRssFeed {
+  name: string;
+  url: string;
+}
+
 export interface UserSettings {
   newsLimit: number;
   perCategoryNewsLimits: Record<string, number>;
@@ -56,7 +70,8 @@ export interface UserSettings {
   sourceBlacklist: string[];
   rssHubInstanceDomain: string;
   selectedRssHubRoutes: string[];
-  customRssFeeds: string[];
+  customRssFeeds: CustomRssFeed[];
+  showFeedDeletionConfirmation: boolean;
   likedConcepts: string;
   dislikedConcepts: string;
   sortMode: string;
