@@ -24,11 +24,10 @@ The biggest value of NewsPage is personalized semantic sorting. Instead of only 
 
 Before building/running, install:
 
-1. Node.js 20+ and npm
-2. Rust toolchain (stable) via rustup
-3. Tauri system dependencies
-4. Microsoft WebView2 Runtime (Windows)
-5. Optional local AI runtime only if you choose a local provider setup
+1. Node.js and npm
+2. Rust
+3. Tauri system dependencies. See [Tauri Documentation](https://v2.tauri.app/start/prerequisites/)
+4. Optional: Ollama for local LLM. See [Ollama Documentation](https://docs.ollama.com/)
 
 Notes:
 

@@ -51,7 +51,7 @@ export function ArticleDetailModal({
   }
 
   return (
-    <div className={`fixed inset-0 z-50 overflow-y-auto ${isDarkMode ? "bg-zinc-950 text-zinc-300" : "bg-zinc-150 text-zinc-800"}`}>
+    <div className={`fixed inset-0 z-50 overflow-y-auto news-scroll ${isDarkMode ? "news-scroll-dark bg-zinc-950 text-zinc-300" : "news-scroll-light bg-zinc-150 text-zinc-800"}`}>
       <div
         className={`sticky top-0 z-10 flex items-center border-b px-4 py-4 md:px-8 ${
           isDarkMode ? "border-zinc-800 bg-zinc-950/95" : "border-zinc-200 bg-zinc-150/95"

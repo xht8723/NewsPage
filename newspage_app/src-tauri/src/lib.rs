@@ -761,6 +761,7 @@ async fn run_scrape_stage(
 async fn collect_items_to_enrich_by_language(
     state: &AppState,
     per_category_limit: i64,
+    per_category_limits: &HashMap<String, i64>,
     visible_categories: &HashMap<String, bool>,
     source_blacklist: &HashSet<String>,
 ) -> Result<Vec<(String, Vec<NewsItem>)>, String> {
@@ -798,7 +799,16 @@ async fn collect_items_to_enrich_by_language(
                 &state.db,
                 &category,
                 &normalized_language,
-                per_category_limit,
+                {
+                    // Per-category override: 0 means unlimited (-1 in SQLite), else use override.
+                    // If no override, fall back to global per_category_limit.
+                    let key = category.to_lowercase();
+                    match per_category_limits.get(&key) {
+                        Some(&0) => -1,
+                        Some(&n) => n.clamp(1, 10000),
+                        None => per_category_limit,
+                    }
+                },
             )
             .await
             .map_err(|e| {
@@ -1398,6 +1408,7 @@ fn open_app_data_dir(app: tauri::AppHandle) -> Result<(), String> {
 fn default_settings_map() -> HashMap<String, String> {
     let mut map = HashMap::new();
     map.insert("newsLimit".to_string(), "5".to_string());
+    map.insert("perCategoryNewsLimits".to_string(), "{}".to_string());
     map.insert("scrapeCooldownHours".to_string(), "2".to_string());
     map.insert("llmProvider".to_string(), "ollama".to_string());
     map.insert("ollamaAddress".to_string(), DEFAULT_OLLAMA_ADDRESS.to_string());
@@ -1546,6 +1557,7 @@ async fn start_all_action(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     limit: usize,
+    per_category_limits_json: Option<String>,
     cooldown_hours: u64,
     llm_provider: Option<String>,
     openai_api_key: Option<String>,
@@ -1559,6 +1571,17 @@ async fn start_all_action(
     local_embedding_model: Option<String>,
 ) -> Result<(), String> {
     let per_category_limit = limit.clamp(1, 100) as i64;
+    let per_category_limits: HashMap<String, i64> = per_category_limits_json
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| v.as_object().cloned())
+        .map(|obj| {
+            obj.into_iter()
+                .filter_map(|(k, v)| v.as_i64().map(|n| (k.to_lowercase(), n)))
+                .collect()
+        })
+        .unwrap_or_default();
     println!(
         "Starting full pipeline action (per-category limit={})…",
         per_category_limit
@@ -1602,6 +1625,7 @@ async fn start_all_action(
     let items_to_enrich_by_language = collect_items_to_enrich_by_language(
         &state,
         per_category_limit,
+        &per_category_limits,
         &runtime.resolved.visible_categories,
         &runtime.resolved.source_blacklist,
     )

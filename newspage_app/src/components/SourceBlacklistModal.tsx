@@ -107,7 +107,7 @@ export function SourceBlacklistModal({
             </button>
           </div>
 
-          <div className={`max-h-64 overflow-y-auto rounded-xl border ${isDarkMode ? "border-zinc-800" : "border-zinc-200"}`}>
+          <div className={`max-h-64 overflow-y-auto rounded-xl border news-scroll ${isDarkMode ? "news-scroll-dark border-zinc-800" : "news-scroll-light border-zinc-200"}`}>
             {filteredSources.length === 0 ? (
               <p className={`p-4 text-sm ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
                 {settings.sourceBlacklist.length === 0 ? "No blacklisted sources yet." : "No sources match your search."}

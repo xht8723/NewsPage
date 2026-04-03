@@ -37,6 +37,7 @@ export interface BackendNewsItem {
 
 export interface UserSettings {
   newsLimit: number;
+  perCategoryNewsLimits: Record<string, number>;
   scrapeCooldownHours: number;
   llmBatchSize: number;
   llmProvider: string;

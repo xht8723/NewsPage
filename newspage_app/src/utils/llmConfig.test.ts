@@ -4,6 +4,7 @@ import type { UserSettings } from "../types/news";
 
 const baseSettings: UserSettings = {
   newsLimit: 5,
+  perCategoryNewsLimits: {},
   scrapeCooldownHours: 2,
   llmBatchSize: 5,
   llmProvider: "ollama",

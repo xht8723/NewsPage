@@ -60,3 +60,38 @@
 .news-scroll-light::-webkit-scrollbar-thumb:hover {
 	background: #71717a;
 }
+
+/* Number input spinner styling for settings-style controls */
+.number-dial-dark,
+.number-dial-light {
+	appearance: auto;
+}
+
+.number-dial-dark::-webkit-inner-spin-button,
+.number-dial-dark::-webkit-outer-spin-button {
+	opacity: 1;
+	filter: invert(82%) sepia(6%) saturate(320%) hue-rotate(193deg) brightness(97%) contrast(89%);
+}
+
+.number-dial-light::-webkit-inner-spin-button,
+.number-dial-light::-webkit-outer-spin-button {
+	opacity: 1;
+	filter: none;
+}
+
+.number-dial-dark {
+	scrollbar-color: #52525b #18181b;
+}
+
+.number-dial-light {
+	scrollbar-color: #a1a1aa #f4f4f5;
+}
+
+/* Firefox-specific number spinner theming fallback */
+.number-dial-dark[type="number"] {
+	color-scheme: dark;
+}
+
+.number-dial-light[type="number"] {
+	color-scheme: light;
+}

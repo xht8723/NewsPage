@@ -40,6 +40,7 @@ import { ArticleDetailModal } from "./components/ArticleDetailModal";
 import { CalendarModal } from "./components/CalendarModal";
 import { LogPanel } from "./components/LogPanel";
 import { SourceBlacklistModal } from "./components/SourceBlacklistModal";
+import { CategoryLimitsModal } from "./components/CategoryLimitsModal";
 import type { TranslationRuntimeConfig } from "./hooks/useLiveTranslation";
 import { addSourceToBlacklist, normalizeSourceName, parseSourceBlacklist, toNormalizedSourceSet } from "./utils/sourceBlacklist";
 import "./App.css";
@@ -62,6 +63,7 @@ function makeInitialStageStatus(): Record<StageKey, { state: StageState; current
 function createDefaultSettings(): UserSettings {
   return {
     newsLimit: 5,
+    perCategoryNewsLimits: {},
     scrapeCooldownHours: 2,
     llmBatchSize: 5,
     llmProvider: "ollama",
@@ -134,6 +136,7 @@ function App(): React.JSX.Element {
   const [showLayoutSwitcher, setShowLayoutSwitcher] = useState(true);
   const [showConfigPopup, setShowConfigPopup] = useState(false);
   const [showSourceBlacklistManager, setShowSourceBlacklistManager] = useState(false);
+  const [showCategoryLimitsManager, setShowCategoryLimitsManager] = useState(false);
   const [configPopupMessage, setConfigPopupMessage] = useState("");
   const [relevanceWarning, setRelevanceWarning] = useState<string | null>(null);
   const { saveSetting, cancelPendingSave } = useDebouncedSettingSaverController(500);
@@ -201,6 +204,7 @@ function App(): React.JSX.Element {
         setSettings(() => ({
           ...defaults,
           newsLimit: saved.newsLimit ? Math.min(50, Math.max(1, Number(saved.newsLimit))) : defaults.newsLimit,
+          perCategoryNewsLimits: (() => { try { return saved.perCategoryNewsLimits ? JSON.parse(saved.perCategoryNewsLimits) as Record<string, number> : {}; } catch { return {}; } })(),
           scrapeCooldownHours: saved.scrapeCooldownHours ? Math.min(24, Math.max(0, Number(saved.scrapeCooldownHours))) : defaults.scrapeCooldownHours,
           llmBatchSize: saved.llmBatchSize ? Math.min(20, Math.max(1, Number(saved.llmBatchSize))) : defaults.llmBatchSize,
           llmProvider: saved.llmProvider?.trim() ? saved.llmProvider : defaults.llmProvider,
@@ -536,6 +540,7 @@ function App(): React.JSX.Element {
     try {
       await invoke("start_all_action", {
         limit: settings.newsLimit,
+        perCategoryLimitsJson: JSON.stringify(settings.perCategoryNewsLimits),
         cooldownHours: settings.scrapeCooldownHours,
         ...llmArgs,
       });
@@ -1399,7 +1404,7 @@ function App(): React.JSX.Element {
             ) : (
               <div
                 className={`
-                  ${layout === "grid" ? "grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3" : ""}
+                  ${layout === "grid" ? "grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3" : ""}
                   ${layout === "list" ? "flex flex-col gap-4" : ""}
                   ${layout === "compact_list" ? "flex flex-col gap-2" : ""}
                 `}
@@ -1471,6 +1476,7 @@ function App(): React.JSX.Element {
         setIsPurging={setIsPurging}
         onPurgeDatabase={handleCleanReset}
         onOpenSourceBlacklistManager={() => setShowSourceBlacklistManager(true)}
+        onOpenCategoryLimits={() => setShowCategoryLimitsManager(true)}
         onClose={() => {
           setShowSettings(false);
           setPurgeConfirmStep(0);
@@ -1484,6 +1490,15 @@ function App(): React.JSX.Element {
         setSettings={setSettings}
         saveSetting={saveSetting}
         onClose={() => setShowSourceBlacklistManager(false)}
+      />
+
+      <CategoryLimitsModal
+        show={showCategoryLimitsManager}
+        isDarkMode={isDarkMode}
+        settings={settings}
+        setSettings={setSettings}
+        saveSetting={saveSetting}
+        onClose={() => setShowCategoryLimitsManager(false)}
       />
 
       <ArticleDetailModal
