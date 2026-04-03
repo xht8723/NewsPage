@@ -561,7 +561,7 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
             .get("llmBatchSize")
             .and_then(|v| v.parse::<usize>().ok())
             .map(|n| n.clamp(1, 20))
-            .unwrap_or(5),
+            .unwrap_or(3),
         max_summary_points: overrides
             .max_summary_points
             .or_else(|| {

@@ -6,7 +6,7 @@ const baseSettings: UserSettings = {
   newsLimit: 5,
   perCategoryNewsLimits: {},
   scrapeCooldownHours: 2,
-  llmBatchSize: 5,
+  llmBatchSize: 3,
   llmProvider: "ollama",
   ollamaAddress: "http://127.0.0.1:11434",
   ollamaModel: "qwen2.5:3b",

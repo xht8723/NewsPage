@@ -122,7 +122,7 @@ export function SettingsModal({
                 <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>General Settings</p>
                 <div className="space-y-3">
                   <div>
-                    <label className="mb-1.5 block text-xs font-medium opacity-70">Number of news per pull</label>
+                    <label className="mb-1.5 block text-xs font-medium opacity-70">Number of news per category per pull</label>
                     <div className="flex items-center gap-2">
                       <input
                         type="number"
