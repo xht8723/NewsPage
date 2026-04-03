@@ -13,6 +13,8 @@ import {
   SlidersHorizontal,
   EyeOff,
   GripVertical,
+  Square,
+  Newspaper,
 } from "lucide-react";
 import {
   CATEGORIES,
@@ -46,7 +48,7 @@ import { addSourceToBlacklist, normalizeSourceName, parseSourceBlacklist, toNorm
 import "./App.css";
 
 type StageKey = "scrape" | "extract" | "enrich" | "persist";
-type StageState = "idle" | "running" | "done" | "error";
+type StageState = "idle" | "running" | "done" | "error" | "stopped";
 type StartupPhase = "loading-settings" | "preparing-embedding" | "ready" | "error";
 
 const STAGE_ORDER: StageKey[] = ["scrape", "extract", "enrich", "persist"];
@@ -93,6 +95,7 @@ function createDefaultSettings(): UserSettings {
 
 function App(): React.JSX.Element {
   const [loading, setLoading] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<Category>("All");
   const [layout, setLayout] = useState<LayoutMode>("grid");
   const [selectedDate, setSelectedDate] = useState(() => formatDateLocal(new Date()));
@@ -480,7 +483,7 @@ function App(): React.JSX.Element {
     }
 
     const nextState: StageState =
-      event.state === "running" || event.state === "done" || event.state === "error"
+      event.state === "running" || event.state === "done" || event.state === "error" || event.state === "stopped"
         ? event.state
         : "idle";
 
@@ -551,6 +554,16 @@ function App(): React.JSX.Element {
       setEnrichmentError(message);
       setEnrichmentProgress(null);
       setLoading(false);
+    }
+  };
+
+  const stopGenerate = async () => {
+    if (stopping) return;
+    setStopping(true);
+    try {
+      await invoke("request_stop_action");
+    } finally {
+      setStopping(false);
     }
   };
 
@@ -663,6 +676,7 @@ function App(): React.JSX.Element {
           console.log("📬 enriched-news-sync-complete event received:", event.payload);
           setEnrichmentProgress(null);
           setLoading(false);
+          setStopping(false);
           setStageStatus((current) => ({
             ...current,
             scrape: { ...current.scrape, state: current.scrape.state === "idle" ? "done" : current.scrape.state },
@@ -1261,7 +1275,9 @@ function App(): React.JSX.Element {
                     ? (isDarkMode ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-emerald-400 bg-emerald-50 text-emerald-700")
                     : isRunning
                       ? (isDarkMode ? "border-blue-500/40 bg-blue-500/10 text-blue-300" : "border-blue-400 bg-blue-50 text-blue-700")
-                      : (isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-400" : "border-zinc-300 bg-zinc-100 text-zinc-500");
+                      : item.state === "stopped"
+                        ? (isDarkMode ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-amber-400 bg-amber-50 text-amber-700")
+                        : (isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-400" : "border-zinc-300 bg-zinc-100 text-zinc-500");
 
                 return (
                   <span key={stage} className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest ${badgeClass}`} title={item.message || stageLabel}>
@@ -1280,11 +1296,6 @@ function App(): React.JSX.Element {
               >
                 LOGS
               </button>
-              {enrichmentProgress ? (
-                <span className={`text-[10px] font-semibold ${isDarkMode ? "text-emerald-300" : "text-emerald-700"}`}>
-                  Enriching {enrichmentProgress.current}/{enrichmentProgress.total}
-                </span>
-              ) : null}
               {relevanceWarning && settings.sortMode === "score" ? (
                 <button
                   type="button"
@@ -1367,16 +1378,31 @@ function App(): React.JSX.Element {
             >
               {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
             </button>
-            <button
-              onClick={generateNews}
-              disabled={loading}
-              className={`ml-2 flex items-center gap-2 rounded-full px-5 py-2.5 text-xs font-bold uppercase tracking-widest shadow-md transition-all ${
-                isDarkMode ? "bg-zinc-300 text-zinc-900 hover:bg-amber-300" : "bg-white text-black hover:bg-zinc-300"
-              } disabled:opacity-50`}
-            >
-              {loading ? <RefreshCw className="animate-spin" size={16} /> : <img src="/icon.svg" alt="NewsPage logo" className="h-5 w-5 block" />}
-              Get news!
-            </button>
+            <div className="relative ml-2">
+              <button
+                onClick={generateNews}
+                disabled={loading}
+                className={`flex items-center gap-2 rounded-full px-5 py-2.5 text-xs font-bold uppercase tracking-widest shadow-md transition-all ${
+                  isDarkMode ? "bg-zinc-300 text-zinc-900 hover:bg-amber-300" : "bg-white text-black hover:bg-zinc-300"
+                } disabled:opacity-50`}
+              >
+                {loading ? <RefreshCw className="animate-spin" size={16} /> : <Newspaper size={16} />}
+                Get news!
+              </button>
+              {loading ? (
+                <button
+                  type="button"
+                  onClick={stopGenerate}
+                  disabled={stopping}
+                  className={`absolute left-1/2 top-full mt-1 -translate-x-1/2 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest whitespace-nowrap transition-colors disabled:opacity-50 ${
+                    isDarkMode ? "border-zinc-700 bg-zinc-800/60 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/60" : "border-zinc-300 bg-zinc-100/70 text-zinc-500 hover:text-zinc-700 hover:bg-zinc-200/70"
+                  }`}
+                >
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-500" />
+                  Stop
+                </button>
+              ) : null}
+            </div>
           </div>
         </header>
 

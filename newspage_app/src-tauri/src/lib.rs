@@ -15,7 +15,7 @@ use chrono::{DateTime, Local, Utc};
 use sqlx::sqlite::SqlitePool;
 use std::path::{Path, PathBuf};
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{atomic::{AtomicBool, Ordering}, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 
@@ -384,6 +384,7 @@ struct AppState {
     preference_embedding_cache: Mutex<HashMap<String, Vec<f32>>>,
     translation_cache: Mutex<HashMap<String, String>>,
     settings_path: PathBuf,
+    stop_requested: AtomicBool,
 }
 
 #[derive(Default)]
@@ -654,7 +655,7 @@ async fn run_scrape_stage(
     resolved: &ResolvedLlmSettings,
     cooldown_hours: u64,
     settings_path: &Path,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     emit_process_stage(
         app,
         "scrape",
@@ -691,7 +692,7 @@ async fn run_scrape_stage(
             None,
             None,
         )?;
-        return Ok(());
+        return Ok(false);
     }
 
     if resolved.selected_regions.is_empty() {
@@ -702,7 +703,18 @@ async fn run_scrape_stage(
     let scrape_context = ScrapeContext {
         selected_regions: resolved.selected_regions.clone(),
     };
-    let stage_results = run_default_scrapers(&scrape_context).await?;
+    let (stage_results, scrape_was_stopped) = run_default_scrapers(&scrape_context, &state.stop_requested).await?;
+    if scrape_was_stopped {
+        emit_process_stage(
+            app,
+            "scrape",
+            "stopped",
+            "Stopped by user",
+            None,
+            None,
+        )?;
+        return Ok(true);
+    }
     let total_stages = stage_results.len();
 
     for (index, stage_result) in stage_results.iter().enumerate() {
@@ -755,7 +767,7 @@ async fn run_scrape_stage(
         Some(total_stages),
         Some(total_stages),
     )?;
-    Ok(())
+    Ok(false)
 }
 
 async fn collect_items_to_enrich_by_language(
@@ -851,6 +863,7 @@ struct EnrichmentStageResult {
     total: usize,
     enriched_count: usize,
     first_error: Option<String>,
+    stopped: bool,
 }
 
 async fn run_enrichment_stage(
@@ -906,9 +919,22 @@ async fn run_enrichment_stage(
     let mut enriched_count = 0;
     let mut first_error: Option<String> = None;
     let mut global_index: usize = 0;
+    let mut stopped = false;
 
     // Process in language-homogeneous batches so CN/EN do not mix in one LLM call.
-    for (language, items_to_enrich) in items_to_enrich_by_language {
+    'outer: for (language, items_to_enrich) in items_to_enrich_by_language {
+        if state.stop_requested.load(Ordering::Relaxed) {
+            stopped = true;
+            emit_process_stage(
+                app,
+                "enrich",
+                "stopped",
+                "Stopped by user",
+                Some(enriched_count),
+                Some(total),
+            )?;
+            break;
+        }
         logging::info(
             "Enrichment",
             format!(
@@ -920,6 +946,18 @@ async fn run_enrichment_stage(
         );
 
         for batch in items_to_enrich.chunks(settings.llm_batch_size) {
+            if state.stop_requested.load(Ordering::Relaxed) {
+                stopped = true;
+                emit_process_stage(
+                    app,
+                    "enrich",
+                    "stopped",
+                    "Stopped by user",
+                    Some(enriched_count),
+                    Some(total),
+                )?;
+                break 'outer;
+            }
             let batch_items: Vec<NewsItem> = batch.to_vec();
             let batch_len = batch_items.len();
 
@@ -1097,35 +1135,38 @@ async fn run_enrichment_stage(
         }
     }
 
-    emit_process_stage(
-        app,
-        "extract",
-        "done",
-        "Extraction stage completed",
-        Some(total),
-        Some(total),
-    )?;
-    emit_process_stage(
-        app,
-        "enrich",
-        "done",
-        "Enrichment stage completed",
-        Some(enriched_count),
-        Some(total),
-    )?;
-    emit_process_stage(
-        app,
-        "persist",
-        "done",
-        "Persistence stage completed",
-        Some(enriched_count),
-        Some(total),
-    )?;
+    if !stopped {
+        emit_process_stage(
+            app,
+            "extract",
+            "done",
+            "Extraction stage completed",
+            Some(total),
+            Some(total),
+        )?;
+        emit_process_stage(
+            app,
+            "enrich",
+            "done",
+            "Enrichment stage completed",
+            Some(enriched_count),
+            Some(total),
+        )?;
+        emit_process_stage(
+            app,
+            "persist",
+            "done",
+            "Persistence stage completed",
+            Some(enriched_count),
+            Some(total),
+        )?;
+    }
 
     Ok(EnrichmentStageResult {
         total,
         enriched_count,
         first_error,
+        stopped,
     })
 }
 
@@ -1553,6 +1594,12 @@ fn get_available_regions() -> Vec<String> {
 }
 
 #[tauri::command]
+async fn request_stop_action(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state.stop_requested.store(true, Ordering::Relaxed);
+    Ok(())
+}
+
+#[tauri::command]
 async fn start_all_action(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
@@ -1586,6 +1633,7 @@ async fn start_all_action(
         "Starting full pipeline action (per-category limit={})…",
         per_category_limit
     );
+    state.stop_requested.store(false, Ordering::Relaxed);
     emit_process_stage(
         &app,
         "scrape",
@@ -1620,7 +1668,15 @@ async fn start_all_action(
         llm_config.model
     );
 
-    run_scrape_stage(&app, &state, &runtime.resolved, cooldown_hours, &runtime.settings_path).await?;
+    let scrape_stopped = run_scrape_stage(&app, &state, &runtime.resolved, cooldown_hours, &runtime.settings_path).await?;
+    if scrape_stopped {
+        return emit_enriched_news_sync_complete(&app, EnrichmentStageResult {
+            total: 0,
+            enriched_count: 0,
+            first_error: None,
+            stopped: true,
+        });
+    }
 
     let items_to_enrich_by_language = collect_items_to_enrich_by_language(
         &state,
@@ -1641,14 +1697,16 @@ async fn start_all_action(
     )
     .await?;
 
-    emit_process_stage(
-        &app,
-        "persist",
-        "done",
-        "Pipeline complete",
-        Some(result.enriched_count),
-        Some(result.total),
-    )?;
+    if !result.stopped {
+        emit_process_stage(
+            &app,
+            "persist",
+            "done",
+            "Pipeline complete",
+            Some(result.enriched_count),
+            Some(result.total),
+        )?;
+    }
 
     emit_enriched_news_sync_complete(&app, result)
 }
@@ -1882,6 +1940,7 @@ pub fn run() {
                 preference_embedding_cache: Mutex::new(HashMap::new()),
                 translation_cache: Mutex::new(HashMap::new()),
                 settings_path: settings_path.clone(),
+                stop_requested: AtomicBool::new(false),
             });
 
             if let Ok(raw) = std::fs::read_to_string(&settings_path) {
@@ -1916,6 +1975,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_available_regions,
             get_enriched_news,
+            request_stop_action,
             start_all_action,
             test_ollama_connection,
             list_ollama_models,

@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::news_item::NewsItem;
 
@@ -39,10 +40,13 @@ fn default_scraper_stages() -> Vec<Box<dyn ScraperStage>> {
     ]
 }
 
-pub async fn run_default_scrapers(ctx: &ScrapeContext) -> Result<Vec<StageRunResult>, String> {
+pub async fn run_default_scrapers(ctx: &ScrapeContext, stop: &AtomicBool) -> Result<(Vec<StageRunResult>, bool), String> {
     let mut results: Vec<StageRunResult> = Vec::new();
 
     for stage in default_scraper_stages() {
+        if stop.load(Ordering::Relaxed) {
+            return Ok((results, true));
+        }
         if !stage.should_run(ctx) {
             continue;
         }
@@ -54,5 +58,5 @@ pub async fn run_default_scrapers(ctx: &ScrapeContext) -> Result<Vec<StageRunRes
         });
     }
 
-    Ok(results)
+    Ok((results, false))
 }
