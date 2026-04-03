@@ -13,7 +13,6 @@ import {
   SlidersHorizontal,
   EyeOff,
   GripVertical,
-  Square,
   Newspaper,
 } from "lucide-react";
 import {
@@ -114,7 +113,7 @@ function App(): React.JSX.Element {
   const categoryButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const translatePanelRef = useRef<HTMLDivElement | null>(null);
   const refreshTimeoutRef = useRef<number | null>(null);
-  const [enrichmentProgress, setEnrichmentProgress] = useState<{ current: number; total: number; enriched: number } | null>(null);
+  const [, setEnrichmentProgress] = useState<{ current: number; total: number; enriched: number } | null>(null);
   const [enrichmentError, setEnrichmentError] = useState<string | null>(null);
   const [processLogs, setProcessLogs] = useState<ProcessLogEntry[]>([]);
   const [showLogPanel, setShowLogPanel] = useState(false);
