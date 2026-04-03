@@ -6,12 +6,10 @@ use crate::news_item::NewsItem;
 pub mod ann;
 pub mod automaton;
 pub mod gl_rss;
-pub mod yystv;
 
 use ann::AnnScraperStage;
 use automaton::AutomatonScraperStage;
 use gl_rss::GlRssScraperStage;
-use yystv::YystvScraperStage;
 
 pub struct ScrapeContext {
     pub selected_regions: Vec<String>,
@@ -39,7 +37,6 @@ fn default_scraper_stages() -> Vec<Box<dyn ScraperStage>> {
         // To disable Automaton: remove the line below (or set ENABLED=false in automaton.rs).
         Box::new(AutomatonScraperStage),
         Box::new(GlRssScraperStage),
-        Box::new(YystvScraperStage),
     ]
 }
 
