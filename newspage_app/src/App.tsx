@@ -5,7 +5,6 @@ import {
   Calendar,
   Moon,
   Sun,
-  Search,
   RefreshCw,
   Settings,
   Languages,
@@ -26,8 +25,8 @@ import { formatDateLocal, offsetDateString, getProviderLabel } from "./utils/new
 import { buildLLMArgs, getSelectedApiKey, getSelectedEndpoint, getSelectedModel } from "./utils/llmConfig";
 import { useEnrichedNews } from "./hooks/useEnrichedNews";
 import { useDebouncedSettingSaverController } from "./hooks/useDebouncedSettingSaver";
+import { usePanelTransition } from "./hooks/usePanelTransition";
 import { PreferencePanel } from "./components/PreferencePanel";
-import { ArticleCard } from "./components/ArticleCard";
 import { LayoutSwitcher } from "./components/LayoutSwitcher";
 import { CardContextMenu } from "./components/CardContextMenu";
 import { SettingsModal } from "./components/SettingsModal";
@@ -42,7 +41,8 @@ import { FeedManagerPanel } from "./components/FeedManagerPanel";
 import { FeedNavigationList } from "./components/FeedNavigationList";
 import { DotsSpinner } from "./components/DotsSpinner";
 import { NeonCheckbox } from "./components/NeonCheckbox";
-import { usePanelTransition } from "./hooks/usePanelTransition";
+import { SavingIndicator } from "./components/SavingIndicator";
+import { VirtualizedArticleList } from "./components/VirtualizedArticleList";
 import type { TranslationRuntimeConfig } from "./hooks/useLiveTranslation";
 import { addSourceToBlacklist, normalizeSourceName, parseSourceBlacklist, toNormalizedSourceSet } from "./utils/sourceBlacklist";
 import "./App.css";
@@ -145,7 +145,7 @@ function App(): React.JSX.Element {
   const [dontAskFeedDeleteAgain, setDontAskFeedDeleteAgain] = useState(false);
   const [configPopupMessage, setConfigPopupMessage] = useState("");
   const [relevanceWarning, setRelevanceWarning] = useState<string | null>(null);
-  const { saveSetting, cancelPendingSave } = useDebouncedSettingSaverController(500);
+  const { saveSetting, cancelPendingSave, isPending: isSavingSettings } = useDebouncedSettingSaverController(500);
   const [isEmbeddingReady, setIsEmbeddingReady] = useState(false);
   const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState(DEFAULT_EMBEDDING_MODEL);
   const [startupPhase, setStartupPhase] = useState<StartupPhase>("loading-settings");
@@ -156,6 +156,7 @@ function App(): React.JSX.Element {
   const configPopupTransition = usePanelTransition(showConfigPopup, 170);
   const pendingFeedDeletionTransition = usePanelTransition(!!pendingFeedDeletion, 170);
   const contextMenuTransition = usePanelTransition(!!contextMenu, 140);
+  const [isFilterTransitioning, setIsFilterTransitioning] = useState(false);
 
   useEffect(() => {
     if (pendingFeedDeletion) {
@@ -974,15 +975,46 @@ function App(): React.JSX.Element {
     if (mode === "score" && !isEmbeddingReady) {
       return;
     }
-    setSettings((current) => (current.sortMode === mode ? current : { ...current, sortMode: mode }));
-    setRelevanceWarning(null);
-    saveSetting("sortMode", mode);
+    if (settings.sortMode === mode) {
+      return;
+    }
+    
+    // Smooth transition: fade out → change → fade in
+    setIsFilterTransitioning(true);
+    setTimeout(() => {
+      setSettings((current) => (current.sortMode === mode ? current : { ...current, sortMode: mode }));
+      setRelevanceWarning(null);
+      saveSetting("sortMode", mode);
+      setTimeout(() => setIsFilterTransitioning(false), 50);
+    }, 150);
   };
 
   const handleSetLayout = (mode: LayoutMode) => {
-    setLayout(mode);
-    saveSetting("layout", mode);
-    setSettings((current) => (current.layout === mode ? current : { ...current, layout: mode }));
+    if (layout === mode) {
+      return;
+    }
+    
+    // Smooth transition for layout switch
+    setIsFilterTransitioning(true);
+    setTimeout(() => {
+      setLayout(mode);
+      saveSetting("layout", mode);
+      setSettings((current) => (current.layout === mode ? current : { ...current, layout: mode }));
+      setTimeout(() => setIsFilterTransitioning(false), 50);
+    }, 150);
+  };
+
+  const handleSetDate = (date: string) => {
+    if (selectedDate === date) {
+      return;
+    }
+    
+    // Smooth transition when changing date
+    setIsFilterTransitioning(true);
+    setTimeout(() => {
+      setSelectedDate(date);
+      setTimeout(() => setIsFilterTransitioning(false), 50);
+    }, 150);
   };
 
   const setPreferenceConcepts = (field: "likedConcepts" | "dislikedConcepts", value: string) => {
@@ -1015,30 +1047,26 @@ function App(): React.JSX.Element {
 
   const blacklistedSources = useMemo(() => toNormalizedSourceSet(settings.sourceBlacklist), [settings.sourceBlacklist]);
 
-  const filteredNews = useMemo(() => {
-    let sortedNews: NewsArticle[];
-    if (settings.sortMode === "score") {
-      sortedNews = [...news].sort((a, b) => {
-        const diff = b.preferenceScore - a.preferenceScore;
-        if (Math.abs(diff) > 0.0001) return diff;
-        if (a.date === b.date) return b.timestamp - a.timestamp;
-        return b.date.localeCompare(a.date);
-      });
-    } else {
-      sortedNews = [...news].sort((left, right) => {
-        if (left.date === right.date) {
-          return right.timestamp - left.timestamp;
-        }
-        return right.date.localeCompare(left.date);
-      });
-    }
+  // Memoized sort comparators for performance optimization
+  const scoreComparator = useCallback((a: NewsArticle, b: NewsArticle) => {
+    const diff = b.preferenceScore - a.preferenceScore;
+    if (Math.abs(diff) > 0.0001) return diff;
+    if (a.date === b.date) return b.timestamp - a.timestamp;
+    return b.date.localeCompare(a.date);
+  }, []);
 
-    const dateFiltered = sortedNews
+  const dateComparator = useCallback((a: NewsArticle, b: NewsArticle) => {
+    if (a.date === b.date) return b.timestamp - a.timestamp;
+    return b.date.localeCompare(a.date);
+  }, []);
+
+  const filteredNews = useMemo(() => {
+    const sortedNews = [...news].sort(settings.sortMode === "score" ? scoreComparator : dateComparator);
+
+    return sortedNews
       .filter((item) => item.date === selectedDate)
       .filter((item) => !blacklistedSources.has(normalizeSourceName(item.sourceName)));
-
-    return dateFiltered;
-  }, [news, selectedDate, settings.sortMode, blacklistedSources]);
+  }, [news, selectedDate, settings.sortMode, blacklistedSources, scoreComparator, dateComparator]);
 
   if (startupPhase !== "ready") {
     const startupMessage = startupPhase === "loading-settings"
@@ -1160,7 +1188,7 @@ function App(): React.JSX.Element {
           </button>
           <div className="grid grid-cols-2 gap-2">
             <button
-              onClick={() => setSelectedDate((currentDate) => offsetDateString(currentDate, -1))}
+              onClick={() => handleSetDate(offsetDateString(selectedDate, -1))}
               className={`rounded-xl border px-3 py-2 text-[10px] font-black uppercase tracking-widest transition-all ${
                 isDarkMode
                   ? "border-zinc-800 bg-zinc-950/50 text-zinc-300 hover:bg-zinc-800"
@@ -1171,7 +1199,7 @@ function App(): React.JSX.Element {
             </button>
             {canGoToNextDay && (
               <button
-                onClick={() => setSelectedDate((currentDate) => offsetDateString(currentDate, 1))}
+                onClick={() => handleSetDate(offsetDateString(selectedDate, 1))}
                 className={`rounded-xl border px-3 py-2 text-[10px] font-black uppercase tracking-widest transition-all ${
                   isDarkMode
                     ? "border-zinc-800 bg-zinc-950/50 text-zinc-300 hover:bg-zinc-800"
@@ -1352,39 +1380,20 @@ function App(): React.JSX.Element {
         </div>
 
         <section className={`news-scroll min-h-0 flex-1 overflow-y-auto pb-24 pr-1 ${isDarkMode ? "news-scroll-dark" : "news-scroll-light"}`}>
-            {filteredNews.length === 0 ? (
-              <div className="flex flex-col items-center justify-center space-y-4 py-32 text-center opacity-40">
-                <Search size={48} className="text-zinc-500" />
-                <div>
-                  <h3 className="text-lg font-bold">No briefings for this date</h3>
-                </div>
-              </div>
-            ) : (
-              <div
-                className={`
-                  ${layout === "grid" ? "grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3" : ""}
-                  ${layout === "list" ? "flex flex-col gap-4" : ""}
-                  ${layout === "compact_list" ? "flex flex-col gap-2" : ""}
-                `}
-              >
-                {filteredNews.map((item) => (
-                  <ArticleCard
-                    key={item.id}
-                    item={item}
-                    layout={layout}
-                    isDarkMode={isDarkMode}
-                    sortMode={settings.sortMode}
-                    liveTranslationEnabled={settings.liveTranslationEnabled}
-                    translationTargetLanguage={settings.translationTargetLanguage}
-                    translationRuntime={translationRuntime}
-                    onSelect={setSelectedArticle}
-                    onOpenContextMenu={(article, x, y) => {
-                      setContextMenu({ article, x, y });
-                    }}
-                  />
-                ))}
-              </div>
-            )}
+          <VirtualizedArticleList
+            articles={filteredNews}
+            layout={layout}
+            isDarkMode={isDarkMode}
+            sortMode={settings.sortMode}
+            liveTranslationEnabled={settings.liveTranslationEnabled}
+            translationTargetLanguage={settings.translationTargetLanguage}
+            translationRuntime={translationRuntime}
+            isTransitioning={isFilterTransitioning}
+            onSelectArticle={setSelectedArticle}
+            onOpenContextMenu={(article, x, y) => {
+              setContextMenu({ article, x, y });
+            }}
+          />
         </section>
 
         <LayoutSwitcher show={showLayoutSwitcher} isDarkMode={isDarkMode} layout={layout} onSetLayout={handleSetLayout} />
@@ -1592,7 +1601,7 @@ function App(): React.JSX.Element {
         showCalendar={showCalendar}
         isDarkMode={isDarkMode}
         selectedDate={selectedDate}
-        onSelectDate={setSelectedDate}
+        onSelectDate={handleSetDate}
         onClose={() => setShowCalendar(false)}
       />
 
@@ -1705,6 +1714,8 @@ function App(): React.JSX.Element {
         }}
         onClose={() => setShowLogPanel(false)}
       />
+
+      <SavingIndicator isSaving={isSavingSettings} isDarkMode={isDarkMode} />
     </div>
   );
 }

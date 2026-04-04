@@ -7,3 +7,4 @@
 /gen/schemas
 binaries/*.exe
 windows-app-manifest.xml
+.cargo

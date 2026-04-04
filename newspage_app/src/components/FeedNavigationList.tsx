@@ -1,5 +1,5 @@
 import type React from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -68,7 +68,7 @@ function SortableNavRow({
   );
 }
 
-export function FeedNavigationList({
+export const FeedNavigationList = memo(function FeedNavigationListComponent({
   feeds,
   selectedFeedId,
   isDarkMode,
@@ -217,4 +217,4 @@ export function FeedNavigationList({
       </SortableContext>
     </DndContext>
   );
-}
+});

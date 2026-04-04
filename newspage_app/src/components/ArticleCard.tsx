@@ -1,4 +1,5 @@
 import { ChevronRight } from "lucide-react";
+import { memo } from "react";
 import { ARTICLE_THUMBNAIL_FALLBACK_URL, type LayoutMode } from "../constants/news";
 import { useImageFallback } from "../hooks/useImageFallback";
 import { useLiveTranslation, type TranslationRuntimeConfig } from "../hooks/useLiveTranslation";
@@ -17,7 +18,7 @@ interface ArticleCardProps {
   onOpenContextMenu: (article: NewsArticle, x: number, y: number) => void;
 }
 
-export function ArticleCard({
+function ArticleCardComponent({
   item,
   layout,
   isDarkMode,
@@ -140,3 +141,30 @@ export function ArticleCard({
     </div>
   );
 }
+
+// Custom comparison function for React.memo to ensure proper prop comparison
+function areEqual(prevProps: ArticleCardProps, nextProps: ArticleCardProps): boolean {
+  return (
+    prevProps.item.id === nextProps.item.id &&
+    prevProps.item.title === nextProps.item.title &&
+    prevProps.item.snippet === nextProps.item.snippet &&
+    prevProps.item.thumbnailUrl === nextProps.item.thumbnailUrl &&
+    prevProps.item.category === nextProps.item.category &&
+    prevProps.item.preferenceScore === nextProps.item.preferenceScore &&
+    prevProps.item.sourceName === nextProps.item.sourceName &&
+    prevProps.item.sourceIconUrl === nextProps.item.sourceIconUrl &&
+    prevProps.item.language === nextProps.item.language &&
+    prevProps.layout === nextProps.layout &&
+    prevProps.isDarkMode === nextProps.isDarkMode &&
+    prevProps.sortMode === nextProps.sortMode &&
+    prevProps.liveTranslationEnabled === nextProps.liveTranslationEnabled &&
+    prevProps.translationTargetLanguage === nextProps.translationTargetLanguage &&
+    prevProps.translationRuntime.provider === nextProps.translationRuntime.provider &&
+    prevProps.translationRuntime.model === nextProps.translationRuntime.model &&
+    prevProps.translationRuntime.endpoint === nextProps.translationRuntime.endpoint &&
+    prevProps.onSelect === nextProps.onSelect &&
+    prevProps.onOpenContextMenu === nextProps.onOpenContextMenu
+  );
+}
+
+export const ArticleCard = memo(ArticleCardComponent, areEqual);

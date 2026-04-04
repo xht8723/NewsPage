@@ -1,5 +1,6 @@
 import { LayoutGrid, LayoutList, Rows3 } from "lucide-react";
 import type React from "react";
+import { memo } from "react";
 import type { LayoutMode } from "../constants/news";
 
 interface LayoutSwitcherProps {
@@ -9,7 +10,7 @@ interface LayoutSwitcherProps {
   onSetLayout: (mode: LayoutMode) => void;
 }
 
-export function LayoutSwitcher({ show, isDarkMode, layout, onSetLayout }: LayoutSwitcherProps): React.JSX.Element {
+function LayoutSwitcherComponent({ show, isDarkMode, layout, onSetLayout }: LayoutSwitcherProps): React.JSX.Element {
   return (
     <div
       className={`fixed bottom-8 left-1/2 z-30 -translate-x-1/2 transition-all duration-200 md:left-[calc(50%+128px)] ${
@@ -61,3 +62,5 @@ export function LayoutSwitcher({ show, isDarkMode, layout, onSetLayout }: Layout
     </div>
   );
 }
+
+export const LayoutSwitcher = memo(LayoutSwitcherComponent);

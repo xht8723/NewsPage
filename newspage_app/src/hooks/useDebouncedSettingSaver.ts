@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface DebounceTimerApi {
@@ -14,6 +14,7 @@ export interface DebouncedSettingScheduler {
 export interface DebouncedSettingSaverController {
   saveSetting: (key: string, value: string) => void;
   cancelPendingSave: () => void;
+  isPending: boolean;
 }
 
 export function createDebouncedSettingScheduler(
@@ -40,20 +41,31 @@ export function createDebouncedSettingScheduler(
   return { schedule, cancel };
 }
 
-export function useDebouncedSettingSaver(delayMs: number = 500): (key: string, value: string) => void {
-  return useDebouncedSettingSaverController(delayMs).saveSetting;
+export function useDebouncedSettingSaver(delayMs: number = 500): [
+  (key: string, value: string) => void,
+  boolean
+] {
+  const controller = useDebouncedSettingSaverController(delayMs);
+  return [controller.saveSetting, controller.isPending];
 }
 
 export function useDebouncedSettingSaverController(delayMs: number = 500): DebouncedSettingSaverController {
   const timerRef = useRef<number | null>(null);
+  const [isPending, setIsPending] = useState(false);
 
   const saveSetting = useCallback((key: string, value: string) => {
+    // Cancel previous timer
     if (timerRef.current !== null) {
       window.clearTimeout(timerRef.current);
     }
 
+    // Mark as pending immediately for optimistic UI feedback
+    setIsPending(true);
+
     timerRef.current = window.setTimeout(() => {
       void invoke("save_setting", { key, value });
+      setIsPending(false);
+      timerRef.current = null;
     }, delayMs);
   }, [delayMs]);
 
@@ -61,6 +73,7 @@ export function useDebouncedSettingSaverController(delayMs: number = 500): Debou
     if (timerRef.current !== null) {
       window.clearTimeout(timerRef.current);
       timerRef.current = null;
+      setIsPending(false);
     }
   }, []);
 
@@ -73,5 +86,5 @@ export function useDebouncedSettingSaverController(delayMs: number = 500): Debou
     };
   }, []);
 
-  return { saveSetting, cancelPendingSave };
+  return { saveSetting, cancelPendingSave, isPending };
 }

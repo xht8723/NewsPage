@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 interface PreferencePanelProps {
   className?: string;
   isDarkMode: boolean;
@@ -10,7 +12,7 @@ interface PreferencePanelProps {
   onSetPreferenceConcepts: (field: "likedConcepts" | "dislikedConcepts", value: string) => void;
 }
 
-export function PreferencePanel({
+function PreferencePanelComponent({
   className = "",
   isDarkMode,
   sortMode,
@@ -101,3 +103,5 @@ export function PreferencePanel({
     </div>
   );
 }
+
+export const PreferencePanel = memo(PreferencePanelComponent);
