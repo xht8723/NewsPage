@@ -1296,10 +1296,15 @@ async fn get_enriched_news(
     let source_blacklist = parse_source_blacklist(&settings_map);
     let feed_categories = if category.is_none() {
         if let Some(ref selected_feed_id) = feed_id {
-            let categories = db::list_feed_categories(&state.db, selected_feed_id)
-                .await
-                .map_err(|e| format!("DB feed topic read error: {}", e))?;
-            Some(categories.into_iter().collect::<HashSet<String>>())
+            if selected_feed_id == SYSTEM_ALL_TOPICS_FEED_ID {
+                // The system All feed always aggregates persisted articles across categories.
+                None
+            } else {
+                let categories = db::list_feed_categories(&state.db, selected_feed_id)
+                    .await
+                    .map_err(|e| format!("DB feed topic read error: {}", e))?;
+                Some(categories.into_iter().collect::<HashSet<String>>())
+            }
         } else {
             None
         }
@@ -1634,6 +1639,9 @@ async fn set_feed_categories_action(
     let feed_id = request.feed_id.trim();
     if feed_id.is_empty() {
         return Err("Feed id is required".to_string());
+    }
+    if feed_id == SYSTEM_ALL_TOPICS_FEED_ID {
+        return Err("The default All Topics feed cannot be customized".to_string());
     }
 
     set_feed_categories(&state.db, feed_id, &request.categories)

@@ -1196,6 +1196,16 @@ let feeds = list_feeds_with_topics(&pool)
     .await
     .expect("default feeds should list with topics");
 
+let all_topics = feeds
+    .iter()
+    .find(|feed| feed.id == "feed-all")
+    .expect("all topics system feed should exist");
+assert_eq!(all_topics.name, "All");
+assert!(
+    all_topics.categories.is_empty(),
+    "all topics feed should remain unmapped so it can aggregate persisted articles"
+);
+
 let world_nation = feeds
     .iter()
     .find(|feed| feed.id == "feed-world-nation")

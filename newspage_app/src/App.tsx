@@ -41,7 +41,6 @@ import { FeedManagerPanel } from "./components/FeedManagerPanel";
 import { FeedNavigationList } from "./components/FeedNavigationList";
 import { DotsSpinner } from "./components/DotsSpinner";
 import { NeonCheckbox } from "./components/NeonCheckbox";
-import { SavingIndicator } from "./components/SavingIndicator";
 import { VirtualizedArticleList } from "./components/VirtualizedArticleList";
 import type { TranslationRuntimeConfig } from "./hooks/useLiveTranslation";
 import { addSourceToBlacklist, normalizeSourceName, parseSourceBlacklist, toNormalizedSourceSet } from "./utils/sourceBlacklist";
@@ -145,7 +144,7 @@ function App(): React.JSX.Element {
   const [dontAskFeedDeleteAgain, setDontAskFeedDeleteAgain] = useState(false);
   const [configPopupMessage, setConfigPopupMessage] = useState("");
   const [relevanceWarning, setRelevanceWarning] = useState<string | null>(null);
-  const { saveSetting, cancelPendingSave, isPending: isSavingSettings } = useDebouncedSettingSaverController(500);
+  const { saveSetting, cancelPendingSave } = useDebouncedSettingSaverController(500);
   const [isEmbeddingReady, setIsEmbeddingReady] = useState(false);
   const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState(DEFAULT_EMBEDDING_MODEL);
   const [startupPhase, setStartupPhase] = useState<StartupPhase>("loading-settings");
@@ -1152,6 +1151,8 @@ function App(): React.JSX.Element {
               saveSetting("selectedFeedId", feedId);
             }}
             onReorderFeedByDrag={reorderFeedByDrag}
+            onRenameFeed={renameFeed}
+            onToggleFeedVisibility={toggleFeedVisibility}
           />
 
           {availableFeeds.length === 0 && (
@@ -1715,7 +1716,6 @@ function App(): React.JSX.Element {
         onClose={() => setShowLogPanel(false)}
       />
 
-      <SavingIndicator isSaving={isSavingSettings} isDarkMode={isDarkMode} />
     </div>
   );
 }
