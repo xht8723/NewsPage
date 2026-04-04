@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { ArrowLeft } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { ARTICLE_HERO_FALLBACK_URL } from "../constants/news";
 import { useImageFallback } from "../hooks/useImageFallback";
 import { useLiveTranslation, type TranslationRuntimeConfig } from "../hooks/useLiveTranslation";
 import type { NewsArticle } from "../types/news";
@@ -33,7 +34,7 @@ export function ArticleDetailModal({
   const [articleSnapshot, setArticleSnapshot] = useState<NewsArticle | null>(null);
   const { isMounted, isClosing } = usePanelTransition(!!selectedArticle, 170);
   const activeArticle = selectedArticle ?? articleSnapshot;
-  const onThumbnailError = useImageFallback("https://placehold.co/1200x640/27272a/a1a1aa?text=News");
+  const onThumbnailError = useImageFallback(ARTICLE_HERO_FALLBACK_URL);
 
   useEffect(() => {
     if (selectedArticle) {

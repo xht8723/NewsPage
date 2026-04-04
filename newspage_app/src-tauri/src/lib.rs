@@ -42,8 +42,6 @@ pub mod platform_llm;
 pub mod local_embedding;
 pub mod logging;
 
-pub type CleanedArticle = NewsItem;
-
 const DEFAULT_OLLAMA_ADDRESS: &str = "http://127.0.0.1:11434";
 const DEFAULT_OLLAMA_MODEL: &str = "qwen2.5:3b";
 const DEFAULT_LOCAL_EMBEDDING_MODEL: &str = local_embedding::DEFAULT_LOCAL_EMBEDDING_MODEL;
@@ -1301,17 +1299,17 @@ async fn get_enriched_news(
             let categories = db::list_feed_categories(&state.db, selected_feed_id)
                 .await
                 .map_err(|e| format!("DB feed topic read error: {}", e))?;
-            if categories.is_empty() {
-                None
-            } else {
-                Some(categories.into_iter().collect::<HashSet<String>>())
-            }
+            Some(categories.into_iter().collect::<HashSet<String>>())
         } else {
             None
         }
     } else {
         None
     };
+
+    if category.is_none() && matches!(feed_categories.as_ref(), Some(categories) if categories.is_empty()) {
+        return Ok(vec![]);
+    }
 
     if use_scoring {
         let embedding_model = local_embedding_model
@@ -1527,8 +1525,16 @@ async fn create_feed_action(
     if name.is_empty() {
         return Err("Feed name is required".to_string());
     }
-    if request.categories.is_empty() {
-        return Err("Select at least one topic category for this feed".to_string());
+
+    let normalized_name = name.to_ascii_lowercase();
+    let existing_feeds = list_feeds_with_topics(&state.db)
+        .await
+        .map_err(|e| format!("Failed to validate feed name: {}", e))?;
+    if existing_feeds
+        .iter()
+        .any(|feed| feed.name.trim().to_ascii_lowercase() == normalized_name)
+    {
+        return Err(format!("A feed named '{}' already exists", name));
     }
 
     create_feed(&state.db, name, &request.categories)
@@ -1548,6 +1554,17 @@ async fn rename_feed_action(
     }
     if name.is_empty() {
         return Err("Feed name is required".to_string());
+    }
+
+    let normalized_name = name.to_ascii_lowercase();
+    let existing_feeds = list_feeds_with_topics(&state.db)
+        .await
+        .map_err(|e| format!("Failed to validate feed name: {}", e))?;
+    if existing_feeds
+        .iter()
+        .any(|feed| feed.id != feed_id && feed.name.trim().to_ascii_lowercase() == normalized_name)
+    {
+        return Err(format!("A feed named '{}' already exists", name));
     }
 
     rename_feed(&state.db, feed_id, name)
@@ -1617,9 +1634,6 @@ async fn set_feed_categories_action(
     let feed_id = request.feed_id.trim();
     if feed_id.is_empty() {
         return Err("Feed id is required".to_string());
-    }
-    if request.categories.is_empty() {
-        return Err("A feed must contain at least one topic category".to_string());
     }
 
     set_feed_categories(&state.db, feed_id, &request.categories)

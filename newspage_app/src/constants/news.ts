@@ -24,6 +24,8 @@ export const OPENAI_MODELS = ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"] as cons
 export const CLAUDE_MODELS = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6"] as const;
 export const GEMINI_MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-flash-preview"] as const;
 export const DEFAULT_EMBEDDING_MODEL = "multilingual-e5-small";
+export const ARTICLE_THUMBNAIL_FALLBACK_URL = "https://placehold.co/640x360/27272a/a1a1aa?text=News";
+export const ARTICLE_HERO_FALLBACK_URL = "https://placehold.co/1200x640/27272a/a1a1aa?text=News";
 export const LOCAL_EMBEDDING_MODELS = [
   "multilingual-e5-small",
   "multilingual-e5-base",

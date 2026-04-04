@@ -34,7 +34,7 @@ interface FeedManagerPanelProps {
   feeds: FeedDefinition[];
   feedSources: FeedSource[];
   isDarkMode: boolean;
-  onCreateFeed: (name: string, categories: string[]) => Promise<void>;
+  onCreateFeed: (name: string, categories: string[]) => Promise<FeedDefinition | null>;
   onRenameFeed: (feedId: string, name: string) => Promise<void>;
   onDeleteFeed: (feedId: string) => Promise<void>;
   onToggleFeedVisibility: (feedId: string, isVisible: boolean) => Promise<void>;
@@ -110,7 +110,6 @@ export function FeedManagerPanel({
   onReorderFeedByDrag,
 }: FeedManagerPanelProps): React.JSX.Element {
   const [draftName, setDraftName] = useState("");
-  const [draftCategories, setDraftCategories] = useState<string[]>(["world"]);
   const [renamingFeedId, setRenamingFeedId] = useState<string | null>(null);
   const [renamingValue, setRenamingValue] = useState("");
   const [expandedFeedIds, setExpandedFeedIds] = useState<Record<string, boolean>>({});
@@ -148,18 +147,6 @@ export function FeedManagerPanel({
       ...current,
       [feedId]: !current[feedId],
     }));
-  };
-
-  const toggleDraftCategory = (category: string) => {
-    setDraftCategories((current) => {
-      if (current.includes(category)) {
-        if (current.length === 1) {
-          return current;
-        }
-        return current.filter((item) => item !== category);
-      }
-      return [...current, category];
-    });
   };
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -242,28 +229,17 @@ export function FeedManagerPanel({
               : "border-zinc-300 bg-zinc-100 text-zinc-900 placeholder-zinc-500"
           }`}
         />
-        <div className="flex flex-wrap gap-1">
-          {TOPIC_CATEGORIES.map((category) => {
-            const key = category.toLowerCase();
-            const active = draftCategories.includes(key);
-            return (
-              <button
-                key={`draft-${category}`}
-                type="button"
-                onClick={() => toggleDraftCategory(key)}
-                className={pillClass(active, isDarkMode)}
-              >
-                {category}
-              </button>
-            );
-          })}
-        </div>
         <button
           type="button"
           onClick={async () => {
-            await onCreateFeed(draftName, draftCategories);
+            const createdFeed = await onCreateFeed(draftName, []);
+            if (createdFeed) {
+              setExpandedFeedIds((current) => ({
+                ...current,
+                [createdFeed.id]: true,
+              }));
+            }
             setDraftName("");
-            setDraftCategories(["world"]);
           }}
           className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-[10px] font-bold uppercase tracking-widest ${
             isDarkMode
@@ -287,6 +263,7 @@ export function FeedManagerPanel({
           <div className="space-y-2">
             {orderedFeeds.map((feed, index) => {
               const normalizedCategories = feed.categories.map((item) => item.toLowerCase());
+              const isFeedEmpty = normalizedCategories.length === 0;
               const isExpanded = !!expandedFeedIds[feed.id];
               const canDrag = orderedFeeds.length > 1;
               const showInsertionLine = activeFeedId !== null && overFeedId === feed.id && activeFeedId !== feed.id;
@@ -446,9 +423,6 @@ export function FeedManagerPanel({
                             const next = active
                               ? normalizedCategories.filter((item) => item !== key)
                               : [...normalizedCategories, key];
-                            if (next.length === 0) {
-                              return;
-                            }
                             await onSetFeedCategories(feed.id, next);
                           }}
                           className={pillClass(active, isDarkMode)}
@@ -458,6 +432,12 @@ export function FeedManagerPanel({
                       );
                     })}
                   </div>
+
+                  {isFeedEmpty && (
+                    <p className={`mt-2 text-[11px] ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
+                      This feed is empty. Add topic categories or RSS sources below to include articles.
+                    </p>
+                  )}
 
                   <p className={`mt-3 mb-1 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>RSS Sources</p>
                   {sortedSources.length === 0 ? (
@@ -476,9 +456,6 @@ export function FeedManagerPanel({
                               const next = active
                                 ? normalizedCategories.filter((item) => item !== sourceCategory)
                                 : [...normalizedCategories, sourceCategory];
-                              if (next.length === 0) {
-                                return;
-                              }
                               await onSetFeedCategories(feed.id, next);
                             }}
                             title={active ? `Remove "${source.display_name}" articles from this feed` : `Include "${source.display_name}" articles in this feed`}

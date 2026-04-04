@@ -433,8 +433,9 @@ function App(): React.JSX.Element {
   }, []);
 
   const createFeed = useCallback(async (name: string, categories: string[]) => {
-    await invoke("create_feed_action", { request: { name, categories } });
+    const created = await invoke<FeedDefinition>("create_feed_action", { request: { name, categories } });
     await loadFeeds();
+    return created;
   }, [loadFeeds]);
 
   const renameFeed = useCallback(async (feedId: string, name: string) => {
@@ -1510,10 +1511,11 @@ function App(): React.JSX.Element {
                 isDarkMode={isDarkMode}
                 onCreateFeed={async (name, categories) => {
                   try {
-                    await createFeed(name, categories);
+                    return await createFeed(name, categories);
                   } catch (error) {
                     setConfigPopupMessage(String(error));
                     setShowConfigPopup(true);
+                    return null;
                   }
                 }}
                 onRenameFeed={async (feedId, name) => {
@@ -1596,7 +1598,7 @@ function App(): React.JSX.Element {
 
       {configPopupTransition.isMounted && (
         <div
-          className={`${configPopupTransition.isClosing ? "popup-overlay-out" : "popup-overlay"} fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4`}
+          className={`${configPopupTransition.isClosing ? "popup-overlay-out" : "popup-overlay"} fixed inset-0 z-[130] flex items-center justify-center bg-black/60 p-4`}
           onClick={() => setShowConfigPopup(false)}
         >
           <div
@@ -1621,16 +1623,6 @@ function App(): React.JSX.Element {
                 }`}
               >
                 Dismiss
-              </button>
-              <button
-                onClick={() => { setShowConfigPopup(false); setShowSettings(true); }}
-                className={`rounded-lg border px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
-                  isDarkMode
-                    ? "border-zinc-600 bg-zinc-200 text-zinc-900 hover:bg-white"
-                    : "border-zinc-700 bg-zinc-800 text-white hover:bg-zinc-900"
-                }`}
-              >
-                Open Settings
               </button>
             </div>
           </div>

@@ -493,3 +493,53 @@ pub fn cache_dir_exists() -> bool {
         .map(|p| std::path::Path::new(&p).exists())
         .unwrap_or(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ensure_model_supported, list_supported_models, model_spec, normalized_model,
+        DEFAULT_LOCAL_EMBEDDING_MODEL,
+    };
+
+    #[test]
+    fn normalized_model_uses_default_for_missing_or_blank_values() {
+        assert_eq!(normalized_model(None), DEFAULT_LOCAL_EMBEDDING_MODEL);
+        assert_eq!(normalized_model(Some("   ")), DEFAULT_LOCAL_EMBEDDING_MODEL);
+    }
+
+    #[test]
+    fn normalized_model_trims_and_lowercases_input() {
+        assert_eq!(normalized_model(Some("  LaBSE  ")), "labse");
+        assert_eq!(normalized_model(Some("BGE-M3")), "bge-m3");
+    }
+
+    #[test]
+    fn ensure_model_supported_accepts_case_insensitive_names() {
+        assert_eq!(ensure_model_supported(Some("LaBSE")).unwrap(), "labse");
+        assert_eq!(ensure_model_supported(Some("  multilingual-e5-large ")).unwrap(), "multilingual-e5-large");
+    }
+
+    #[test]
+    fn ensure_model_supported_returns_helpful_error_for_unknown_model() {
+        let error = ensure_model_supported(Some("unknown-model")).unwrap_err();
+
+        assert!(error.contains("Unsupported local embedding model 'unknown-model'"));
+        assert!(error.contains("multilingual-e5-small"));
+        assert!(error.contains("LaBSE"));
+    }
+
+    #[test]
+    fn list_supported_models_matches_known_specs() {
+        let supported = list_supported_models();
+
+        assert!(supported.contains(&"multilingual-e5-small".to_string()));
+        assert!(supported.contains(&"LaBSE".to_string()));
+        assert_eq!(supported.len(), 6);
+    }
+
+    #[test]
+    fn model_specs_track_prefix_requirements() {
+        assert_eq!(model_spec("multilingual-e5-small").unwrap().requires_prefix, true);
+        assert_eq!(model_spec("labse").unwrap().requires_prefix, false);
+    }
+}

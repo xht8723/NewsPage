@@ -1,13 +1,13 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import annFavicon from "../assets/favicon.ico";
+import { ARTICLE_THUMBNAIL_FALLBACK_URL } from "../constants/news";
 import type { BackendNewsItem, NewsArticle } from "../types/news";
 import { getUtcDateKey, toTopicCategory } from "./newsMeta";
 
 export function resolveThumbnailSrc(thumbnail: string): string {
-  const fallback = "https://placehold.co/640x360/27272a/a1a1aa?text=News";
   const value = thumbnail.trim();
   if (!value) {
-    return fallback;
+    return ARTICLE_THUMBNAIL_FALLBACK_URL;
   }
 
   if (/^(asset|tauri|file):/i.test(value)) {
@@ -22,7 +22,7 @@ export function resolveThumbnailSrc(thumbnail: string): string {
     const normalizedPath = value.replace(/\\/g, "/");
     return convertFileSrc(normalizedPath);
   } catch {
-    return fallback;
+    return ARTICLE_THUMBNAIL_FALLBACK_URL;
   }
 }
 

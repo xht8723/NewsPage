@@ -6,17 +6,44 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::logging;
 use crate::news_item::NewsItem;
 
-const DEFAULT_FEED_TOPICS: &[(&str, &str)] = &[
-    ("world", "World"),
-    ("nation", "Nation"),
-    ("business", "Business"),
-    ("technology", "Technology"),
-    ("entertainment", "Entertainment"),
-    ("science", "Science"),
-    ("sports", "Sports"),
-    ("health", "Health"),
-    ("anime", "Anime"),
-    ("gaming", "Gaming"),
+struct DefaultFeedSeed {
+    id: &'static str,
+    name: &'static str,
+    slug: &'static str,
+    categories: &'static [&'static str],
+}
+
+const DEFAULT_FEED_TOPICS: &[DefaultFeedSeed] = &[
+    DefaultFeedSeed {
+        id: "feed-world-nation",
+        name: "World & Nation",
+        slug: "world-nation",
+        categories: &["world", "nation"],
+    },
+    DefaultFeedSeed {
+        id: "feed-entertainment",
+        name: "Entertainment",
+        slug: "entertainment",
+        categories: &["anime", "gaming", "entertainment", "technology"],
+    },
+    DefaultFeedSeed {
+        id: "feed-science-health",
+        name: "Science & Health",
+        slug: "science-health",
+        categories: &["science", "health"],
+    },
+    DefaultFeedSeed {
+        id: "feed-sports",
+        name: "Sports",
+        slug: "sports",
+        categories: &["sports"],
+    },
+    DefaultFeedSeed {
+        id: "feed-business",
+        name: "Bussiness",
+        slug: "business",
+        categories: &["business"],
+    },
 ];
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -258,24 +285,25 @@ VALUES (?1, ?2, ?3, 1, 0)",
     .execute(&mut *tx)
     .await?;
 
-    for (index, (category, name)) in DEFAULT_FEED_TOPICS.iter().enumerate() {
-        let feed_id = format!("feed-{}", category);
+    for (index, feed) in DEFAULT_FEED_TOPICS.iter().enumerate() {
         sqlx::query(
             "INSERT INTO feed_definitions(id, name, slug, is_visible, sort_order)
 VALUES (?1, ?2, ?3, 1, ?4)",
         )
-        .bind(feed_id.as_str())
-        .bind(*name)
-        .bind(*category)
+        .bind(feed.id)
+        .bind(feed.name)
+        .bind(feed.slug)
         .bind((index + 1) as i64)
         .execute(&mut *tx)
         .await?;
 
-        sqlx::query("INSERT INTO feed_topic_map(feed_id, category) VALUES (?1, ?2)")
-            .bind(feed_id.as_str())
-            .bind(*category)
-            .execute(&mut *tx)
-            .await?;
+        for category in feed.categories {
+            sqlx::query("INSERT INTO feed_topic_map(feed_id, category) VALUES (?1, ?2)")
+                .bind(feed.id)
+                .bind(*category)
+                .execute(&mut *tx)
+                .await?;
+        }
     }
 
     tx.commit().await?;
@@ -342,13 +370,14 @@ pub async fn create_feed(
         suffix += 1;
     }
 
-    let next_sort_order: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM feed_definitions")
-        .fetch_one(pool)
-        .await?;
+    let next_sort_order: i64 = 0;
     let id = generate_feed_id(&slug);
     let normalized_categories = normalize_categories(categories);
 
     let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE feed_definitions SET sort_order = sort_order + 1, updated_at = CURRENT_TIMESTAMP")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(
         "INSERT INTO feed_definitions(id, name, slug, is_visible, sort_order)
 VALUES (?1, ?2, ?3, 1, ?4)",
@@ -1111,5 +1140,103 @@ delete_feed(&pool, &created.id).await.expect("feed delete should work");
 let sources = list_feed_sources(&pool).await.expect("sources should remain");
 assert_eq!(sources.len(), 1);
 assert_eq!(sources[0].display_name, "Example Feed");
+}
+
+#[tokio::test]
+async fn feed_categories_can_be_empty() {
+let db_url = temp_db_path();
+let pool = init_db(&db_url).await.expect("db init should succeed");
+
+let created = create_feed(&pool, "Empty Feed", &[])
+    .await
+    .expect("feed create should allow empty categories");
+assert!(created.categories.is_empty(), "new feed should start empty");
+
+set_feed_categories(&pool, &created.id, &[])
+    .await
+    .expect("set_feed_categories should allow empty categories");
+
+let categories = list_feed_categories(&pool, &created.id)
+    .await
+    .expect("list_feed_categories should work");
+assert!(categories.is_empty(), "feed categories should remain empty");
+}
+
+#[tokio::test]
+async fn create_feed_inserts_new_feed_at_top() {
+let db_url = temp_db_path();
+let pool = init_db(&db_url).await.expect("db init should succeed");
+
+let first = create_feed(&pool, "My First", &[])
+    .await
+    .expect("first feed create should work");
+let second = create_feed(&pool, "My Second", &[])
+    .await
+    .expect("second feed create should work");
+
+let feeds = list_feeds(&pool).await.expect("feeds should list");
+let first_idx = feeds
+    .iter()
+    .position(|feed| feed.id == first.id)
+    .expect("first feed should exist");
+let second_idx = feeds
+    .iter()
+    .position(|feed| feed.id == second.id)
+    .expect("second feed should exist");
+
+assert!(second_idx < first_idx, "newly created feed should be ordered at top");
+}
+
+#[tokio::test]
+async fn seed_default_feeds_uses_grouped_category_mappings() {
+let db_url = temp_db_path();
+let pool = init_db(&db_url).await.expect("db init should succeed");
+
+let feeds = list_feeds_with_topics(&pool)
+    .await
+    .expect("default feeds should list with topics");
+
+let world_nation = feeds
+    .iter()
+    .find(|feed| feed.id == "feed-world-nation")
+    .expect("world and nation default feed should exist");
+assert_eq!(world_nation.name, "World & Nation");
+assert_eq!(world_nation.categories, vec!["nation".to_string(), "world".to_string()]);
+
+let entertainment = feeds
+    .iter()
+    .find(|feed| feed.id == "feed-entertainment")
+    .expect("entertainment default feed should exist");
+assert_eq!(entertainment.name, "Entertainment");
+assert_eq!(
+    entertainment.categories,
+    vec![
+        "anime".to_string(),
+        "entertainment".to_string(),
+        "gaming".to_string(),
+        "technology".to_string(),
+    ]
+);
+
+let science_health = feeds
+    .iter()
+    .find(|feed| feed.id == "feed-science-health")
+    .expect("science and health default feed should exist");
+assert_eq!(science_health.name, "Science & Health");
+assert_eq!(science_health.categories, vec!["health".to_string(), "science".to_string()]);
+
+let sports = feeds
+    .iter()
+    .find(|feed| feed.id == "feed-sports")
+    .expect("sports default feed should exist");
+assert_eq!(sports.name, "Sports");
+assert_eq!(sports.categories, vec!["sports".to_string()]);
+
+let business = feeds
+    .iter()
+    .find(|feed| feed.id == "feed-business")
+    .expect("business default feed should exist");
+assert_eq!(business.name, "Bussiness");
+assert_eq!(business.categories, vec!["business".to_string()]);
 }
 }

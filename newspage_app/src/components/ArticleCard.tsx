@@ -1,5 +1,5 @@
 import { ChevronRight } from "lucide-react";
-import type { LayoutMode } from "../constants/news";
+import { ARTICLE_THUMBNAIL_FALLBACK_URL, type LayoutMode } from "../constants/news";
 import { useImageFallback } from "../hooks/useImageFallback";
 import { useLiveTranslation, type TranslationRuntimeConfig } from "../hooks/useLiveTranslation";
 import type { NewsArticle } from "../types/news";
@@ -30,7 +30,7 @@ export function ArticleCard({
 }: ArticleCardProps): React.JSX.Element {
   const isListLayout = layout === "list";
   const isCompactListLayout = layout === "compact_list";
-  const onThumbnailError = useImageFallback("https://placehold.co/640x360/27272a/a1a1aa?text=News");
+  const onThumbnailError = useImageFallback(ARTICLE_THUMBNAIL_FALLBACK_URL);
   const translatedTitle = useLiveTranslation({
     text: item.title,
     sourceLanguage: item.language,
