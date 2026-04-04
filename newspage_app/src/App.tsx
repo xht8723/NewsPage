@@ -11,6 +11,8 @@ import {
   Languages,
   SlidersHorizontal,
   Newspaper,
+  LayoutList,
+  X,
 } from "lucide-react";
 import {
   DEFAULT_EMBEDDING_MODEL,
@@ -38,6 +40,9 @@ import { RssHubSettingsModal } from "./components/RssHubSettingsModal";
 import { CustomRssFeedModal } from "./components/CustomRssFeedModal";
 import { FeedManagerPanel } from "./components/FeedManagerPanel";
 import { FeedNavigationList } from "./components/FeedNavigationList";
+import { DotsSpinner } from "./components/DotsSpinner";
+import { NeonCheckbox } from "./components/NeonCheckbox";
+import { usePanelTransition } from "./hooks/usePanelTransition";
 import type { TranslationRuntimeConfig } from "./hooks/useLiveTranslation";
 import { addSourceToBlacklist, normalizeSourceName, parseSourceBlacklist, toNormalizedSourceSet } from "./utils/sourceBlacklist";
 import "./App.css";
@@ -109,6 +114,7 @@ function App(): React.JSX.Element {
   const [showLogPanel, setShowLogPanel] = useState(false);
   const [stageStatus, setStageStatus] = useState<Record<StageKey, { state: StageState; current?: number; total?: number; message?: string }>>(makeInitialStageStatus);
   const [contextMenu, setContextMenu] = useState<CardContextMenuState | null>(null);
+  const [contextMenuSnapshot, setContextMenuSnapshot] = useState<CardContextMenuState | null>(null);
   const [reprocessingArticleId, setReprocessingArticleId] = useState<string | null>(null);
   const seenLogKeysRef = useRef<Map<string, number>>(new Map());
   const todayString = formatDateLocal(new Date());
@@ -135,6 +141,7 @@ function App(): React.JSX.Element {
   const [rssConfig, setRssConfig] = useState<RssConfig>({ rsshub_instance_domain: "https://rsshub.app/" });
   const [feedSources, setFeedSources] = useState<FeedSource[]>([]);
   const [pendingFeedDeletion, setPendingFeedDeletion] = useState<FeedDefinition | null>(null);
+  const [pendingFeedDeletionSnapshot, setPendingFeedDeletionSnapshot] = useState<FeedDefinition | null>(null);
   const [dontAskFeedDeleteAgain, setDontAskFeedDeleteAgain] = useState(false);
   const [configPopupMessage, setConfigPopupMessage] = useState("");
   const [relevanceWarning, setRelevanceWarning] = useState<string | null>(null);
@@ -144,6 +151,37 @@ function App(): React.JSX.Element {
   const [startupPhase, setStartupPhase] = useState<StartupPhase>("loading-settings");
   const [startupErrorMessage, setStartupErrorMessage] = useState("");
   const isEmbeddingConfigured = settings.localEmbeddingModel.trim().length > 0;
+  const translatePanelTransition = usePanelTransition(showTranslatePanel, 140);
+  const categoryManagerTransition = usePanelTransition(showCategoryManager, 170);
+  const configPopupTransition = usePanelTransition(showConfigPopup, 170);
+  const pendingFeedDeletionTransition = usePanelTransition(!!pendingFeedDeletion, 170);
+  const contextMenuTransition = usePanelTransition(!!contextMenu, 140);
+
+  useEffect(() => {
+    if (pendingFeedDeletion) {
+      setPendingFeedDeletionSnapshot(pendingFeedDeletion);
+      return;
+    }
+
+    if (!pendingFeedDeletionTransition.isMounted) {
+      setPendingFeedDeletionSnapshot(null);
+    }
+  }, [pendingFeedDeletion, pendingFeedDeletionTransition.isMounted]);
+
+  const pendingFeedDeletionView = pendingFeedDeletion ?? pendingFeedDeletionSnapshot;
+
+  useEffect(() => {
+    if (contextMenu) {
+      setContextMenuSnapshot(contextMenu);
+      return;
+    }
+
+    if (!contextMenuTransition.isMounted) {
+      setContextMenuSnapshot(null);
+    }
+  }, [contextMenu, contextMenuTransition.isMounted]);
+
+  const contextMenuView = contextMenu ?? contextMenuSnapshot;
 
   const preloadEmbeddingOnStartup = useCallback(async (model: string) => {
     const normalizedModel = model.trim().toLowerCase();
@@ -1026,9 +1064,7 @@ function App(): React.JSX.Element {
             </p>
           ) : null}
           {startupPhase !== "error" ? (
-            <div className={`mt-6 overflow-hidden rounded-full border ${isDarkMode ? "border-zinc-700" : "border-zinc-300"}`}>
-              <div className={`h-2 w-full animate-pulse ${isDarkMode ? "bg-emerald-500/70" : "bg-emerald-500"}`} />
-            </div>
+            <DotsSpinner size={32} className="mt-6 text-zinc-500" />
           ) : (
             <div className="mt-6 flex flex-wrap gap-3">
               <button
@@ -1227,9 +1263,9 @@ function App(): React.JSX.Element {
               >
                 <Languages size={18} />
               </button>
-              {showTranslatePanel && (
+              {translatePanelTransition.isMounted && (
                 <div
-                  className={`absolute right-0 top-12 z-40 w-60 rounded-xl border p-3 shadow-xl ${
+                  className={`${translatePanelTransition.isClosing ? "popup-panel-pop-out" : "popup-panel-pop"} absolute right-0 top-12 z-40 w-60 rounded-xl border p-3 shadow-xl ${
                     isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-200" : "border-zinc-300 bg-white text-zinc-800"
                   }`}
                 >
@@ -1253,15 +1289,15 @@ function App(): React.JSX.Element {
                   </select>
                   <label className="flex items-center justify-between gap-2 text-xs font-semibold">
                     <span>Enable live translation</span>
-                    <input
-                      type="checkbox"
+                    <NeonCheckbox
                       checked={settings.liveTranslationEnabled}
-                      onChange={(event) => {
-                        const enabled = event.target.checked;
+                      onChange={(enabled) => {
                         setSettings((current) => ({ ...current, liveTranslationEnabled: enabled }));
                         saveSetting("liveTranslationEnabled", enabled ? "true" : "false");
                       }}
-                      className="h-4 w-4"
+                      isDarkMode={isDarkMode}
+                      size="sm"
+                      ariaLabel="Enable live translation"
                     />
                   </label>
                 </div>
@@ -1353,12 +1389,13 @@ function App(): React.JSX.Element {
         <LayoutSwitcher show={showLayoutSwitcher} isDarkMode={isDarkMode} layout={layout} onSetLayout={handleSetLayout} />
       </main>
 
-      {contextMenu && (
+      {contextMenuTransition.isMounted && contextMenuView && (
         <CardContextMenu
-          contextMenu={contextMenu}
+          contextMenu={contextMenuView}
           isDarkMode={isDarkMode}
+          isClosing={contextMenuTransition.isClosing}
           reprocessingArticleId={reprocessingArticleId}
-          isSourceBlacklisted={blacklistedSources.has(normalizeSourceName(contextMenu.article.sourceName))}
+          isSourceBlacklisted={blacklistedSources.has(normalizeSourceName(contextMenuView.article.sourceName))}
           onClose={() => setContextMenu(null)}
           onReprocess={(articleId) => {
             const article = news.find((item) => item.id === articleId);
@@ -1441,36 +1478,32 @@ function App(): React.JSX.Element {
         onClose={() => setShowCustomRssFeedSettings(false)}
       />
 
-      {showCategoryManager && (
+      {categoryManagerTransition.isMounted && (
         <div
-          className="fixed inset-0 z-[110] flex items-center justify-center bg-black/65 p-4"
+          className={`${categoryManagerTransition.isClosing ? "popup-overlay-out" : "popup-overlay"} fixed inset-0 z-[110] flex items-center justify-center bg-black/65 p-4`}
           onClick={() => setShowCategoryManager(false)}
         >
           <div
             onClick={(event) => event.stopPropagation()}
-            className={`w-full max-w-4xl rounded-3xl border shadow-2xl ${
+            className={`${categoryManagerTransition.isClosing ? "popup-panel-out" : "popup-panel"} w-full max-w-4xl rounded-3xl border shadow-2xl ${
               isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-100" : "border-zinc-300 bg-zinc-100 text-zinc-900"
             }`}
           >
             <div className={`flex items-center justify-between border-b px-5 py-4 ${isDarkMode ? "border-zinc-800" : "border-zinc-200"}`}>
-              <div>
-                <p className={`text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-                  Feed Settings
-                </p>
-                <h3 className="text-sm font-bold">Manage feeds and topic assignments</h3>
+              <div className="flex items-center gap-2">
+                <LayoutList size={18} className="text-zinc-500" />
+                <h3 className="text-base font-bold uppercase tracking-widest">Feed Settings</h3>
               </div>
               <button
                 type="button"
                 onClick={() => setShowCategoryManager(false)}
-                className={`rounded-lg border px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest transition-colors ${
-                  isDarkMode ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700" : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
-                }`}
+                className="hover:opacity-50"
               >
-                Close
+                <X size={18} />
               </button>
             </div>
 
-            <div className="max-h-[80vh] overflow-y-auto p-4">
+            <div className="hide-scrollbar max-h-[80vh] overflow-y-auto p-4">
               <FeedManagerPanel
                 feeds={feeds}
                 feedSources={feedSources}
@@ -1561,14 +1594,14 @@ function App(): React.JSX.Element {
         onClose={() => setShowCalendar(false)}
       />
 
-      {showConfigPopup && (
+      {configPopupTransition.isMounted && (
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4"
+          className={`${configPopupTransition.isClosing ? "popup-overlay-out" : "popup-overlay"} fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4`}
           onClick={() => setShowConfigPopup(false)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className={`w-full max-w-sm rounded-2xl border p-6 shadow-2xl ${
+            className={`${configPopupTransition.isClosing ? "popup-panel-out" : "popup-panel"} w-full max-w-sm rounded-2xl border p-6 shadow-2xl ${
               isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-100" : "border-zinc-300 bg-zinc-150 text-zinc-900"
             }`}
           >
@@ -1604,35 +1637,31 @@ function App(): React.JSX.Element {
         </div>
       )}
 
-      {pendingFeedDeletion && (
+      {pendingFeedDeletionTransition.isMounted && pendingFeedDeletionView && (
         <div
-          className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4"
+          className={`${pendingFeedDeletionTransition.isClosing ? "popup-overlay-out" : "popup-overlay"} fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4`}
           onClick={() => setPendingFeedDeletion(null)}
         >
           <div
             onClick={(event) => event.stopPropagation()}
-            className={`w-full max-w-md rounded-2xl border p-6 shadow-2xl ${
+            className={`${pendingFeedDeletionTransition.isClosing ? "popup-panel-out" : "popup-panel"} w-full max-w-md rounded-2xl border p-6 shadow-2xl ${
               isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-100" : "border-zinc-300 bg-zinc-150 text-zinc-900"
             }`}
           >
             <p className={`mb-1 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>
               Confirm deletion
             </p>
-            <h4 className="mb-3 text-sm font-bold">Delete feed "{pendingFeedDeletion.name}"?</h4>
+            <h4 className="mb-3 text-sm font-bold">Delete feed "{pendingFeedDeletionView.name}"?</h4>
             <p className={`mb-4 text-xs leading-relaxed ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>
               This removes the feed definition and its topic mapping. Articles remain in the database.
             </p>
 
             <label className="mb-5 flex cursor-pointer items-center gap-2">
-              <input
-                type="checkbox"
+              <NeonCheckbox
                 checked={dontAskFeedDeleteAgain}
-                onChange={(event) => setDontAskFeedDeleteAgain(event.target.checked)}
-                className={`h-4 w-4 rounded border ${
-                  isDarkMode
-                    ? "border-zinc-500 bg-zinc-800 accent-cyan-600"
-                    : "border-zinc-400 bg-white accent-emerald-500"
-                }`}
+                onChange={setDontAskFeedDeleteAgain}
+                isDarkMode={isDarkMode}
+                ariaLabel="Do not ask again for feed deletion"
               />
               <span className="text-xs">Don't show this again</span>
             </label>
@@ -1653,7 +1682,7 @@ function App(): React.JSX.Element {
                 type="button"
                 onClick={async () => {
                   try {
-                    await deleteFeed(pendingFeedDeletion.id);
+                    await deleteFeed(pendingFeedDeletionView.id);
                     if (dontAskFeedDeleteAgain) {
                       setSettings((current) => ({ ...current, showFeedDeletionConfirmation: false }));
                       saveSetting("showFeedDeletionConfirmation", "false");

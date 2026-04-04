@@ -1,10 +1,11 @@
-import type React from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import { ArrowLeft } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useImageFallback } from "../hooks/useImageFallback";
 import { useLiveTranslation, type TranslationRuntimeConfig } from "../hooks/useLiveTranslation";
 import type { NewsArticle } from "../types/news";
 import { getTagColor } from "../utils/newsMeta";
+import { usePanelTransition } from "../hooks/usePanelTransition";
 
 interface ArticleDetailModalProps {
   selectedArticle: NewsArticle | null;
@@ -28,32 +29,46 @@ export function ArticleDetailModal({
   onClose,
   onOpenUrl,
   onReprocessArticle,
-}: ArticleDetailModalProps): React.JSX.Element | null {
+}: ArticleDetailModalProps): ReactElement | null {
+  const [articleSnapshot, setArticleSnapshot] = useState<NewsArticle | null>(null);
+  const { isMounted, isClosing } = usePanelTransition(!!selectedArticle, 170);
+  const activeArticle = selectedArticle ?? articleSnapshot;
   const onThumbnailError = useImageFallback("https://placehold.co/1200x640/27272a/a1a1aa?text=News");
 
+  useEffect(() => {
+    if (selectedArticle) {
+      setArticleSnapshot(selectedArticle);
+      return;
+    }
+
+    if (!isMounted) {
+      setArticleSnapshot(null);
+    }
+  }, [selectedArticle, isMounted]);
+
   const translatedTitle = useLiveTranslation({
-    text: selectedArticle?.title ?? "",
-    sourceLanguage: selectedArticle?.language ?? "en",
+    text: activeArticle?.title ?? "",
+    sourceLanguage: activeArticle?.language ?? "en",
     targetLanguage: translationTargetLanguage,
     enabled: liveTranslationEnabled,
     runtime: translationRuntime,
   });
   const translatedSummary = useLiveTranslation({
-    text: selectedArticle?.aiSummary ?? "",
-    sourceLanguage: selectedArticle?.language ?? "en",
+    text: activeArticle?.aiSummary ?? "",
+    sourceLanguage: activeArticle?.language ?? "en",
     targetLanguage: translationTargetLanguage,
     enabled: liveTranslationEnabled,
     runtime: translationRuntime,
   });
 
-  if (!selectedArticle) {
+  if (!isMounted || !activeArticle) {
     return null;
   }
 
   return (
-    <div className={`fixed inset-0 z-50 overflow-y-auto news-scroll ${isDarkMode ? "news-scroll-dark bg-zinc-950 text-zinc-300" : "news-scroll-light bg-zinc-150 text-zinc-800"}`}>
+    <div className={`${isClosing ? "popup-overlay-out" : "popup-overlay"} fixed inset-0 z-50 overflow-y-auto news-scroll ${isDarkMode ? "news-scroll-dark bg-zinc-950 text-zinc-300" : "news-scroll-light bg-zinc-150 text-zinc-800"}`}>
       <div
-        className={`sticky top-0 z-10 flex items-center border-b px-4 py-4 md:px-8 ${
+        className={`${isClosing ? "popup-panel-out" : "popup-panel"} sticky top-0 z-10 flex items-center border-b px-4 py-4 md:px-8 ${
           isDarkMode ? "border-zinc-800 bg-zinc-950/95" : "border-zinc-200 bg-zinc-150/95"
         } backdrop-blur-md`}
       >
@@ -71,8 +86,8 @@ export function ArticleDetailModal({
       <article className="pb-16">
         <div className="h-64 w-full md:h-[30rem]">
           <img
-            src={selectedArticle.thumbnailUrl}
-            alt={`${selectedArticle.title} thumbnail`}
+            src={activeArticle.thumbnailUrl}
+            alt={`${activeArticle.title} thumbnail`}
             className="h-full w-full object-cover"
             onError={onThumbnailError}
           />
@@ -82,10 +97,10 @@ export function ArticleDetailModal({
           <div>
             <span
               className={`mb-4 inline-block rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest text-white shadow-sm ${getTagColor(
-                selectedArticle.category,
+                activeArticle.category,
               )}`}
             >
-              {selectedArticle.category}
+              {activeArticle.category}
             </span>
             <h2 className={`text-3xl font-black leading-tight md:text-5xl ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>
               {translatedTitle}
@@ -93,20 +108,20 @@ export function ArticleDetailModal({
             <div className={`mt-4 flex items-center gap-3 text-xs font-black uppercase tracking-widest ${
               isDarkMode ? "text-zinc-500" : "text-zinc-600"
             }`}>
-              {selectedArticle.sourceIconUrl ? (
+              {activeArticle.sourceIconUrl ? (
                 <img
-                  src={selectedArticle.sourceIconUrl}
-                  alt={`${selectedArticle.sourceName} icon`}
+                  src={activeArticle.sourceIconUrl}
+                  alt={`${activeArticle.sourceName} icon`}
                   className="h-5 w-5 rounded-sm object-contain"
                   onError={(e) => {
                     e.currentTarget.style.display = "none";
                   }}
                 />
               ) : null}
-              <span>{selectedArticle.sourceName}</span>
+              <span>{activeArticle.sourceName}</span>
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
-              <span className="rounded-full bg-zinc-500/20 px-3 py-1 text-[10px] font-bold uppercase tracking-widest opacity-70">{selectedArticle.date}</span>
+              <span className="rounded-full bg-zinc-500/20 px-3 py-1 text-[10px] font-bold uppercase tracking-widest opacity-70">{activeArticle.date}</span>
             </div>
           </div>
 
@@ -132,9 +147,9 @@ export function ArticleDetailModal({
           </div>
 
           <div className={`flex flex-col items-start gap-4 text-lg leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-700"}`}>
-            {selectedArticle.url && (
+            {activeArticle.url && (
               <button
-                onClick={() => onOpenUrl(selectedArticle.url)}
+                onClick={() => onOpenUrl(activeArticle.url)}
                 className={`inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors ${
                   isDarkMode
                     ? "bg-zinc-700 text-zinc-100 hover:bg-zinc-600"
@@ -146,15 +161,15 @@ export function ArticleDetailModal({
             )}
             <button
               type="button"
-              disabled={reprocessingArticleId === selectedArticle.id}
-              onClick={() => onReprocessArticle(selectedArticle)}
+              disabled={reprocessingArticleId === activeArticle.id}
+              onClick={() => onReprocessArticle(activeArticle)}
               className={`inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors ${
                 isDarkMode
                   ? "bg-zinc-800 text-zinc-100 hover:bg-zinc-700"
                   : "bg-zinc-200 text-zinc-900 hover:bg-zinc-300"
               } disabled:cursor-not-allowed disabled:opacity-50`}
             >
-              {reprocessingArticleId === selectedArticle.id ? "Re-processing..." : "Re-process this news"}
+              {reprocessingArticleId === activeArticle.id ? "Re-processing..." : "Re-process this news"}
             </button>
           </div>
         </div>

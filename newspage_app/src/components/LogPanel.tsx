@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import { X } from "lucide-react";
 import type { ProcessLogEntry } from "../types/news";
+import { usePanelTransition } from "../hooks/usePanelTransition";
 
 interface LogPanelProps {
   isDarkMode: boolean;
@@ -34,13 +35,14 @@ function formatTimestamp(raw: string): string {
 
 export function LogPanel({ isDarkMode, logs, isOpen, onClear, onClose }: LogPanelProps): React.JSX.Element | null {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const { isMounted, isClosing } = usePanelTransition(isOpen, 170);
 
   useEffect(() => {
-    if (!isOpen || !containerRef.current) {
+    if (!isMounted || !containerRef.current) {
       return;
     }
     containerRef.current.scrollTop = containerRef.current.scrollHeight;
-  }, [isOpen, logs]);
+  }, [isMounted, logs]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -61,14 +63,14 @@ export function LogPanel({ isDarkMode, logs, isOpen, onClear, onClose }: LogPane
 
   const latestCount = useMemo(() => logs.length, [logs.length]);
 
-  if (!isOpen) {
+  if (!isMounted) {
     return null;
   }
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/55 p-4" onClick={onClose}>
+    <div className={`${isClosing ? "popup-overlay-out" : "popup-overlay"} fixed inset-0 z-[120] flex items-center justify-center bg-black/55 p-4`} onClick={onClose}>
       <div
-        className={`flex h-[80vh] w-full max-w-5xl flex-col rounded-2xl border shadow-2xl ${
+        className={`${isClosing ? "popup-panel-out" : "popup-panel"} flex h-[80vh] w-full max-w-5xl flex-col rounded-2xl border shadow-2xl ${
           isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-100" : "border-zinc-300 bg-zinc-100 text-zinc-900"
         }`}
         onClick={(event) => event.stopPropagation()}

@@ -1,9 +1,10 @@
 import type React from "react";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Check, Pencil, Plus, Rss, Trash2, X } from "lucide-react";
 import type { FeedSource } from "../types/news";
 import { normalizeRssFeedUrl } from "../utils/rssSettings";
+import { usePanelTransition } from "../hooks/usePanelTransition";
 
 interface CustomRssFeedModalProps {
   show: boolean;
@@ -41,7 +42,9 @@ export function CustomRssFeedModal({
     }
   }, [show]);
 
-  if (!show) {
+  const { isMounted, isClosing } = usePanelTransition(show, 170);
+
+  if (!isMounted) {
     return null;
   }
 
@@ -119,10 +122,10 @@ export function CustomRssFeedModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+    <div className={`${isClosing ? "popup-overlay-out" : "popup-overlay"} fixed inset-0 z-[120] flex items-center justify-center p-4`}>
       <div className="absolute inset-0 bg-black/65 backdrop-blur-sm" onClick={onClose} />
       <div
-        className={`relative w-full max-w-2xl overflow-hidden rounded-3xl border shadow-2xl ${
+        className={`${isClosing ? "popup-panel-out" : "popup-panel"} relative w-full max-w-2xl overflow-hidden rounded-3xl border shadow-2xl ${
           isDarkMode ? "border-zinc-800 bg-zinc-900 text-zinc-300" : "border-zinc-200 bg-zinc-150 text-zinc-800"
         }`}
       >
@@ -131,11 +134,9 @@ export function CustomRssFeedModal({
             isDarkMode ? "border-zinc-800 bg-zinc-950/50" : "border-zinc-200 bg-zinc-150"
           }`}
         >
-          <div>
-            <p className={`text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>
-              Custom RSS Feed
-            </p>
-            <h3 className="text-sm font-bold">Manage saved RSS feed links</h3>
+          <div className="flex items-center gap-2">
+            <Rss size={18} className="text-zinc-500" />
+            <h3 className="text-base font-bold uppercase tracking-widest">Custom RSS Feed</h3>
           </div>
           <button type="button" onClick={onClose} className="hover:opacity-60" aria-label="Close custom RSS feed settings">
             <X size={18} />

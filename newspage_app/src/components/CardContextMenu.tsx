@@ -5,6 +5,7 @@ import type { CardContextMenuState } from "../types/news";
 interface CardContextMenuProps {
   contextMenu: CardContextMenuState;
   isDarkMode: boolean;
+  isClosing?: boolean;
   reprocessingArticleId: string | null;
   isSourceBlacklisted: boolean;
   onClose: () => void;
@@ -15,6 +16,7 @@ interface CardContextMenuProps {
 export function CardContextMenu({
   contextMenu,
   isDarkMode,
+  isClosing = false,
   reprocessingArticleId,
   isSourceBlacklisted,
   onClose,
@@ -24,9 +26,9 @@ export function CardContextMenu({
   const isCurrentCardReprocessing = reprocessingArticleId === contextMenu.article.id;
 
   return (
-    <div className="fixed inset-0 z-40" onClick={onClose}>
+    <div className={`${isClosing ? "popup-overlay-out" : "popup-overlay"} fixed inset-0 z-40`} onClick={onClose}>
       <div
-        className={`absolute min-w-[220px] rounded-xl border p-2 shadow-2xl ${
+        className={`${isClosing ? "popup-panel-pop-out" : "popup-panel-pop"} absolute min-w-[220px] rounded-xl border p-2 shadow-2xl ${
           isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-200" : "border-zinc-300 bg-zinc-150 text-zinc-900"
         }`}
         style={{ left: contextMenu.x, top: contextMenu.y }}

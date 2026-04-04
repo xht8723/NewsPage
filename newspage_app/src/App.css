@@ -95,3 +95,80 @@
 .number-dial-light[type="number"] {
 	color-scheme: light;
 }
+
+@keyframes popup-overlay-fade {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
+@keyframes popup-panel-in {
+	from {
+		opacity: 0;
+		transform: translateY(8px) scale(0.985);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0) scale(1);
+	}
+}
+
+.popup-overlay {
+	animation: popup-overlay-fade 160ms ease-out both;
+}
+
+.popup-panel {
+	animation: popup-panel-in 190ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.popup-panel-pop {
+	transform-origin: top right;
+	animation: popup-panel-in 170ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes popup-overlay-fade-out {
+	from {
+		opacity: 1;
+	}
+	to {
+		opacity: 0;
+	}
+}
+
+@keyframes popup-panel-out {
+	from {
+		opacity: 1;
+		transform: translateY(0) scale(1);
+	}
+	to {
+		opacity: 0;
+		transform: translateY(8px) scale(0.985);
+	}
+}
+
+.popup-overlay-out {
+	animation: popup-overlay-fade-out 150ms ease-in both;
+}
+
+.popup-panel-out {
+	animation: popup-panel-out 160ms ease-in both;
+}
+
+.popup-panel-pop-out {
+	transform-origin: top right;
+	animation: popup-panel-out 140ms ease-in both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.popup-overlay,
+	.popup-overlay-out,
+	.popup-panel,
+	.popup-panel-out,
+	.popup-panel-pop,
+	.popup-panel-pop-out {
+		animation: none;
+	}
+}

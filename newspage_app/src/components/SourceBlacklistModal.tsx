@@ -1,6 +1,6 @@
 import type React from "react";
 import { useMemo, useState } from "react";
-import { Search, Trash2, X } from "lucide-react";
+import { EyeOff, Search, Trash2, X } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
 import type { UserSettings } from "../types/news";
 import {
@@ -8,6 +8,7 @@ import {
   normalizeSourceName,
   removeSourceFromBlacklist,
 } from "../utils/sourceBlacklist";
+import { usePanelTransition } from "../hooks/usePanelTransition";
 
 interface SourceBlacklistModalProps {
   show: boolean;
@@ -39,7 +40,9 @@ export function SourceBlacklistModal({
     return sorted.filter((source) => normalizeSourceName(source).includes(normalizedQuery));
   }, [query, settings.sourceBlacklist]);
 
-  if (!show) {
+  const { isMounted, isClosing } = usePanelTransition(show, 170);
+
+  if (!isMounted) {
     return null;
   }
 
@@ -58,10 +61,10 @@ export function SourceBlacklistModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+    <div className={`${isClosing ? "popup-overlay-out" : "popup-overlay"} fixed inset-0 z-[120] flex items-center justify-center p-4`}>
       <div className="absolute inset-0 bg-black/65 backdrop-blur-sm" onClick={onClose} />
       <div
-        className={`relative w-full max-w-2xl overflow-hidden rounded-3xl border shadow-2xl ${
+        className={`${isClosing ? "popup-panel-out" : "popup-panel"} relative w-full max-w-2xl overflow-hidden rounded-3xl border shadow-2xl ${
           isDarkMode ? "border-zinc-800 bg-zinc-900 text-zinc-300" : "border-zinc-200 bg-zinc-150 text-zinc-800"
         }`}
       >
@@ -70,11 +73,9 @@ export function SourceBlacklistModal({
             isDarkMode ? "border-zinc-800 bg-zinc-950/50" : "border-zinc-200 bg-zinc-150"
           }`}
         >
-          <div>
-            <p className={`text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>
-              Media Outlet Blacklist
-            </p>
-            <h3 className="text-sm font-bold">Manage hidden news sources</h3>
+          <div className="flex items-center gap-2">
+            <EyeOff size={18} className="text-zinc-500" />
+            <h3 className="text-base font-bold uppercase tracking-widest">Media Outlet Blacklist</h3>
           </div>
           <button type="button" onClick={onClose} className="hover:opacity-60" aria-label="Close media outlet blacklist manager">
             <X size={18} />

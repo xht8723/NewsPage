@@ -1,9 +1,11 @@
 import type React from "react";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { X } from "lucide-react";
+import { Rss, X } from "lucide-react";
 import type { FeedSource, RssConfig } from "../types/news";
 import { RSSHUB_ROUTES, normalizeRssHubInstanceDomain } from "../utils/rssSettings";
+import { NeonCheckbox } from "./NeonCheckbox";
+import { usePanelTransition } from "../hooks/usePanelTransition";
 
 interface RssHubSettingsModalProps {
   show: boolean;
@@ -31,7 +33,9 @@ export function RssHubSettingsModal({
     }
   }, [show, rssConfig.rsshub_instance_domain]);
 
-  if (!show) {
+  const { isMounted, isClosing } = usePanelTransition(show, 170);
+
+  if (!isMounted) {
     return null;
   }
 
@@ -53,6 +57,10 @@ export function RssHubSettingsModal({
     feedSources.find((s) => s.source_type === "rsshub" && s.source_ref === routeId);
 
   const toggleRoute = async (routeId: string, label: string) => {
+    if (saving) {
+      return;
+    }
+
     setSaving(true);
     try {
       const existing = getRouteSource(routeId);
@@ -79,10 +87,10 @@ export function RssHubSettingsModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+    <div className={`${isClosing ? "popup-overlay-out" : "popup-overlay"} fixed inset-0 z-[120] flex items-center justify-center p-4`}>
       <div className="absolute inset-0 bg-black/65 backdrop-blur-sm" onClick={onClose} />
       <div
-        className={`relative w-full max-w-2xl overflow-hidden rounded-3xl border shadow-2xl ${
+        className={`${isClosing ? "popup-panel-out" : "popup-panel"} relative w-full max-w-2xl overflow-hidden rounded-3xl border shadow-2xl ${
           isDarkMode ? "border-zinc-800 bg-zinc-900 text-zinc-300" : "border-zinc-200 bg-zinc-150 text-zinc-800"
         }`}
       >
@@ -91,11 +99,9 @@ export function RssHubSettingsModal({
             isDarkMode ? "border-zinc-800 bg-zinc-950/50" : "border-zinc-200 bg-zinc-150"
           }`}
         >
-          <div>
-            <p className={`text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>
-              RSSHub Settings
-            </p>
-            <h3 className="text-sm font-bold">Configure instance and routes</h3>
+          <div className="flex items-center gap-2">
+            <Rss size={18} className="text-zinc-500" />
+            <h3 className="text-base font-bold uppercase tracking-widest">RSSHub Settings</h3>
           </div>
           <button type="button" onClick={onClose} className="hover:opacity-60" aria-label="Close RSSHub settings">
             <X size={18} />
@@ -135,16 +141,13 @@ export function RssHubSettingsModal({
                   const checked = !!source;
                   return (
                     <div key={route.id} className="flex items-start gap-3 px-4 py-3">
-                      <input
-                        type="checkbox"
+                      <NeonCheckbox
                         checked={checked}
-                        disabled={saving}
                         onChange={() => void toggleRoute(route.id, route.label)}
-                        className={`mt-0.5 h-4 w-4 rounded border transition-colors ${
-                          isDarkMode
-                            ? "border-zinc-500 bg-zinc-800 accent-cyan-600"
-                            : "border-zinc-400 bg-white accent-emerald-500"
-                        }`}
+                        isDarkMode={isDarkMode}
+                        size="sm"
+                        className="mt-0.5"
+                        ariaLabel={`Toggle RSSHub route ${route.label}`}
                       />
                       <div className="min-w-0 flex-1">
                         <p className={`text-sm font-medium ${isDarkMode ? "text-zinc-200" : "text-zinc-800"}`}>{route.label}</p>

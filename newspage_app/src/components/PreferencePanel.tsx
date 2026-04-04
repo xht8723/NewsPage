@@ -24,12 +24,12 @@ export function PreferencePanel({
   return (
     <div className={`rounded-2xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/50" : "border-zinc-200 bg-zinc-150"} ${className}`.trim()}>
       <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Sort by:</p>
-      <div className={`flex items-center gap-0.5 rounded-full border p-1 text-[10px] font-black uppercase tracking-widest ${
+      <div className={`flex items-center gap-0.5 rounded-full border p-1 text-xs font-semibold tracking-wide antialiased ${
         isDarkMode ? "border-zinc-800 bg-zinc-900" : "border-zinc-200 bg-zinc-150"
       }`}>
         <button
           onClick={() => onSetSortMode("date")}
-          className={`flex-1 rounded-full px-3 py-1.5 transition-all ${
+          className={`flex-1 rounded-full px-3 py-1.5 leading-none transition-all ${
             sortMode === "date"
               ? isDarkMode
                 ? "bg-zinc-200 text-zinc-900 shadow"
@@ -44,7 +44,7 @@ export function PreferencePanel({
         <button
           onClick={() => isEmbeddingReady && onSetSortMode("score")}
           disabled={!isEmbeddingReady}
-          className={`flex-1 rounded-full px-3 py-1.5 transition-all ${
+          className={`flex-1 rounded-full px-3 py-1.5 leading-none transition-all ${
             !isEmbeddingReady
               ? isDarkMode
                 ? "cursor-not-allowed opacity-40 text-zinc-600"

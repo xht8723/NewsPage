@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { FolderOpen, RefreshCw, Settings, X } from "lucide-react";
+import { DotsSpinner } from "./DotsSpinner";
 import type React from "react";
 import type { Dispatch, SetStateAction } from "react";
+import { NeonCheckbox } from "./NeonCheckbox";
 import {
   AVAILABLE_REGIONS,
   CLAUDE_MODELS,
@@ -11,6 +13,7 @@ import {
   type OllamaConnectionState,
 } from "../constants/news";
 import type { FeedSource, LocalEmbeddingStatus, UserSettings } from "../types/news";
+import { usePanelTransition } from "../hooks/usePanelTransition";
 
 interface SettingsModalProps {
   showSettings: boolean;
@@ -77,7 +80,9 @@ export function SettingsModal({
   feedSources,
   onClose,
 }: SettingsModalProps): React.JSX.Element | null {
-  if (!showSettings) {
+  const { isMounted, isClosing } = usePanelTransition(showSettings, 170);
+
+  if (!isMounted) {
     return null;
   }
 
@@ -100,10 +105,10 @@ export function SettingsModal({
   const REPO_URL = "https://github.com/xht8723/NewsPage";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className={`${isClosing ? "popup-overlay-out" : "popup-overlay"} fixed inset-0 z-50 flex items-center justify-center p-4`}>
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div
-        className={`relative w-full max-w-6xl overflow-hidden rounded-3xl border shadow-2xl ${
+        className={`${isClosing ? "popup-panel-out" : "popup-panel"} relative w-full max-w-6xl overflow-hidden rounded-3xl border shadow-2xl ${
           isDarkMode ? "border-zinc-800 bg-zinc-900 text-zinc-300" : "border-zinc-200 bg-zinc-150 text-zinc-800"
         }`}
       >
@@ -267,19 +272,14 @@ export function SettingsModal({
                     <div>
                       <label className="mb-1.5 block text-xs font-medium opacity-70">Deletion confirmation</label>
                       <label className="flex cursor-pointer items-center gap-2">
-                        <input
-                          type="checkbox"
+                        <NeonCheckbox
                           checked={settings.showFeedDeletionConfirmation}
-                          onChange={(event) => {
-                            const checked = event.target.checked;
+                          onChange={(checked) => {
                             setSettings((current) => ({ ...current, showFeedDeletionConfirmation: checked }));
                             saveSetting("showFeedDeletionConfirmation", checked ? "true" : "false");
                           }}
-                          className={`h-4 w-4 rounded border ${
-                            isDarkMode
-                              ? "border-zinc-500 bg-zinc-800 accent-cyan-600"
-                              : "border-zinc-400 bg-white accent-emerald-500"
-                          }`}
+                          isDarkMode={isDarkMode}
+                          ariaLabel="Show deletion confirmation"
                         />
                         <span className="text-sm">Show deletion confirmation</span>
                       </label>
@@ -365,8 +365,7 @@ export function SettingsModal({
                     const checked = settings.selectedRegions.includes(region.id);
                     return (
                       <label key={region.id} className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
+                        <NeonCheckbox
                           checked={checked}
                           onChange={() => {
                             const next = checked
@@ -375,11 +374,9 @@ export function SettingsModal({
                             setSettings((s) => ({ ...s, selectedRegions: next }));
                             saveSetting("selectedRegions", JSON.stringify(next));
                           }}
-                          className={`h-4 w-4 rounded border transition-colors ${
-                            isDarkMode
-                              ? "border-zinc-500 bg-zinc-800 accent-cyan-600"
-                              : "border-zinc-400 bg-white accent-emerald-500"
-                          }`}
+                          isDarkMode={isDarkMode}
+                          size="sm"
+                          ariaLabel={`Toggle ${region.label}`}
                         />
                         <span className="text-sm">{region.label}</span>
                       </label>
@@ -478,9 +475,7 @@ export function SettingsModal({
                         : "Model status unavailable"}
                     </p>
                     {embeddingIsBusy && (
-                      <div className={`mt-3 overflow-hidden rounded-full border ${isDarkMode ? "border-zinc-700" : "border-zinc-300"}`}>
-                        <div className={`h-2 w-full animate-pulse ${isDarkMode ? "bg-emerald-500/70" : "bg-emerald-500"}`} />
-                      </div>
+                      <DotsSpinner size={20} className="mt-3 text-zinc-500" />
                     )}
                   </div>
                   <div>

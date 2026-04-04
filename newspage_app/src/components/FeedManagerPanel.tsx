@@ -19,14 +19,14 @@ import { TOPIC_CATEGORIES } from "../constants/news";
 import type { FeedDefinition, FeedSource } from "../types/news";
 
 function pillClass(active: boolean, isDarkMode: boolean): string {
-  return `rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-wide ${
+  return `rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-wide transition-all duration-200 hover:scale-[1.03] ${
     active
       ? isDarkMode
-        ? "border-cyan-500/70 bg-cyan-500/20 text-cyan-200"
-        : "border-cyan-500 bg-cyan-100 text-cyan-700"
+        ? "border-cyan-500/80 bg-cyan-600/12 text-cyan-200 shadow-[0_0_8px_rgba(8,145,178,0.28)]"
+        : "border-emerald-600 bg-emerald-600/10 text-emerald-800 shadow-[0_0_7px_rgba(5,150,105,0.24)]"
       : isDarkMode
-        ? "border-zinc-700 bg-zinc-900 text-zinc-400"
-        : "border-zinc-300 bg-zinc-100 text-zinc-600"
+        ? "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-cyan-800/70 hover:shadow-[0_0_7px_rgba(82,82,91,0.26)]"
+        : "border-zinc-300 bg-zinc-100 text-zinc-600 hover:border-emerald-400/80 hover:shadow-[0_0_7px_rgba(113,113,122,0.18)]"
   }`;
 }
 
@@ -360,7 +360,11 @@ export function FeedManagerPanel({
                       setRenamingFeedId(feed.id);
                       setRenamingValue(feed.name);
                     }}
-                    className="rounded border border-zinc-700/50 p-1 text-zinc-400"
+                    className={`rounded border p-1 transition-colors ${
+                      isDarkMode
+                        ? "border-zinc-700/50 text-zinc-400 hover:border-cyan-700/70 hover:bg-zinc-800 hover:text-zinc-200"
+                        : "border-zinc-300 text-zinc-500 hover:border-emerald-400/80 hover:bg-zinc-200 hover:text-zinc-700"
+                    }`}
                     title="Rename"
                     aria-label={`Rename ${feed.name}`}
                   >
@@ -372,7 +376,11 @@ export function FeedManagerPanel({
                   type="button"
                   onClick={() => void onReorderFeed(feed.id, "up")}
                   disabled={index === 0}
-                  className="rounded border border-zinc-700/50 p-1 text-zinc-400 disabled:opacity-30"
+                  className={`rounded border p-1 transition-colors disabled:opacity-30 ${
+                    isDarkMode
+                      ? "border-zinc-700/50 text-zinc-400 hover:border-cyan-700/70 hover:bg-zinc-800 hover:text-zinc-200"
+                      : "border-zinc-300 text-zinc-500 hover:border-emerald-400/80 hover:bg-zinc-200 hover:text-zinc-700"
+                  }`}
                 >
                   <ArrowUp size={12} />
                 </button>
@@ -380,7 +388,11 @@ export function FeedManagerPanel({
                   type="button"
                   onClick={() => void onReorderFeed(feed.id, "down")}
                   disabled={index === orderedFeeds.length - 1}
-                  className="rounded border border-zinc-700/50 p-1 text-zinc-400 disabled:opacity-30"
+                  className={`rounded border p-1 transition-colors disabled:opacity-30 ${
+                    isDarkMode
+                      ? "border-zinc-700/50 text-zinc-400 hover:border-cyan-700/70 hover:bg-zinc-800 hover:text-zinc-200"
+                      : "border-zinc-300 text-zinc-500 hover:border-emerald-400/80 hover:bg-zinc-200 hover:text-zinc-700"
+                  }`}
                 >
                   <ArrowDown size={12} />
                 </button>
@@ -389,10 +401,14 @@ export function FeedManagerPanel({
                   onClick={() => void onToggleFeedVisibility(feed.id, !feed.is_visible)}
                   title={feed.is_visible ? "Hide feed" : "Show feed"}
                   aria-label={feed.is_visible ? `Hide ${feed.name}` : `Show ${feed.name}`}
-                  className={`rounded border p-1 ${
+                  className={`rounded border p-1 transition-colors ${
                     feed.is_visible
-                      ? "border-emerald-500/40 text-emerald-400"
-                      : "border-zinc-700/50 text-zinc-500"
+                      ? isDarkMode
+                        ? "border-emerald-500/40 text-emerald-400 hover:border-emerald-400 hover:bg-emerald-500/10 hover:text-emerald-300"
+                        : "border-emerald-500/50 text-emerald-700 hover:border-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-800"
+                      : isDarkMode
+                        ? "border-zinc-700/50 text-zinc-500 hover:border-cyan-700/70 hover:bg-zinc-800 hover:text-zinc-300"
+                        : "border-zinc-300 text-zinc-500 hover:border-emerald-400/80 hover:bg-zinc-200 hover:text-zinc-700"
                   }`}
                 >
                   {feed.is_visible ? <Eye size={12} /> : <EyeOff size={12} />}
@@ -401,15 +417,23 @@ export function FeedManagerPanel({
                   <button
                     type="button"
                     onClick={() => void onDeleteFeed(feed.id)}
-                    className="rounded border border-red-500/40 p-1 text-red-400"
+                    className={`rounded border p-1 transition-colors ${
+                      isDarkMode
+                        ? "border-red-500/40 text-red-400 hover:border-red-400 hover:bg-red-500/10 hover:text-red-300"
+                        : "border-red-500/50 text-red-600 hover:border-red-600 hover:bg-red-500/10 hover:text-red-700"
+                    }`}
                   >
                     <Trash2 size={12} />
                   </button>
                 )}
               </div>
 
-              {isExpanded && (
-                <>
+              <div
+                className={`grid overflow-hidden transition-[grid-template-rows,opacity,margin] duration-300 ease-out ${
+                  isExpanded ? "mt-2 grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0 pointer-events-none"
+                }`}
+              >
+                <div className="min-h-0 space-y-0">
                   <div className="flex flex-wrap gap-1">
                     {TOPIC_CATEGORIES.map((category) => {
                       const key = category.toLowerCase();
@@ -466,8 +490,8 @@ export function FeedManagerPanel({
                       })}
                     </div>
                   )}
-                </>
-              )}
+                </div>
+              </div>
                     </>
                   )}
                 </SortableFeedCard>
