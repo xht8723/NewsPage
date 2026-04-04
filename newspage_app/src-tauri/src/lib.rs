@@ -1,19 +1,24 @@
-use crate::db::{
+﻿use crate::db::{
     count_visible_feeds,
     create_feed,
     delete_feed,
     get_article_by_id,
+    get_rss_config,
     get_unenriched_articles_by_category_and_language,
+    list_feed_sources,
     list_feeds_with_topics,
     list_unenriched_categories,
     list_unenriched_languages_by_category,
     mark_enriched,
+    remove_feed_source,
     rename_feed,
     reorder_feeds,
     seed_default_feeds,
     set_feed_categories,
     set_feed_visibility,
+    set_rsshub_domain,
     upsert_article,
+    upsert_feed_source,
 };
 use crate::news_item::{NewsItem, RankedNewsItem};
 use crate::article_extract::fetch_article_text_and_thumbnail;
@@ -704,8 +709,17 @@ async fn run_scrape_stage(
         logging::warn("Scrape", "No regions selected in settings; skipping RSS stage", None);
     }
 
+    let rss_sources = list_feed_sources(&state.db)
+        .await
+        .map_err(|e| format!("Failed to load RSS sources: {}", e))?;
+    let rsshub_domain = get_rss_config(&state.db)
+        .await
+        .map(|c| c.rsshub_instance_domain)
+        .map_err(|e| format!("Failed to load RSS config: {}", e))?;
     let scrape_context = ScrapeContext {
         selected_regions: resolved.selected_regions.clone(),
+        rss_sources,
+        rsshub_domain,
     };
     let (stage_results, scrape_was_stopped) = run_default_scrapers(&scrape_context, &state.stop_requested).await?;
     if scrape_was_stopped {
@@ -1581,9 +1595,6 @@ async fn set_feed_visibility_action(
     if feed_id.is_empty() {
         return Err("Feed id is required".to_string());
     }
-    if feed_id == SYSTEM_ALL_TOPICS_FEED_ID && !request.is_visible {
-        return Err("The default All Topics feed must remain visible".to_string());
-    }
     if !request.is_visible {
         let visible_count = count_visible_feeds(&state.db)
             .await
@@ -1643,15 +1654,7 @@ fn default_settings_map() -> HashMap<String, String> {
     map.insert("geminiModel".to_string(), DEFAULT_GEMINI_MODEL.to_string());
     map.insert("selectedRegions".to_string(), "[]".to_string());
     map.insert("sourceBlacklist".to_string(), "[]".to_string());
-    map.insert("rssHubInstanceDomain".to_string(), "https://rsshub.app/".to_string());
-    map.insert(
-        "selectedRssHubRoutes".to_string(),
-        "[\"github/trending/daily\",\"bilibili/hot-search\",\"weibo/hot-search\"]".to_string(),
-    );
-    map.insert(
-        "customRssFeeds".to_string(),
-        "[{\"name\":\"Ars Technica\",\"url\":\"https://feeds.arstechnica.com/arstechnica/index\"},{\"name\":\"The Verge\",\"url\":\"https://www.theverge.com/rss/index.xml\"},{\"name\":\"Gematsu\",\"url\":\"https://www.gematsu.com/feed\"}]".to_string(),
-    );
+    // rssHubInstanceDomain, selectedRssHubRoutes, customRssFeeds removed — now in DB (rss_config / feed_sources).
     map.insert("showFeedDeletionConfirmation".to_string(), "true".to_string());
     map.insert("likedConcepts".to_string(), "".to_string());
     map.insert("dislikedConcepts".to_string(), "".to_string());
@@ -1702,6 +1705,87 @@ fn load_settings(app: tauri::AppHandle) -> Result<HashMap<String, String>, Strin
     let raw = std::fs::read_to_string(&settings_path)
         .map_err(|e| format!("Failed to read settings.json: {}", e))?;
     serde_json::from_str(&raw).map_err(|e| format!("Failed to parse settings.json: {}", e))
+}
+
+// ─── RSS config commands ─────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn get_rss_config_action(
+    state: tauri::State<'_, AppState>,
+) -> Result<db::RssConfig, String> {
+    get_rss_config(&state.db)
+        .await
+        .map_err(|e| format!("Failed to get RSS config: {}", e))
+}
+
+#[tauri::command]
+async fn set_rsshub_domain_action(
+    state: tauri::State<'_, AppState>,
+    domain: String,
+) -> Result<(), String> {
+    let trimmed = domain.trim();
+    if trimmed.is_empty() {
+        return Err("RSSHub domain cannot be empty".to_string());
+    }
+    let parsed = reqwest::Url::parse(trimmed)
+        .map_err(|_| "RSSHub domain must be a valid http(s) URL".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err("RSSHub domain must be a valid http(s) URL".to_string());
+    }
+    set_rsshub_domain(&state.db, trimmed)
+        .await
+        .map_err(|e| format!("Failed to set RSSHub domain: {}", e))
+}
+
+// ─── Feed source commands ─────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct UpsertFeedSourceRequest {
+    source_type: String,
+    source_ref: String,
+    display_name: String,
+    enabled: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct RemoveFeedSourceRequest {
+    source_type: String,
+    source_ref: String,
+}
+
+#[tauri::command]
+async fn list_feed_sources_action(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<db::FeedSource>, String> {
+    list_feed_sources(&state.db)
+        .await
+        .map_err(|e| format!("Failed to list feed sources: {}", e))
+}
+
+#[tauri::command]
+async fn upsert_feed_source_action(
+    state: tauri::State<'_, AppState>,
+    request: UpsertFeedSourceRequest,
+) -> Result<(), String> {
+    let source_type = request.source_type.trim();
+    let source_ref = request.source_ref.trim();
+    let display_name = request.display_name.trim();
+    if source_type.is_empty() { return Err("source_type is required".to_string()); }
+    if source_ref.is_empty() { return Err("source_ref is required".to_string()); }
+    if display_name.is_empty() { return Err("display_name is required".to_string()); }
+    upsert_feed_source(&state.db, source_type, source_ref, display_name, request.enabled)
+        .await
+        .map_err(|e| format!("Failed to upsert feed source: {}", e))
+}
+
+#[tauri::command]
+async fn remove_feed_source_action(
+    state: tauri::State<'_, AppState>,
+    request: RemoveFeedSourceRequest,
+) -> Result<bool, String> {
+    remove_feed_source(&state.db, &request.source_type, &request.source_ref)
+        .await
+        .map_err(|e| format!("Failed to remove feed source: {}", e))
 }
 
 #[tauri::command]
@@ -2209,7 +2293,12 @@ pub fn run() {
             open_app_data_dir,
             save_setting,
             load_settings,
-            purge_database
+            purge_database,
+            get_rss_config_action,
+            set_rsshub_domain_action,
+            list_feed_sources_action,
+            upsert_feed_source_action,
+            remove_feed_source_action
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -2330,4 +2419,6 @@ mod helper_tests {
         assert_eq!(parsed.len(), 2);
     }
 }
+
+
 

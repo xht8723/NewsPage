@@ -24,10 +24,11 @@ describe("newsMeta", () => {
     expect(getUtcDateKey("2026-03-26 lorem ipsum")).toBe("2026-03-26");
   });
 
-  it("maps categories case-insensitively and defaults to World", () => {
+  it("maps known categories case-insensitively and preserves custom RSS source labels", () => {
     expect(toTopicCategory("anime")).toBe("Anime");
     expect(toTopicCategory(" TECHNOLOGY ")).toBe("Technology");
-    expect(toTopicCategory("unknown-category")).toBe("World");
+    expect(toTopicCategory("unknown-category")).toBe("unknown-category");
+    expect(toTopicCategory("   ")).toBe("World");
   });
 
   it("provides provider display labels", () => {

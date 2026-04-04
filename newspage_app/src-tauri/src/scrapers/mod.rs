@@ -1,18 +1,23 @@
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::db::FeedSource;
 use crate::news_item::NewsItem;
 
 pub mod ann;
 pub mod automaton;
 pub mod gl_rss;
+pub mod rss_sources;
 
 use ann::AnnScraperStage;
 use automaton::AutomatonScraperStage;
 use gl_rss::GlRssScraperStage;
+use rss_sources::RssSourcesScraperStage;
 
 pub struct ScrapeContext {
     pub selected_regions: Vec<String>,
+    pub rss_sources: Vec<FeedSource>,
+    pub rsshub_domain: String,
 }
 
 pub struct StageRunResult {
@@ -37,6 +42,7 @@ fn default_scraper_stages() -> Vec<Box<dyn ScraperStage>> {
         // To disable Automaton: remove the line below (or set ENABLED=false in automaton.rs).
         Box::new(AutomatonScraperStage),
         Box::new(GlRssScraperStage),
+        Box::new(RssSourcesScraperStage),
     ]
 }
 

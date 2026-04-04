@@ -5,7 +5,6 @@ import {
   Calendar,
   Moon,
   Sun,
-  ChevronRight,
   Search,
   RefreshCw,
   Settings,
@@ -19,7 +18,7 @@ import {
   type LayoutMode,
   type OllamaConnectionState,
 } from "./constants/news";
-import type { NewsArticle, BackendNewsItem, UserSettings, CardContextMenuState, LocalEmbeddingStatus, ProcessLogEntry, ProcessStageEvent, FeedDefinition } from "./types/news";
+import type { NewsArticle, BackendNewsItem, UserSettings, CardContextMenuState, LocalEmbeddingStatus, ProcessLogEntry, ProcessStageEvent, FeedDefinition, FeedSource, RssConfig } from "./types/news";
 import { mapBackendNewsItem } from "./utils/newsMapper";
 import { formatDateLocal, offsetDateString, getProviderLabel } from "./utils/newsMeta";
 import { buildLLMArgs, getSelectedApiKey, getSelectedEndpoint, getSelectedModel } from "./utils/llmConfig";
@@ -38,16 +37,9 @@ import { CategoryLimitsModal } from "./components/CategoryLimitsModal";
 import { RssHubSettingsModal } from "./components/RssHubSettingsModal";
 import { CustomRssFeedModal } from "./components/CustomRssFeedModal";
 import { FeedManagerPanel } from "./components/FeedManagerPanel";
+import { FeedNavigationList } from "./components/FeedNavigationList";
 import type { TranslationRuntimeConfig } from "./hooks/useLiveTranslation";
 import { addSourceToBlacklist, normalizeSourceName, parseSourceBlacklist, toNormalizedSourceSet } from "./utils/sourceBlacklist";
-import {
-  DEFAULT_CUSTOM_RSS_FEEDS,
-  DEFAULT_RSSHUB_INSTANCE_DOMAIN,
-  DEFAULT_SELECTED_RSSHUB_ROUTES,
-  normalizeRssHubInstanceDomain,
-  parseCustomRssFeedsSetting,
-  parseJsonStringArraySetting,
-} from "./utils/rssSettings";
 import "./App.css";
 
 type StageKey = "scrape" | "extract" | "enrich" | "persist";
@@ -85,9 +77,6 @@ function createDefaultSettings(): UserSettings {
     geminiModel: "gemini-2.5-flash",
     selectedRegions: [],
     sourceBlacklist: [],
-    rssHubInstanceDomain: DEFAULT_RSSHUB_INSTANCE_DOMAIN,
-    selectedRssHubRoutes: [...DEFAULT_SELECTED_RSSHUB_ROUTES],
-    customRssFeeds: [...DEFAULT_CUSTOM_RSS_FEEDS],
     showFeedDeletionConfirmation: true,
     likedConcepts: "",
     dislikedConcepts: "",
@@ -143,6 +132,8 @@ function App(): React.JSX.Element {
   const [showRssHubSettings, setShowRssHubSettings] = useState(false);
   const [showCustomRssFeedSettings, setShowCustomRssFeedSettings] = useState(false);
   const [feeds, setFeeds] = useState<FeedDefinition[]>([]);
+  const [rssConfig, setRssConfig] = useState<RssConfig>({ rsshub_instance_domain: "https://rsshub.app/" });
+  const [feedSources, setFeedSources] = useState<FeedSource[]>([]);
   const [pendingFeedDeletion, setPendingFeedDeletion] = useState<FeedDefinition | null>(null);
   const [dontAskFeedDeleteAgain, setDontAskFeedDeleteAgain] = useState(false);
   const [configPopupMessage, setConfigPopupMessage] = useState("");
@@ -229,9 +220,6 @@ function App(): React.JSX.Element {
           geminiModel: saved.geminiModel?.trim() ? saved.geminiModel : defaults.geminiModel,
           selectedRegions: saved.selectedRegions ? (() => { try { return JSON.parse(saved.selectedRegions) as string[]; } catch { return defaults.selectedRegions; } })() : defaults.selectedRegions,
           sourceBlacklist: parseSourceBlacklist(saved.sourceBlacklist),
-          rssHubInstanceDomain: normalizeRssHubInstanceDomain(saved.rssHubInstanceDomain ?? defaults.rssHubInstanceDomain),
-          selectedRssHubRoutes: parseJsonStringArraySetting(saved.selectedRssHubRoutes, defaults.selectedRssHubRoutes),
-          customRssFeeds: parseCustomRssFeedsSetting(saved.customRssFeeds, defaults.customRssFeeds),
           showFeedDeletionConfirmation: saved.showFeedDeletionConfirmation !== "false",
           likedConcepts: saved.likedConcepts ?? defaults.likedConcepts,
           dislikedConcepts: saved.dislikedConcepts ?? defaults.dislikedConcepts,
@@ -393,6 +381,19 @@ function App(): React.JSX.Element {
     }
   }, []);
 
+  const loadRssSources = useCallback(async () => {
+    try {
+      const [sources, config] = await Promise.all([
+        invoke<FeedSource[]>("list_feed_sources_action"),
+        invoke<RssConfig>("get_rss_config_action"),
+      ]);
+      setFeedSources(sources);
+      setRssConfig(config);
+    } catch (error) {
+      console.warn("Failed to load RSS sources", error);
+    }
+  }, []);
+
   const createFeed = useCallback(async (name: string, categories: string[]) => {
     await invoke("create_feed_action", { request: { name, categories } });
     await loadFeeds();
@@ -452,6 +453,16 @@ function App(): React.JSX.Element {
     await loadFeeds();
   }, [feeds, loadFeeds]);
 
+  const reorderFeedByDrag = useCallback(async (orderedFeedIds: string[]) => {
+    if (orderedFeedIds.length === 0) {
+      return;
+    }
+    await invoke("reorder_feeds_action", {
+      request: { feed_ids: orderedFeedIds },
+    });
+    await loadFeeds();
+  }, [loadFeeds]);
+
   const fetchEnrichedNewsRef = useRef(fetchEnrichedNews);
 
   useEffect(() => {
@@ -460,7 +471,8 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     void loadFeeds();
-  }, [loadFeeds]);
+    void loadRssSources();
+  }, [loadFeeds, loadRssSources]);
 
   const handleCleanReset = useCallback(async () => {
     cancelPendingSave();
@@ -485,8 +497,10 @@ function App(): React.JSX.Element {
     setConfigPopupMessage("");
     setStartupErrorMessage("");
     setStartupPhase("ready");
-    await loadFeeds();
-  }, [cancelPendingSave, loadFeeds, setNews]);
+    setFeedSources([]);
+    setRssConfig({ rsshub_instance_domain: "https://rsshub.app/" });
+    await Promise.all([loadFeeds(), loadRssSources()]);
+  }, [cancelPendingSave, loadFeeds, loadRssSources, setNews]);
 
   const scheduleRefresh = useCallback((filterByDate: boolean) => {
     if (refreshTimeoutRef.current !== null) {
@@ -675,7 +689,7 @@ function App(): React.JSX.Element {
   );
 
   const selectedFeedName = useMemo(
-    () => availableFeeds.find((feed) => feed.id === selectedFeedId)?.name ?? "All Topics",
+    () => availableFeeds.find((feed) => feed.id === selectedFeedId)?.name ?? "All",
     [availableFeeds, selectedFeedId],
   );
 
@@ -1064,29 +1078,16 @@ function App(): React.JSX.Element {
             </button>
           </div>
 
-          {availableFeeds.map((feed) => {
-            return (
-              <div key={feed.id} className="relative">
-                <button
-                  onClick={() => {
-                    setSelectedFeedId(feed.id);
-                    saveSetting("selectedFeedId", feed.id);
-                  }}
-                  className={`group flex w-full items-center gap-1 rounded-lg px-1.5 py-2 text-left text-sm font-medium transition-all select-none ${
-                    selectedFeedId === feed.id
-                        ? isDarkMode
-                          ? "bg-zinc-800 text-zinc-100 ring-1 ring-zinc-700"
-                          : "bg-zinc-200 text-zinc-900 ring-1 ring-zinc-300"
-                        : "text-zinc-500 hover:bg-zinc-800/30 hover:text-zinc-300"
-                  }`}
-                >
-                  <span className="w-[14px] shrink-0" />
-                  <span className="flex-1">{feed.name}</span>
-                  {selectedFeedId === feed.id && <ChevronRight size={14} className="shrink-0 mr-1" />}
-                </button>
-              </div>
-            );
-          })}
+          <FeedNavigationList
+            feeds={availableFeeds}
+            selectedFeedId={selectedFeedId}
+            isDarkMode={isDarkMode}
+            onSelectFeed={(feedId) => {
+              setSelectedFeedId(feedId);
+              saveSetting("selectedFeedId", feedId);
+            }}
+            onReorderFeedByDrag={reorderFeedByDrag}
+          />
 
           {availableFeeds.length === 0 && (
             <div className="rounded-2xl border border-dashed border-zinc-700 px-3 py-4 text-xs text-zinc-500">
@@ -1388,7 +1389,6 @@ function App(): React.JSX.Element {
         localEmbeddingStatus={localEmbeddingStatus}
         isPreparingLocalEmbeddingModel={isPreparingLocalEmbeddingModel}
         onPrepareLocalEmbeddingModel={prepareLocalEmbeddingModel}
-        isEmbeddingReady={isEmbeddingReady}
         isEmbeddingConfigured={isEmbeddingConfigured}
         purgeConfirmStep={purgeConfirmStep}
         setPurgeConfirmStep={setPurgeConfirmStep}
@@ -1397,6 +1397,7 @@ function App(): React.JSX.Element {
         onPurgeDatabase={handleCleanReset}
         onOpenSourceBlacklistManager={() => setShowSourceBlacklistManager(true)}
         onOpenCategoryLimits={() => setShowCategoryLimitsManager(true)}
+        feedSources={feedSources}
         onOpenRssHubSettings={() => setShowRssHubSettings(true)}
         onOpenCustomRssFeedSettings={() => setShowCustomRssFeedSettings(true)}
         onClose={() => {
@@ -1426,18 +1427,17 @@ function App(): React.JSX.Element {
       <RssHubSettingsModal
         show={showRssHubSettings}
         isDarkMode={isDarkMode}
-        settings={settings}
-        setSettings={setSettings}
-        saveSetting={saveSetting}
+        rssConfig={rssConfig}
+        feedSources={feedSources}
+        onRefresh={loadRssSources}
         onClose={() => setShowRssHubSettings(false)}
       />
 
       <CustomRssFeedModal
         show={showCustomRssFeedSettings}
         isDarkMode={isDarkMode}
-        settings={settings}
-        setSettings={setSettings}
-        saveSetting={saveSetting}
+        feedSources={feedSources}
+        onRefresh={loadRssSources}
         onClose={() => setShowCustomRssFeedSettings(false)}
       />
 
@@ -1473,6 +1473,7 @@ function App(): React.JSX.Element {
             <div className="max-h-[80vh] overflow-y-auto p-4">
               <FeedManagerPanel
                 feeds={feeds}
+                feedSources={feedSources}
                 isDarkMode={isDarkMode}
                 onCreateFeed={async (name, categories) => {
                   try {
@@ -1517,6 +1518,14 @@ function App(): React.JSX.Element {
                 onReorderFeed={async (feedId, direction) => {
                   try {
                     await reorderFeed(feedId, direction);
+                  } catch (error) {
+                    setConfigPopupMessage(String(error));
+                    setShowConfigPopup(true);
+                  }
+                }}
+                onReorderFeedByDrag={async (orderedFeedIds) => {
+                  try {
+                    await reorderFeedByDrag(orderedFeedIds);
                   } catch (error) {
                     setConfigPopupMessage(String(error));
                     setShowConfigPopup(true);

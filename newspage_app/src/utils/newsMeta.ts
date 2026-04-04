@@ -1,5 +1,4 @@
-import type { NewsArticle } from "../types/news";
-import { TOPIC_CATEGORIES, type TopicCategory } from "../constants/news";
+import { TOPIC_CATEGORIES } from "../constants/news";
 
 export function formatDateLocal(date: Date): string {
   const year = date.getFullYear();
@@ -23,10 +22,11 @@ export function getUtcDateKey(dateValue: string): string {
   return dateValue.slice(0, 10);
 }
 
-export function toTopicCategory(value: string): TopicCategory {
+export function toTopicCategory(value: string): string {
   const normalized = value.trim().toLowerCase();
   const found = TOPIC_CATEGORIES.find((category) => category.toLowerCase() === normalized);
-  return found ?? "World";
+  // Return matched known category (preserving casing) or the original value for RSS source names.
+  return found ?? (value.trim() || "World");
 }
 
 export function getProviderLabel(provider: string): string {
@@ -43,8 +43,8 @@ export function getProviderLabel(provider: string): string {
   return "Ollama";
 }
 
-export function getTagColor(category: NewsArticle["category"]): string {
-  const colors: Record<NewsArticle["category"], string> = {
+export function getTagColor(category: string): string {
+  const colors: Record<string, string> = {
     World: "bg-sky-500/90",
     Nation: "bg-cyan-500/90",
     Business: "bg-emerald-500/90",
@@ -56,5 +56,5 @@ export function getTagColor(category: NewsArticle["category"]): string {
     Anime: "bg-pink-500/90",
     Gaming: "bg-violet-500/90",
   };
-  return colors[category] || "bg-zinc-500";
+  return colors[category] ?? "bg-zinc-500/90";
 }

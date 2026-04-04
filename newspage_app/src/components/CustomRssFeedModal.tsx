@@ -1,25 +1,23 @@
 import type React from "react";
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
-import type { Dispatch, SetStateAction } from "react";
-import type { CustomRssFeed, UserSettings } from "../types/news";
-import { addCustomRssFeed, normalizeRssFeedUrl, removeCustomRssFeed, updateCustomRssFeed } from "../utils/rssSettings";
+import type { FeedSource } from "../types/news";
+import { normalizeRssFeedUrl } from "../utils/rssSettings";
 
 interface CustomRssFeedModalProps {
   show: boolean;
   isDarkMode: boolean;
-  settings: UserSettings;
-  setSettings: Dispatch<SetStateAction<UserSettings>>;
-  saveSetting: (key: string, value: string) => void;
+  feedSources: FeedSource[];
+  onRefresh: () => Promise<void>;
   onClose: () => void;
 }
 
 export function CustomRssFeedModal({
   show,
   isDarkMode,
-  settings,
-  setSettings,
-  saveSetting,
+  feedSources,
+  onRefresh,
   onClose,
 }: CustomRssFeedModalProps): React.JSX.Element | null {
   const [draftName, setDraftName] = useState("");
@@ -27,6 +25,9 @@ export function CustomRssFeedModal({
   const [editingUrl, setEditingUrl] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const [editingFeedUrl, setEditingFeedUrl] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const customFeeds = feedSources.filter((s) => s.source_type === "custom_rss");
   const canAddFeed = draftName.trim().length > 0 && normalizeRssFeedUrl(draftFeed).length > 0;
   const canSaveEdit = editingName.trim().length > 0 && normalizeRssFeedUrl(editingFeedUrl).length > 0;
 
@@ -44,29 +45,30 @@ export function CustomRssFeedModal({
     return null;
   }
 
-  const updateFeeds = (nextFeeds: UserSettings["customRssFeeds"]) => {
-    setSettings((current) => ({ ...current, customRssFeeds: nextFeeds }));
-    saveSetting("customRssFeeds", JSON.stringify(nextFeeds));
-  };
-
-  const addFeed = () => {
-    const nextFeeds = addCustomRssFeed(settings.customRssFeeds, {
-      name: draftName,
-      url: draftFeed,
-    });
-    if (nextFeeds === settings.customRssFeeds) {
-      return;
+  const addFeed = async () => {
+    const name = draftName.trim();
+    const url = normalizeRssFeedUrl(draftFeed);
+    if (!name || !url) return;
+    if (customFeeds.some((s) => s.source_ref === url)) return;
+    setSaving(true);
+    try {
+      await invoke("upsert_feed_source_action", {
+        request: { source_type: "custom_rss", source_ref: url, display_name: name, enabled: true },
+      });
+      await onRefresh();
+      setDraftName("");
+      setDraftFeed("");
+    } catch (error) {
+      console.warn("Failed to add custom RSS feed", error);
+    } finally {
+      setSaving(false);
     }
-
-    updateFeeds(nextFeeds);
-    setDraftName("");
-    setDraftFeed("");
   };
 
-  const startEditingFeed = (feed: CustomRssFeed) => {
-    setEditingUrl(feed.url);
-    setEditingName(feed.name);
-    setEditingFeedUrl(feed.url);
+  const startEditingFeed = (source: FeedSource) => {
+    setEditingUrl(source.source_ref);
+    setEditingName(source.display_name);
+    setEditingFeedUrl(source.source_ref);
   };
 
   const stopEditingFeed = () => {
@@ -75,21 +77,45 @@ export function CustomRssFeedModal({
     setEditingFeedUrl("");
   };
 
-  const saveEditedFeed = () => {
-    if (!editingUrl) {
-      return;
+  const saveEditedFeed = async (source: FeedSource) => {
+    const newName = editingName.trim();
+    const newUrl = normalizeRssFeedUrl(editingFeedUrl);
+    if (!newName || !newUrl) return;
+    setSaving(true);
+    try {
+      if (source.source_ref !== newUrl) {
+        await invoke("remove_feed_source_action", {
+          request: { source_type: "custom_rss", source_ref: source.source_ref },
+        });
+        await invoke("upsert_feed_source_action", {
+          request: { source_type: "custom_rss", source_ref: newUrl, display_name: newName, enabled: source.enabled },
+        });
+      } else {
+        await invoke("upsert_feed_source_action", {
+          request: { source_type: "custom_rss", source_ref: source.source_ref, display_name: newName, enabled: source.enabled },
+        });
+      }
+      await onRefresh();
+      stopEditingFeed();
+    } catch (error) {
+      console.warn("Failed to save edited feed", error);
+    } finally {
+      setSaving(false);
     }
+  };
 
-    const nextFeeds = updateCustomRssFeed(settings.customRssFeeds, editingUrl, {
-      name: editingName,
-      url: editingFeedUrl,
-    });
-    if (nextFeeds === settings.customRssFeeds) {
-      return;
+  const deleteFeed = async (source: FeedSource) => {
+    setSaving(true);
+    try {
+      await invoke("remove_feed_source_action", {
+        request: { source_type: "custom_rss", source_ref: source.source_ref },
+      });
+      await onRefresh();
+    } catch (error) {
+      console.warn("Failed to delete custom RSS feed", error);
+    } finally {
+      setSaving(false);
     }
-
-    updateFeeds(nextFeeds);
-    stopEditingFeed();
   };
 
   return (
@@ -126,7 +152,7 @@ export function CustomRssFeedModal({
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
-                  addFeed();
+                  void addFeed();
                 }
               }}
               className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
@@ -144,7 +170,7 @@ export function CustomRssFeedModal({
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
-                  addFeed();
+                  void addFeed();
                 }
               }}
               className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
@@ -155,8 +181,8 @@ export function CustomRssFeedModal({
             />
             <button
               type="button"
-              onClick={addFeed}
-              disabled={!canAddFeed}
+              onClick={() => void addFeed()}
+              disabled={!canAddFeed || saving}
               className={`inline-flex items-center justify-center gap-1 rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
                 isDarkMode
                   ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
@@ -171,15 +197,15 @@ export function CustomRssFeedModal({
           </p>
 
           <div className={`overflow-hidden rounded-xl border ${isDarkMode ? "border-zinc-800" : "border-zinc-200"}`}>
-            {settings.customRssFeeds.length === 0 ? (
+            {customFeeds.length === 0 ? (
               <p className={`p-4 text-sm ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
                 No custom RSS feeds saved yet.
               </p>
             ) : (
               <div className="divide-y divide-zinc-800/20">
-                {settings.customRssFeeds.map((feed) => (
-                  <div key={feed.url} className="flex items-center justify-between gap-3 px-4 py-3">
-                    {editingUrl === feed.url ? (
+                {customFeeds.map((source) => (
+                  <div key={source.source_ref} className="flex items-center justify-between gap-3 px-4 py-3">
+                    {editingUrl === source.source_ref ? (
                       <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 md:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
                         <input
                           type="text"
@@ -188,7 +214,7 @@ export function CustomRssFeedModal({
                           onKeyDown={(event) => {
                             if (event.key === "Enter") {
                               event.preventDefault();
-                              saveEditedFeed();
+                              void saveEditedFeed(source);
                             }
                             if (event.key === "Escape") {
                               event.preventDefault();
@@ -209,7 +235,7 @@ export function CustomRssFeedModal({
                           onKeyDown={(event) => {
                             if (event.key === "Enter") {
                               event.preventDefault();
-                              saveEditedFeed();
+                              void saveEditedFeed(source);
                             }
                             if (event.key === "Escape") {
                               event.preventDefault();
@@ -225,17 +251,17 @@ export function CustomRssFeedModal({
                       </div>
                     ) : (
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold">{feed.name}</p>
-                        <p className={`break-all text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>{feed.url}</p>
+                        <p className="truncate text-sm font-semibold">{source.display_name}</p>
+                        <p className={`break-all text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>{source.source_ref}</p>
                       </div>
                     )}
                     <div className="flex shrink-0 items-center gap-2">
-                      {editingUrl === feed.url ? (
+                      {editingUrl === source.source_ref ? (
                         <>
                           <button
                             type="button"
-                            onClick={saveEditedFeed}
-                            disabled={!canSaveEdit}
+                            onClick={() => void saveEditedFeed(source)}
+                            disabled={!canSaveEdit || saving}
                             className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
                               isDarkMode
                                 ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
@@ -260,7 +286,7 @@ export function CustomRssFeedModal({
                         <>
                           <button
                             type="button"
-                            onClick={() => startEditingFeed(feed)}
+                            onClick={() => startEditingFeed(source)}
                             className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
                               isDarkMode
                                 ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
@@ -271,7 +297,8 @@ export function CustomRssFeedModal({
                           </button>
                           <button
                             type="button"
-                            onClick={() => updateFeeds(removeCustomRssFeed(settings.customRssFeeds, feed.url))}
+                            onClick={() => void deleteFeed(source)}
+                            disabled={saving}
                             className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
                               isDarkMode
                                 ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"

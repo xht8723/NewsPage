@@ -53,7 +53,7 @@ export function mapBackendNewsItem(item: BackendNewsItem): NewsArticle {
   const parsedTimestamp = Date.parse(item.date);
   return {
     id: item.id,
-    category: toTopicCategory(item.category),
+    category: toTopicCategory(item.category), // may be a known topic or an RSS source display name
     language: item.language || "unknown",
     title: item.title,
     snippet: item.snippet || "",

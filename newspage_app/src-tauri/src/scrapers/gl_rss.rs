@@ -182,7 +182,7 @@ fn extract_attr(attrs: &str, name: &str) -> Option<String> {
 }
 
 /// Parse RFC-2822 date (the format used in RSS `<pubDate>`).
-fn parse_pub_date(date_str: &str) -> Option<DateTime<Utc>> {
+pub fn parse_pub_date(date_str: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc2822(date_str.trim())
         .ok()
         .map(|dt| dt.with_timezone(&Utc))
@@ -198,14 +198,14 @@ fn clean_google_news_link(raw: &str) -> String {
     raw.trim().to_string()
 }
 
-struct RssItem {
-    title: String,
-    link: String,
-    pub_date: String,
-    pub_date_parsed: Option<DateTime<Utc>>,
-    source_name: String,
-    source_icon: String,
-    thumbnail: String,
+pub struct RssItem {
+    pub title: String,
+    pub link: String,
+    pub pub_date: String,
+    pub pub_date_parsed: Option<DateTime<Utc>>,
+    pub source_name: String,
+    pub source_icon: String,
+    pub thumbnail: String,
 }
 
 /// Extract a thumbnail URL from an RSS `<item>` block.
@@ -257,7 +257,7 @@ fn first_img_src(html: &str) -> Option<String> {
     extract_attr(tag, "src").filter(|u| u.starts_with("http"))
 }
 
-fn parse_rss_items(xml: &str) -> Vec<RssItem> {
+pub fn parse_rss_items(xml: &str) -> Vec<RssItem> {
     let mut items = Vec::new();
     let mut search_from = 0usize;
 
@@ -317,7 +317,7 @@ fn region_language(region: &RegionConfig) -> &'static str {
     }
 }
 
-fn rss_item_to_news_item(rss: &RssItem, category: &str, language: &str) -> NewsItem {
+pub fn rss_item_to_news_item(rss: &RssItem, category: &str, language: &str) -> NewsItem {
     NewsItem {
         id: generate_article_id(&rss.link, &rss.title),
         title: rss.title.clone(),
@@ -340,7 +340,7 @@ fn rss_item_to_news_item(rss: &RssItem, category: &str, language: &str) -> NewsI
 // Fetching & scraping
 // ---------------------------------------------------------------------------
 
-async fn fetch_rss_feed(client: &Client, url: &str) -> Result<String, String> {
+pub async fn fetch_rss_feed(client: &Client, url: &str) -> Result<String, String> {
     let response = client
         .get(url)
         .header("User-Agent", "Mozilla/5.0 (compatible; NewsPageBot/1.0)")
@@ -689,11 +689,15 @@ mod tests {
 
         let empty = ScrapeContext {
             selected_regions: vec![],
+            rss_sources: vec![],
+            rsshub_domain: "https://rsshub.app/".to_string(),
         };
         assert!(!stage.should_run(&empty));
 
         let with_regions = ScrapeContext {
             selected_regions: vec!["canada".to_string()],
+            rss_sources: vec![],
+            rsshub_domain: "https://rsshub.app/".to_string(),
         };
         assert!(stage.should_run(&with_regions));
     }

@@ -10,7 +10,7 @@ import {
   OPENAI_MODELS,
   type OllamaConnectionState,
 } from "../constants/news";
-import type { LocalEmbeddingStatus, UserSettings } from "../types/news";
+import type { FeedSource, LocalEmbeddingStatus, UserSettings } from "../types/news";
 
 interface SettingsModalProps {
   showSettings: boolean;
@@ -31,7 +31,6 @@ interface SettingsModalProps {
   localEmbeddingStatus: LocalEmbeddingStatus | null;
   isPreparingLocalEmbeddingModel: boolean;
   onPrepareLocalEmbeddingModel: (model: string) => Promise<void>;
-  isEmbeddingReady: boolean;
   isEmbeddingConfigured: boolean;
   purgeConfirmStep: 0 | 1 | 2;
   setPurgeConfirmStep: Dispatch<SetStateAction<0 | 1 | 2>>;
@@ -42,6 +41,7 @@ interface SettingsModalProps {
   onOpenCategoryLimits: () => void;
   onOpenRssHubSettings: () => void;
   onOpenCustomRssFeedSettings: () => void;
+  feedSources: FeedSource[];
   onClose: () => void;
 }
 
@@ -74,6 +74,7 @@ export function SettingsModal({
   onOpenCategoryLimits,
   onOpenRssHubSettings,
   onOpenCustomRssFeedSettings,
+  feedSources,
   onClose,
 }: SettingsModalProps): React.JSX.Element | null {
   if (!showSettings) {
@@ -393,7 +394,7 @@ export function SettingsModal({
               <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
                 <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>RSS Feed Settings</p>
                 <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
-                  Configure RSSHub routes and manage custom RSS feeds saved to settings.json.
+                  Configure RSSHub routes and custom RSS feeds. Assign sources to feeds in Feed Settings.
                 </p>
                 <div className="space-y-2">
                   <button
@@ -406,7 +407,7 @@ export function SettingsModal({
                     }`}
                   >
                     <span>RSSHub Settings</span>
-                    <span className="text-[10px] opacity-70">{settings.selectedRssHubRoutes.length} selected</span>
+                    <span className="text-[10px] opacity-70">{feedSources.filter((s) => s.source_type === "rsshub").length} selected</span>
                   </button>
                   <button
                     type="button"
@@ -418,7 +419,7 @@ export function SettingsModal({
                     }`}
                   >
                     <span>Custom RSS Feed</span>
-                    <span className="text-[10px] opacity-70">{settings.customRssFeeds.length} saved</span>
+                    <span className="text-[10px] opacity-70">{feedSources.filter((s) => s.source_type === "custom_rss").length} saved</span>
                   </button>
                 </div>
               </div>

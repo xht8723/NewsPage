@@ -166,13 +166,61 @@ FOREIGN KEY(feed_id) REFERENCES feed_definitions(id) ON DELETE CASCADE
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS feed_sources (
-feed_id TEXT NOT NULL,
 source_type TEXT NOT NULL,
 source_ref TEXT NOT NULL,
+display_name TEXT NOT NULL DEFAULT '',
 enabled INTEGER NOT NULL DEFAULT 1,
-PRIMARY KEY(feed_id, source_type, source_ref),
-FOREIGN KEY(feed_id) REFERENCES feed_definitions(id) ON DELETE CASCADE
+PRIMARY KEY(source_type, source_ref)
 )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Migration: drop feed_id column and recreate table if it exists with old schema
+    let has_feed_id: Option<i64> = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('feed_sources') WHERE name = 'feed_id'",
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    if has_feed_id.unwrap_or(0) > 0 {
+        let mut tx = pool.begin().await?;
+        sqlx::query(
+            "CREATE TABLE feed_sources_new (
+             source_type TEXT NOT NULL,
+             source_ref TEXT NOT NULL,
+             display_name TEXT NOT NULL DEFAULT '',
+             enabled INTEGER NOT NULL DEFAULT 1,
+             PRIMARY KEY(source_type, source_ref)
+            )",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO feed_sources_new(source_type, source_ref, display_name, enabled)
+             SELECT source_type, source_ref, display_name, enabled FROM feed_sources",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("DROP TABLE feed_sources").execute(&mut *tx).await?;
+        sqlx::query("ALTER TABLE feed_sources_new RENAME TO feed_sources")
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+    }
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS rss_config (
+id INTEGER PRIMARY KEY CHECK (id = 1),
+rsshub_instance_domain TEXT NOT NULL DEFAULT 'https://rsshub.app/'
+)",
+    )
+    .execute(pool)
+    .await?;
+
+    // Seed a single rss_config row if none exists.
+    sqlx::query(
+        "INSERT OR IGNORE INTO rss_config(id, rsshub_instance_domain) VALUES (1, 'https://rsshub.app/')",
     )
     .execute(pool)
     .await?;
@@ -181,6 +229,9 @@ FOREIGN KEY(feed_id) REFERENCES feed_definitions(id) ON DELETE CASCADE
         .execute(pool)
         .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_feed_topic_map_feed_id ON feed_topic_map(feed_id)")
+        .execute(pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_feed_sources_enabled ON feed_sources(enabled)")
         .execute(pool)
         .await?;
 
@@ -202,18 +253,10 @@ pub async fn seed_default_feeds(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 VALUES (?1, ?2, ?3, 1, 0)",
     )
     .bind("feed-all")
-    .bind("All Topics")
+    .bind("All")
     .bind("all")
     .execute(&mut *tx)
     .await?;
-
-    for (category, _) in DEFAULT_FEED_TOPICS {
-        sqlx::query("INSERT INTO feed_topic_map(feed_id, category) VALUES (?1, ?2)")
-            .bind("feed-all")
-            .bind(category)
-            .execute(&mut *tx)
-            .await?;
-    }
 
     for (index, (category, name)) in DEFAULT_FEED_TOPICS.iter().enumerate() {
         let feed_id = format!("feed-{}", category);
@@ -361,10 +404,6 @@ pub async fn reorder_feeds(pool: &SqlitePool, feed_ids: &[String]) -> Result<(),
 pub async fn delete_feed(pool: &SqlitePool, feed_id: &str) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM feed_topic_map WHERE feed_id = ?1")
-        .bind(feed_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM feed_sources WHERE feed_id = ?1")
         .bind(feed_id)
         .execute(&mut *tx)
         .await?;
@@ -820,6 +859,105 @@ let result = sqlx::query("DELETE FROM news WHERE id = ?1")
 Ok(result.rows_affected() > 0)
 }
 
+// ─── RSS config ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RssConfig {
+    pub rsshub_instance_domain: String,
+}
+
+pub async fn get_rss_config(pool: &SqlitePool) -> Result<RssConfig, sqlx::Error> {
+    let row = sqlx::query("SELECT rsshub_instance_domain FROM rss_config WHERE id = 1")
+        .fetch_optional(pool)
+        .await?;
+    Ok(match row {
+        Some(r) => RssConfig { rsshub_instance_domain: r.get("rsshub_instance_domain") },
+        None => RssConfig { rsshub_instance_domain: "https://rsshub.app/".to_string() },
+    })
+}
+
+pub async fn set_rsshub_domain(pool: &SqlitePool, domain: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO rss_config(id, rsshub_instance_domain) VALUES (1, ?1)
+         ON CONFLICT(id) DO UPDATE SET rsshub_instance_domain = excluded.rsshub_instance_domain",
+    )
+    .bind(domain.trim())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+// ─── Feed sources ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FeedSource {
+    pub source_type: String,
+    pub source_ref: String,
+    pub display_name: String,
+    pub enabled: bool,
+}
+
+fn row_to_feed_source(row: &sqlx::sqlite::SqliteRow) -> FeedSource {
+    let enabled: i64 = row.get("enabled");
+    FeedSource {
+        source_type: row.get("source_type"),
+        source_ref: row.get("source_ref"),
+        display_name: row.get("display_name"),
+        enabled: enabled != 0,
+    }
+}
+
+pub async fn list_feed_sources(pool: &SqlitePool) -> Result<Vec<FeedSource>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT source_type, source_ref, display_name, enabled
+         FROM feed_sources
+         ORDER BY source_type ASC, display_name ASC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.iter().map(row_to_feed_source).collect())
+}
+
+pub async fn upsert_feed_source(
+    pool: &SqlitePool,
+    source_type: &str,
+    source_ref: &str,
+    display_name: &str,
+    enabled: bool,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO feed_sources(source_type, source_ref, display_name, enabled)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(source_type, source_ref) DO UPDATE SET
+             display_name = excluded.display_name,
+             enabled      = excluded.enabled",
+    )
+    .bind(source_type)
+    .bind(source_ref)
+    .bind(display_name.trim())
+    .bind(if enabled { 1_i64 } else { 0_i64 })
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn remove_feed_source(
+    pool: &SqlitePool,
+    source_type: &str,
+    source_ref: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "DELETE FROM feed_sources WHERE source_type = ?1 AND source_ref = ?2",
+    )
+    .bind(source_type)
+    .bind(source_ref)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+
+
 #[cfg(test)]
 mod tests {
 use super::*;
@@ -910,5 +1048,68 @@ assert!(removed);
 let after_delete = get_article_by_id(&pool, &item.id)
 .await.expect("get after delete should work");
 assert!(after_delete.is_none());
+}
+
+#[tokio::test]
+async fn feed_sources_and_rss_config_queries_work() {
+let db_url = temp_db_path();
+let pool = init_db(&db_url).await.expect("db init should succeed");
+
+let default_config = get_rss_config(&pool).await.expect("default config should load");
+assert_eq!(default_config.rsshub_instance_domain, "https://rsshub.app/");
+
+set_rsshub_domain(&pool, "https://example.rsshub.app/")
+    .await
+    .expect("rsshub domain update should work");
+let updated_config = get_rss_config(&pool).await.expect("updated config should load");
+assert_eq!(updated_config.rsshub_instance_domain, "https://example.rsshub.app/");
+
+upsert_feed_source(&pool, "rsshub", "github/trending/daily", "GitHub Trending", true)
+    .await
+    .expect("rsshub source upsert should work");
+upsert_feed_source(&pool, "custom_rss", "https://example.com/feed.xml", "Example Feed", false)
+    .await
+    .expect("custom source upsert should work");
+
+let sources = list_feed_sources(&pool).await.expect("sources should list");
+assert_eq!(sources.len(), 2);
+assert!(sources.iter().any(|source| {
+    source.source_type == "rsshub"
+        && source.source_ref == "github/trending/daily"
+        && source.display_name == "GitHub Trending"
+        && source.enabled
+}));
+assert!(sources.iter().any(|source| {
+    source.source_type == "custom_rss"
+        && source.source_ref == "https://example.com/feed.xml"
+        && source.display_name == "Example Feed"
+        && !source.enabled
+}));
+
+let removed = remove_feed_source(&pool, "rsshub", "github/trending/daily")
+    .await
+    .expect("source remove should work");
+assert!(removed);
+assert_eq!(list_feed_sources(&pool).await.expect("sources should relist").len(), 1);
+}
+
+#[tokio::test]
+async fn deleting_feed_does_not_delete_global_feed_sources() {
+let db_url = temp_db_path();
+let pool = init_db(&db_url).await.expect("db init should succeed");
+seed_default_feeds(&pool).await.expect("default feeds should seed");
+
+let created = create_feed(&pool, "Custom Feed", &["world".to_string()])
+    .await
+    .expect("feed create should work");
+upsert_feed_source(&pool, "custom_rss", "https://example.com/feed.xml", "Example Feed", true)
+    .await
+    .expect("source upsert should work");
+
+delete_feed(&pool, &created.id).await.expect("feed delete should work");
+
+let sources = list_feed_sources(&pool).await.expect("sources should remain");
+assert_eq!(sources.len(), 1);
+assert_eq!(sources[0].display_name, "Example Feed");
 }
 }

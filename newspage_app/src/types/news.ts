@@ -1,9 +1,19 @@
-import type { TopicCategory } from "../constants/news";
 import type { LayoutMode } from "../constants/news";
+
+export interface FeedSource {
+  source_type: string;
+  source_ref: string;
+  display_name: string;
+  enabled: boolean;
+}
+
+export interface RssConfig {
+  rsshub_instance_domain: string;
+}
 
 export interface NewsArticle {
   id: string;
-  category: TopicCategory;
+  category: string;
   language: string;
   title: string;
   snippet: string;
@@ -44,11 +54,6 @@ export interface FeedDefinition {
   categories: string[];
 }
 
-export interface CustomRssFeed {
-  name: string;
-  url: string;
-}
-
 export interface UserSettings {
   newsLimit: number;
   perCategoryNewsLimits: Record<string, number>;
@@ -68,9 +73,6 @@ export interface UserSettings {
   geminiModel: string;
   selectedRegions: string[];
   sourceBlacklist: string[];
-  rssHubInstanceDomain: string;
-  selectedRssHubRoutes: string[];
-  customRssFeeds: CustomRssFeed[];
   showFeedDeletionConfirmation: boolean;
   likedConcepts: string;
   dislikedConcepts: string;
