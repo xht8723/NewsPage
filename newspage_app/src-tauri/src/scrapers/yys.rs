@@ -30,6 +30,23 @@ fn xml_inner<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
     Some(content[..end].trim())
 }
 
+/// Strip HTML tags from a string, returning plain text.
+/// Also collapses consecutive whitespace/newlines to single spaces.
+fn strip_html_tags(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for ch in html.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    // Collapse whitespace
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Return the `src` attribute value of the first `<img …>` tag in `html`.
 fn first_img_src(html: &str) -> Option<String> {
     let start = html.find("<img ")?;
@@ -98,13 +115,16 @@ fn parse_yys_item(
         .map(|a| vec![a])
         .unwrap_or_default();
 
-    // Thumbnail: first <img src=...> found inside the <description> CDATA block
-    let thumbnail = xml_inner(item_xml, "description")
-        .and_then(|desc| {
-            let decoded = strip_cdata(&decode_entities(desc));
-            first_img_src(&decoded)
-        })
+    // Description: used for both thumbnail extraction and RSS fallback text (og_content)
+    let description_html = xml_inner(item_xml, "description")
+        .map(|desc| strip_cdata(&decode_entities(desc)))
         .unwrap_or_default();
+
+    // Thumbnail: first <img src=...> found inside the <description> CDATA block
+    let thumbnail = first_img_src(&description_html).unwrap_or_default();
+
+    // RSS fallback text: strip HTML tags from description for use when article fetch fails
+    let rss_text = strip_html_tags(&description_html);
 
     let id = generate_article_id(&link, &title);
 
@@ -121,7 +141,7 @@ fn parse_yys_item(
         category: category.to_string(),
         article_type: "rss".to_string(),
         ai_summary: String::new(),
-        og_content: String::new(),
+        og_content: rss_text,
         snippet: String::new(),
         enrichment_mode: "pending".to_string(),
         is_enriched: false,
@@ -323,6 +343,25 @@ mod tests {
     }
 
     #[test]
+    fn extracts_rss_fallback_text_from_description() {
+        let items = parse_yys_feed(SAMPLE_FEED, "yys", "游研社");
+        // og_content should contain the stripped text from <description>, not be empty
+        assert!(items[0].og_content.contains("Some text."), "item 0 og_content: {}", items[0].og_content);
+        assert!(items[0].og_content.contains("More text."), "item 0 og_content: {}", items[0].og_content);
+        assert!(items[1].og_content.contains("Content here."), "item 1 og_content: {}", items[1].og_content);
+        // Should not contain HTML tags
+        assert!(!items[0].og_content.contains('<'));
+        assert!(!items[0].og_content.contains('>'));
+    }
+
+    #[test]
+    fn strip_html_removes_tags_and_collapses_whitespace() {
+        assert_eq!(strip_html_tags("<p>Hello <b>world</b>.</p>"), "Hello world.");
+        assert_eq!(strip_html_tags("  plain text  "), "plain text");
+        assert_eq!(strip_html_tags("<img src=\"x.jpg\">text"), "text");
+    }
+
+    #[test]
     fn ids_are_non_empty_and_unique() {
         let items = parse_yys_feed(SAMPLE_FEED, "yys", "游研社");
         let ids: HashSet<&str> = items.iter().map(|i| i.id.as_str()).collect();
@@ -339,6 +378,7 @@ mod tests {
             source_ref: YYS_FEED_URL.to_string(),
             display_name: "游研社".to_string(),
             enabled: true,
+            tag_color: String::new(),
         };
 
         let empty = ScrapeContext {

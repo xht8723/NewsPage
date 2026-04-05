@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { FolderOpen, RefreshCw, Settings, X } from "lucide-react";
+import { FolderOpen, RefreshCw, Settings, Sparkles, X } from "lucide-react";
 import { DotsSpinner } from "./DotsSpinner";
 import type React from "react";
 import type { Dispatch, SetStateAction } from "react";
@@ -125,179 +125,74 @@ export function SettingsModal({
         </div>
         <div className={`max-h-[calc(100vh-10rem)] space-y-6 overflow-y-auto p-6 news-scroll ${isDarkMode ? "news-scroll-dark" : "news-scroll-light"}`}>
           <div className="space-y-4">
+            {/* General Settings */}
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-10">
               <div className={`order-2 rounded-xl border p-4 lg:order-1 lg:col-span-7 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
                 <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>General Settings</p>
                 <div className="space-y-3">
                   <div>
-                    <label className="mb-1.5 block text-xs font-medium opacity-70">AI mode</label>
-                    <p className="mb-1.5 text-xs opacity-50">Disable to skip AI article enrichment and keep title-only cards for newly processed items.</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !settings.aiModeEnabled;
+                        setSettings((current) => ({ ...current, aiModeEnabled: next }));
+                        saveSetting("aiModeEnabled", next ? "true" : "false");
+                      }}
+                      className={`w-full rounded-xl border px-4 py-3 text-left transition-all duration-200 ${
+                        settings.aiModeEnabled
+                          ? isDarkMode
+                            ? "border-cyan-700/60 bg-cyan-950/50 hover:bg-cyan-950/70"
+                            : "border-emerald-400/60 bg-emerald-50 hover:bg-emerald-100/80"
+                          : isDarkMode
+                            ? "border-zinc-700 bg-zinc-800/60 hover:bg-zinc-800"
+                            : "border-zinc-300 bg-zinc-100 hover:bg-zinc-200/60"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className={`rounded-lg p-1.5 transition-colors duration-200 ${
+                            settings.aiModeEnabled
+                              ? isDarkMode ? "bg-cyan-900/60 text-cyan-400" : "bg-emerald-100 text-emerald-600"
+                              : isDarkMode ? "bg-zinc-700/60 text-zinc-500" : "bg-zinc-200 text-zinc-400"
+                          }`}>
+                            <Sparkles size={16} />
+                          </div>
+                          <div>
+                            <p className={`text-sm font-semibold transition-colors duration-200 ${
+                              settings.aiModeEnabled
+                                ? isDarkMode ? "text-cyan-300" : "text-emerald-700"
+                                : isDarkMode ? "text-zinc-400" : "text-zinc-500"
+                            }`}>AI Enrichment Pipeline</p>
+                            <p className={`text-[11px] transition-colors duration-200 ${
+                              isDarkMode ? "text-zinc-500" : "text-zinc-400"
+                            }`}>Summarise, tag and rank articles with LLM</p>
+                          </div>
+                        </div>
+                        <span className={`shrink-0 rounded-md px-2.5 py-1 text-[11px] font-bold uppercase tracking-widest transition-all duration-200 ${
+                          settings.aiModeEnabled
+                            ? isDarkMode ? "bg-cyan-800/60 text-cyan-300" : "bg-emerald-200 text-emerald-700"
+                            : isDarkMode ? "bg-zinc-700 text-zinc-500" : "bg-zinc-200 text-zinc-400"
+                        }`}>
+                          {settings.aiModeEnabled ? "ON" : "OFF"}
+                        </span>
+                      </div>
+                    </button>
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-xs font-medium opacity-70">Deletion confirmation</label>
                     <label className="flex cursor-pointer items-center gap-2">
                       <NeonCheckbox
-                        checked={settings.aiModeEnabled}
+                        checked={settings.showFeedDeletionConfirmation}
                         onChange={(checked) => {
-                          setSettings((current) => ({ ...current, aiModeEnabled: checked }));
-                          saveSetting("aiModeEnabled", checked ? "true" : "false");
+                          setSettings((current) => ({ ...current, showFeedDeletionConfirmation: checked }));
+                          saveSetting("showFeedDeletionConfirmation", checked ? "true" : "false");
                         }}
                         isDarkMode={isDarkMode}
-                        ariaLabel="Enable AI mode"
+                        ariaLabel="Show deletion confirmation"
                       />
-                      <span className="text-sm">Enable AI enrichment pipeline</span>
+                      <span className="text-sm">Show deletion confirmation</span>
                     </label>
                   </div>
-                  <div>
-                    <label className="mb-1.5 block text-xs font-medium opacity-70">Number of news per category per pull</label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        min={1}
-                        max={100}
-                        value={settings.newsLimit}
-                        onChange={(e) => {
-                          const val = Math.min(100, Math.max(1, Number(e.target.value)));
-                          setSettings((s) => ({ ...s, newsLimit: val }));
-                          saveSetting("newsLimit", String(val));
-                        }}
-                        className={`number-dial-${isDarkMode ? "dark" : "light"} flex-1 rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
-                          isDarkMode
-                            ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                            : "border-zinc-300 bg-zinc-200 text-zinc-900"
-                        }`}
-                      />
-                      <button
-                        type="button"
-                        onClick={onOpenCategoryLimits}
-                        className={`shrink-0 rounded-lg border px-2.5 py-2 text-xs font-semibold transition-opacity hover:opacity-70 ${
-                          isDarkMode
-                            ? "border-zinc-700 bg-zinc-800 text-zinc-300"
-                            : "border-zinc-300 bg-zinc-200 text-zinc-700"
-                        }`}
-                      >
-                        Detailed
-                      </button>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-xs font-medium opacity-70">Scrape cooldown (hours)</label>
-                    <p className="mb-1.5 text-xs opacity-50">Min time between website scrapes. 0 = always scrape.</p>
-                    <input
-                      type="number"
-                      min={0}
-                      max={24}
-                      value={settings.scrapeCooldownHours}
-                      onChange={(e) => {
-                        const val = Math.min(24, Math.max(0, Number(e.target.value)));
-                        setSettings((s) => ({ ...s, scrapeCooldownHours: val }));
-                        saveSetting("scrapeCooldownHours", String(val));
-                      }}
-                      className={`number-dial-${isDarkMode ? "dark" : "light"} w-full rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
-                        isDarkMode
-                          ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                          : "border-zinc-300 bg-zinc-200 text-zinc-900"
-                      }`}
-                    />
-                  </div>
-                    <div>
-                      <label className="mb-1.5 block text-xs font-medium opacity-70">LLM batch size</label>
-                      <p className="mb-1.5 text-xs opacity-50">How many articles for the LLM to process in a single batch.</p>
-                      <input
-                        type="number"
-                        min={1}
-                        max={20}
-                        value={settings.llmBatchSize}
-                        onChange={(e) => {
-                          const val = Math.min(20, Math.max(1, Number(e.target.value)));
-                          setSettings((s) => ({ ...s, llmBatchSize: val }));
-                          saveSetting("llmBatchSize", String(val));
-                        }}
-                        className={`number-dial-${isDarkMode ? "dark" : "light"} w-full rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
-                          isDarkMode
-                            ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                            : "border-zinc-300 bg-zinc-200 text-zinc-900"
-                        }`}
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-xs font-medium opacity-70">Summary bullet points</label>
-                      <p className="mb-1.5 text-xs opacity-50">Range of bullet points per article summary.</p>
-                      {(() => {
-                        const SLIDER_MIN = 1;
-                        const SLIDER_MAX = 20;
-                        const minVal = settings.minSummaryPoints ?? 1;
-                        const maxVal = settings.maxSummaryPoints ?? 8;
-                        const leftPct = ((minVal - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN)) * 100;
-                        const rightPct = ((maxVal - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN)) * 100;
-                        return (
-                          <div>
-                            <div className="relative h-6 w-full">
-                              {/* Track background */}
-                              <div className={`absolute top-1/2 h-1.5 w-full -translate-y-1/2 rounded-full ${isDarkMode ? "bg-zinc-700" : "bg-zinc-300"}`} />
-                              {/* Active range fill */}
-                              <div
-                                className={`absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full ${isDarkMode ? "bg-cyan-600/85" : "bg-emerald-500"}`}
-                                style={{ left: `${leftPct}%`, width: `${rightPct - leftPct}%` }}
-                              />
-                              {/* Min thumb */}
-                              <input
-                                type="range"
-                                min={SLIDER_MIN}
-                                max={SLIDER_MAX}
-                                value={minVal}
-                                onChange={(e) => {
-                                  const val = Math.min(Number(e.target.value), maxVal);
-                                  setSettings((s) => ({ ...s, minSummaryPoints: val }));
-                                  saveSetting("minSummaryPoints", String(val));
-                                }}
-                                className={`pointer-events-none absolute top-0 h-6 w-full appearance-none bg-transparent [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 ${
-                                  isDarkMode
-                                      ? "[&::-moz-range-thumb]:border-cyan-600 [&::-moz-range-thumb]:bg-zinc-900 [&::-webkit-slider-thumb]:border-cyan-600 [&::-webkit-slider-thumb]:bg-zinc-900"
-                                    : "[&::-moz-range-thumb]:border-emerald-500 [&::-moz-range-thumb]:bg-white [&::-webkit-slider-thumb]:border-emerald-500 [&::-webkit-slider-thumb]:bg-white"
-                                }`}
-                                style={{ zIndex: minVal > SLIDER_MAX - 2 ? 5 : 3 }}
-                              />
-                              {/* Max thumb */}
-                              <input
-                                type="range"
-                                min={SLIDER_MIN}
-                                max={SLIDER_MAX}
-                                value={maxVal}
-                                onChange={(e) => {
-                                  const val = Math.max(Number(e.target.value), minVal);
-                                  setSettings((s) => ({ ...s, maxSummaryPoints: val }));
-                                  saveSetting("maxSummaryPoints", String(val));
-                                }}
-                                className={`pointer-events-none absolute top-0 h-6 w-full appearance-none bg-transparent [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 ${
-                                  isDarkMode
-                                      ? "[&::-moz-range-thumb]:border-cyan-600 [&::-moz-range-thumb]:bg-zinc-900 [&::-webkit-slider-thumb]:border-cyan-600 [&::-webkit-slider-thumb]:bg-zinc-900"
-                                    : "[&::-moz-range-thumb]:border-emerald-500 [&::-moz-range-thumb]:bg-white [&::-webkit-slider-thumb]:border-emerald-500 [&::-webkit-slider-thumb]:bg-white"
-                                }`}
-                                style={{ zIndex: 4 }}
-                              />
-                            </div>
-                            <div className="mt-1 flex items-center justify-between">
-                              <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{SLIDER_MIN}</span>
-                              <span className={`text-xs font-semibold ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>{minVal} &ndash; {maxVal} points</span>
-                              <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{SLIDER_MAX}</span>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-xs font-medium opacity-70">Deletion confirmation</label>
-                      <label className="flex cursor-pointer items-center gap-2">
-                        <NeonCheckbox
-                          checked={settings.showFeedDeletionConfirmation}
-                          onChange={(checked) => {
-                            setSettings((current) => ({ ...current, showFeedDeletionConfirmation: checked }));
-                            saveSetting("showFeedDeletionConfirmation", checked ? "true" : "false");
-                          }}
-                          isDarkMode={isDarkMode}
-                          ariaLabel="Show deletion confirmation"
-                        />
-                        <span className="text-sm">Show deletion confirmation</span>
-                      </label>
-                    </div>
                 </div>
               </div>
 
@@ -352,22 +247,169 @@ export function SettingsModal({
               </div>
             </div>
 
-            <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
-              <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Media Outlet Blacklist</p>
-              <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
-                Blacklisted sources are skipped and hidden in future queries.
-              </p>
-              <button
-                type="button"
-                onClick={onOpenSourceBlacklistManager}
-                className={`rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
-                  isDarkMode
-                    ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                    : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
-                }`}
-              >
-                Manage Blacklist ({settings.sourceBlacklist.length})
-              </button>
+            {/* Article Settings + Media Outlet Blacklist */}
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-10">
+            <div className={`rounded-xl border p-4 lg:col-span-7 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
+              <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Article Settings</p>
+              <div className="space-y-3">
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium opacity-70">Number of news per category per pull</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={settings.newsLimit}
+                      onChange={(e) => {
+                        const val = Math.min(100, Math.max(1, Number(e.target.value)));
+                        setSettings((s) => ({ ...s, newsLimit: val }));
+                        saveSetting("newsLimit", String(val));
+                      }}
+                      className={`number-dial-${isDarkMode ? "dark" : "light"} flex-1 rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
+                        isDarkMode
+                          ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                          : "border-zinc-300 bg-zinc-200 text-zinc-900"
+                      }`}
+                    />
+                    <button
+                      type="button"
+                      onClick={onOpenCategoryLimits}
+                      className={`shrink-0 rounded-lg border px-2.5 py-2 text-xs font-semibold transition-opacity hover:opacity-70 ${
+                        isDarkMode
+                          ? "border-zinc-700 bg-zinc-800 text-zinc-300"
+                          : "border-zinc-300 bg-zinc-200 text-zinc-700"
+                      }`}
+                    >
+                      Detailed
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium opacity-70">Scrape cooldown (hours)</label>
+                  <p className="mb-1.5 text-xs opacity-50">Min time between website scrapes. 0 = always scrape.</p>
+                  <input
+                    type="number"
+                    min={0}
+                    max={24}
+                    value={settings.scrapeCooldownHours}
+                    onChange={(e) => {
+                      const val = Math.min(24, Math.max(0, Number(e.target.value)));
+                      setSettings((s) => ({ ...s, scrapeCooldownHours: val }));
+                      saveSetting("scrapeCooldownHours", String(val));
+                    }}
+                    className={`number-dial-${isDarkMode ? "dark" : "light"} w-full rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
+                      isDarkMode
+                        ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                        : "border-zinc-300 bg-zinc-200 text-zinc-900"
+                    }`}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium opacity-70">LLM batch size</label>
+                  <p className="mb-1.5 text-xs opacity-50">How many articles for the LLM to process in a single batch.</p>
+                  <input
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={settings.llmBatchSize}
+                    onChange={(e) => {
+                      const val = Math.min(20, Math.max(1, Number(e.target.value)));
+                      setSettings((s) => ({ ...s, llmBatchSize: val }));
+                      saveSetting("llmBatchSize", String(val));
+                    }}
+                    className={`number-dial-${isDarkMode ? "dark" : "light"} w-full rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
+                      isDarkMode
+                        ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                        : "border-zinc-300 bg-zinc-200 text-zinc-900"
+                    }`}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium opacity-70">Summary bullet points</label>
+                  <p className="mb-1.5 text-xs opacity-50">Range of bullet points per article summary.</p>
+                  {(() => {
+                    const SLIDER_MIN = 1;
+                    const SLIDER_MAX = 20;
+                    const minVal = settings.minSummaryPoints ?? 1;
+                    const maxVal = settings.maxSummaryPoints ?? 8;
+                    const leftPct = ((minVal - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN)) * 100;
+                    const rightPct = ((maxVal - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN)) * 100;
+                    return (
+                      <div>
+                        <div className="relative h-6 w-full">
+                          {/* Track background */}
+                          <div className={`absolute top-1/2 h-1.5 w-full -translate-y-1/2 rounded-full ${isDarkMode ? "bg-zinc-700" : "bg-zinc-300"}`} />
+                          {/* Active range fill */}
+                          <div
+                            className={`absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full ${isDarkMode ? "bg-cyan-600/85" : "bg-emerald-500"}`}
+                            style={{ left: `${leftPct}%`, width: `${rightPct - leftPct}%` }}
+                          />
+                          {/* Min thumb */}
+                          <input
+                            type="range"
+                            min={SLIDER_MIN}
+                            max={SLIDER_MAX}
+                            value={minVal}
+                            onChange={(e) => {
+                              const val = Math.min(Number(e.target.value), maxVal);
+                              setSettings((s) => ({ ...s, minSummaryPoints: val }));
+                              saveSetting("minSummaryPoints", String(val));
+                            }}
+                            className={`pointer-events-none absolute top-0 h-6 w-full appearance-none bg-transparent [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 ${
+                              isDarkMode
+                                ? "[&::-moz-range-thumb]:border-cyan-600 [&::-moz-range-thumb]:bg-zinc-900 [&::-webkit-slider-thumb]:border-cyan-600 [&::-webkit-slider-thumb]:bg-zinc-900"
+                                : "[&::-moz-range-thumb]:border-emerald-500 [&::-moz-range-thumb]:bg-white [&::-webkit-slider-thumb]:border-emerald-500 [&::-webkit-slider-thumb]:bg-white"
+                            }`}
+                            style={{ zIndex: minVal > SLIDER_MAX - 2 ? 5 : 3 }}
+                          />
+                          {/* Max thumb */}
+                          <input
+                            type="range"
+                            min={SLIDER_MIN}
+                            max={SLIDER_MAX}
+                            value={maxVal}
+                            onChange={(e) => {
+                              const val = Math.max(Number(e.target.value), minVal);
+                              setSettings((s) => ({ ...s, maxSummaryPoints: val }));
+                              saveSetting("maxSummaryPoints", String(val));
+                            }}
+                            className={`pointer-events-none absolute top-0 h-6 w-full appearance-none bg-transparent [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 ${
+                              isDarkMode
+                                ? "[&::-moz-range-thumb]:border-cyan-600 [&::-moz-range-thumb]:bg-zinc-900 [&::-webkit-slider-thumb]:border-cyan-600 [&::-webkit-slider-thumb]:bg-zinc-900"
+                                : "[&::-moz-range-thumb]:border-emerald-500 [&::-moz-range-thumb]:bg-white [&::-webkit-slider-thumb]:border-emerald-500 [&::-webkit-slider-thumb]:bg-white"
+                            }`}
+                            style={{ zIndex: 4 }}
+                          />
+                        </div>
+                        <div className="mt-1 flex items-center justify-between">
+                          <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{SLIDER_MIN}</span>
+                          <span className={`text-xs font-semibold ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>{minVal} &ndash; {maxVal} points</span>
+                          <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{SLIDER_MAX}</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                 </div>
+               </div>
+             </div>
+
+              <div className={`rounded-xl border p-4 lg:col-span-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
+               <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Media Outlet Blacklist</p>
+               <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
+                 Blacklisted sources are skipped and hidden in future queries.
+               </p>
+               <button
+                 type="button"
+                 onClick={onOpenSourceBlacklistManager}
+                 className={`rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+                   isDarkMode
+                     ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                     : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
+                 }`}
+               >
+                 Manage Blacklist ({settings.sourceBlacklist.length})
+               </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

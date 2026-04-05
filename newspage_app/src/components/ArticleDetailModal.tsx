@@ -4,12 +4,13 @@ import ReactMarkdown from "react-markdown";
 import { ARTICLE_HERO_FALLBACK_URL } from "../constants/news";
 import { useImageFallback } from "../hooks/useImageFallback";
 import { useLiveTranslation, type TranslationRuntimeConfig } from "../hooks/useLiveTranslation";
-import type { NewsArticle } from "../types/news";
-import { getTagColor } from "../utils/newsMeta";
+import type { FeedSource, NewsArticle } from "../types/news";
+import { resolveTagColor } from "../utils/newsMeta";
 import { usePanelTransition } from "../hooks/usePanelTransition";
 
 interface ArticleDetailModalProps {
   selectedArticle: NewsArticle | null;
+  feedSources: FeedSource[];
   isDarkMode: boolean;
   reprocessingArticleId: string | null;
   liveTranslationEnabled: boolean;
@@ -22,6 +23,7 @@ interface ArticleDetailModalProps {
 
 export function ArticleDetailModal({
   selectedArticle,
+  feedSources,
   isDarkMode,
   reprocessingArticleId,
   liveTranslationEnabled,
@@ -97,13 +99,17 @@ export function ArticleDetailModal({
 
         <div className="mx-auto w-full max-w-5xl space-y-8 px-4 pt-8 md:px-8">
           <div>
-            <span
-              className={`mb-4 inline-block rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest text-white shadow-sm ${getTagColor(
-                activeArticle.category,
-              )}`}
-            >
-              {activeArticle.category}
-            </span>
+            {(() => {
+              const tagColor = resolveTagColor(activeArticle.category, feedSources);
+              return (
+                <span
+                  className={`mb-4 inline-block rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest text-white shadow-sm${tagColor.type === "class" ? ` ${tagColor.value}` : ""}`}
+                  style={tagColor.type === "hex" ? { backgroundColor: tagColor.value } : undefined}
+                >
+                  {activeArticle.category}
+                </span>
+              );
+            })()}
             <h2 className={`text-3xl font-black leading-tight md:text-5xl ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>
               {translatedTitle}
             </h2>

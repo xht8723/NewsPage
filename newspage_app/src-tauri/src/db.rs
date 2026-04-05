@@ -246,6 +246,13 @@ PRIMARY KEY(source_type, source_ref)
         tx.commit().await?;
     }
 
+    // Migration: add tag_color column to feed_sources (idempotent, ignore error if already exists).
+    let _ = sqlx::query(
+        "ALTER TABLE feed_sources ADD COLUMN tag_color TEXT NOT NULL DEFAULT ''",
+    )
+    .execute(pool)
+    .await;
+
     // Hard cleanup for deprecated RSSHub storage paths.
     sqlx::query("DROP TABLE IF EXISTS rss_config")
         .execute(pool)
@@ -1183,6 +1190,7 @@ pub struct FeedSource {
     pub source_ref: String,
     pub display_name: String,
     pub enabled: bool,
+    pub tag_color: String,
 }
 
 fn row_to_feed_source(row: &sqlx::sqlite::SqliteRow) -> FeedSource {
@@ -1192,12 +1200,13 @@ fn row_to_feed_source(row: &sqlx::sqlite::SqliteRow) -> FeedSource {
         source_ref: row.get("source_ref"),
         display_name: row.get("display_name"),
         enabled: enabled != 0,
+        tag_color: row.get::<Option<String>, _>("tag_color").unwrap_or_default(),
     }
 }
 
 pub async fn list_feed_sources(pool: &SqlitePool) -> Result<Vec<FeedSource>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT source_type, source_ref, display_name, enabled
+        "SELECT source_type, source_ref, display_name, enabled, tag_color
          FROM feed_sources
          ORDER BY source_type ASC, display_name ASC",
     )
@@ -1212,18 +1221,21 @@ pub async fn upsert_feed_source(
     source_ref: &str,
     display_name: &str,
     enabled: bool,
+    tag_color: &str,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO feed_sources(source_type, source_ref, display_name, enabled)
-         VALUES (?1, ?2, ?3, ?4)
+        "INSERT INTO feed_sources(source_type, source_ref, display_name, enabled, tag_color)
+         VALUES (?1, ?2, ?3, ?4, ?5)
          ON CONFLICT(source_type, source_ref) DO UPDATE SET
              display_name = excluded.display_name,
-             enabled      = excluded.enabled",
+             enabled      = excluded.enabled,
+             tag_color    = excluded.tag_color",
     )
     .bind(source_type)
     .bind(source_ref)
     .bind(display_name.trim())
     .bind(if enabled { 1_i64 } else { 0_i64 })
+    .bind(tag_color.trim())
     .execute(pool)
     .await?;
     Ok(())

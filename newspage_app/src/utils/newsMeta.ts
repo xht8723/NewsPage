@@ -1,4 +1,5 @@
 import { TOPIC_CATEGORIES } from "../constants/news";
+import type { FeedSource } from "../types/news";
 
 export function formatDateLocal(date: Date): string {
   const year = date.getFullYear();
@@ -57,4 +58,52 @@ export function getTagColor(category: string): string {
     Gaming: "bg-violet-500/90",
   };
   return colors[category] ?? "bg-zinc-500/90";
+}
+
+/**
+ * Preset Tailwind-based colors available for RSS source tag color selection.
+ * Each entry has a human-readable label and its corresponding hex value.
+ */
+export const TAG_COLOR_PRESETS: { label: string; hex: string }[] = [
+  { label: "Zinc",    hex: "#71717a" },
+  { label: "Red",     hex: "#ef4444" },
+  { label: "Orange",  hex: "#f97316" },
+  { label: "Amber",   hex: "#f59e0b" },
+  { label: "Yellow",  hex: "#eab308" },
+  { label: "Lime",    hex: "#84cc16" },
+  { label: "Green",   hex: "#22c55e" },
+  { label: "Emerald", hex: "#10b981" },
+  { label: "Teal",    hex: "#14b8a6" },
+  { label: "Cyan",    hex: "#06b6d4" },
+  { label: "Sky",     hex: "#0ea5e9" },
+  { label: "Blue",    hex: "#3b82f6" },
+  { label: "Indigo",  hex: "#6366f1" },
+  { label: "Violet",  hex: "#8b5cf6" },
+  { label: "Purple",  hex: "#a855f7" },
+  { label: "Fuchsia", hex: "#d946ef" },
+  { label: "Pink",    hex: "#ec4899" },
+  { label: "Rose",    hex: "#f43f5e" },
+];
+
+/**
+ * Resolves the category tag color for an article.
+ * If a feed source with a matching display_name (case-insensitive) has a non-empty
+ * tag_color, returns that hex string. Otherwise falls back to getTagColor().
+ *
+ * Returns either:
+ *  - { type: "hex"; value: string }  → use as inline style backgroundColor
+ *  - { type: "class"; value: string } → use as Tailwind className
+ */
+export function resolveTagColor(
+  category: string,
+  feedSources: FeedSource[],
+): { type: "hex"; value: string } | { type: "class"; value: string } {
+  const lowerCategory = category.toLowerCase();
+  const match = feedSources.find(
+    (s) => s.display_name.toLowerCase() === lowerCategory && s.tag_color.trim() !== "",
+  );
+  if (match) {
+    return { type: "hex", value: match.tag_color.trim() };
+  }
+  return { type: "class", value: getTagColor(category) };
 }

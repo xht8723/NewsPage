@@ -264,7 +264,6 @@ export function FeedManagerPanel({
             {orderedFeeds.map((feed, index) => {
               const normalizedNewsCategories = feed.news_categories.map((item) => item.toLowerCase());
               const normalizedRssCategories = feed.rss_categories.map((item) => item.toLowerCase());
-              const isFeedEmpty = normalizedNewsCategories.length === 0 && normalizedRssCategories.length === 0;
               const isExpanded = !!expandedFeedIds[feed.id];
               const canDrag = orderedFeeds.length > 1;
               const showInsertionLine = activeFeedId !== null && overFeedId === feed.id && activeFeedId !== feed.id;
@@ -433,12 +432,6 @@ export function FeedManagerPanel({
                       );
                     })}
                   </div>
-
-                  {isFeedEmpty && (
-                    <p className={`mt-2 text-[11px] ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
-                      This feed is empty. Add topic categories or RSS sources below to include articles.
-                    </p>
-                  )}
 
                   <p className={`mt-3 mb-1 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>RSS Sources</p>
                   {sortedSources.length === 0 ? (

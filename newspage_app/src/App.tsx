@@ -9,7 +9,7 @@ import {
   Settings,
   Languages,
   SlidersHorizontal,
-  Newspaper,
+  Sparkles,
   LayoutList,
   X,
 } from "lucide-react";
@@ -1347,7 +1347,7 @@ function App(): React.JSX.Element {
                   isDarkMode ? "bg-zinc-300 text-zinc-900 hover:bg-amber-300" : "bg-white text-black hover:bg-zinc-300"
                 } disabled:opacity-50`}
               >
-                {loading ? <RefreshCw className="animate-spin" size={16} /> : <Newspaper size={16} />}
+                {loading ? <RefreshCw className="animate-spin" size={16} /> : <Sparkles size={16} />}
                 Get news!
               </button>
               {loading ? (
@@ -1383,6 +1383,7 @@ function App(): React.JSX.Element {
         <section className={`news-scroll min-h-0 flex-1 overflow-y-auto pb-24 pr-1 ${isDarkMode ? "news-scroll-dark" : "news-scroll-light"}`}>
           <VirtualizedArticleList
             articles={filteredNews}
+            feedSources={feedSources}
             layout={layout}
             isDarkMode={isDarkMode}
             sortMode={settings.sortMode}
@@ -1574,6 +1575,7 @@ function App(): React.JSX.Element {
 
       <ArticleDetailModal
         selectedArticle={selectedArticle}
+        feedSources={feedSources}
         isDarkMode={isDarkMode}
         reprocessingArticleId={reprocessingArticleId}
         liveTranslationEnabled={settings.liveTranslationEnabled}

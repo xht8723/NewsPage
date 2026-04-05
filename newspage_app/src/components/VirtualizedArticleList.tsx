@@ -2,12 +2,13 @@ import { useMemo } from "react";
 import { List } from "react-window";
 import { ArticleCard } from "./ArticleCard";
 import { Search } from "lucide-react";
-import type { NewsArticle } from "../types/news";
+import type { NewsArticle, FeedSource } from "../types/news";
 import type { LayoutMode } from "../constants/news";
 import type { TranslationRuntimeConfig } from "../hooks/useLiveTranslation";
 
 interface VirtualizedArticleListProps {
   articles: NewsArticle[];
+  feedSources: FeedSource[];
   layout: LayoutMode;
   isDarkMode: boolean;
   sortMode: string;
@@ -26,6 +27,7 @@ interface VirtualizedArticleListProps {
  */
 export function VirtualizedArticleList({
   articles,
+  feedSources,
   layout,
   isDarkMode,
   sortMode,
@@ -78,6 +80,7 @@ export function VirtualizedArticleList({
           <ArticleCard
             key={item.id}
             item={item}
+            feedSources={feedSources}
             layout={layout}
             isDarkMode={isDarkMode}
             sortMode={sortMode}
@@ -110,6 +113,7 @@ export function VirtualizedArticleList({
           <div style={style} className="px-2" {...ariaAttributes}>
             <ArticleCard
               item={item}
+              feedSources={feedSources}
               layout={layout}
               isDarkMode={isDarkMode}
               sortMode={sortMode}

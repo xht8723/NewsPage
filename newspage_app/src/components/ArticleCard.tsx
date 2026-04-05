@@ -3,11 +3,12 @@ import { memo } from "react";
 import { ARTICLE_THUMBNAIL_FALLBACK_URL, type LayoutMode } from "../constants/news";
 import { useImageFallback } from "../hooks/useImageFallback";
 import { useLiveTranslation, type TranslationRuntimeConfig } from "../hooks/useLiveTranslation";
-import type { NewsArticle } from "../types/news";
-import { getTagColor } from "../utils/newsMeta";
+import type { FeedSource, NewsArticle } from "../types/news";
+import { resolveTagColor } from "../utils/newsMeta";
 
 interface ArticleCardProps {
   item: NewsArticle;
+  feedSources: FeedSource[];
   layout: LayoutMode;
   isDarkMode: boolean;
   sortMode: string;
@@ -20,6 +21,7 @@ interface ArticleCardProps {
 
 function ArticleCardComponent({
   item,
+  feedSources,
   layout,
   isDarkMode,
   sortMode,
@@ -47,6 +49,8 @@ function ArticleCardComponent({
     enabled: liveTranslationEnabled && !isTitleOnlyCard,
     runtime: translationRuntime,
   });
+
+  const tagColor = resolveTagColor(item.category, feedSources);
 
   return (
     <div
@@ -77,7 +81,10 @@ function ArticleCardComponent({
       )}
       <div className={`${isCompactListLayout ? "px-1 py-1" : `p-6 ${isListLayout ? "md:py-2" : ""}`} flex flex-1 flex-col`}>
         <div className={`${isCompactListLayout ? "mb-2" : "mb-4"} flex items-center gap-2`}>
-          <span className={`rounded px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-white shadow-sm ${getTagColor(item.category)}`}>
+          <span
+            className={`rounded px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-white shadow-sm${tagColor.type === "class" ? ` ${tagColor.value}` : ""}`}
+            style={tagColor.type === "hex" ? { backgroundColor: tagColor.value } : undefined}
+          >
             {item.category}
           </span>
           {sortMode === "score" && item.preferenceScore !== 0 && (
@@ -158,6 +165,7 @@ function areEqual(prevProps: ArticleCardProps, nextProps: ArticleCardProps): boo
     prevProps.item.sourceName === nextProps.item.sourceName &&
     prevProps.item.sourceIconUrl === nextProps.item.sourceIconUrl &&
     prevProps.item.language === nextProps.item.language &&
+    prevProps.feedSources === nextProps.feedSources &&
     prevProps.layout === nextProps.layout &&
     prevProps.isDarkMode === nextProps.isDarkMode &&
     prevProps.sortMode === nextProps.sortMode &&

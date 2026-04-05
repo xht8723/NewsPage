@@ -5,6 +5,7 @@ export interface FeedSource {
   source_ref: string;
   display_name: string;
   enabled: boolean;
+  tag_color: string;
 }
 
 export interface NewsArticle {

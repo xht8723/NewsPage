@@ -1150,10 +1150,29 @@ async fn run_enrichment_stage(
                         llm_inputs.push((i, item.title.clone(), text.clone()));
                     }
                     Err(err) => {
-                        println!("Failed to fetch article text: {}", err);
-                        logging::warn("Extract", format!("Text fetch failed: {}", err), None);
-                        if first_error.is_none() {
-                            first_error = Some(err.clone());
+                        // If the item has pre-populated og_content (e.g. RSS description
+                        // fallback text set by the scraper), use it so LLM enrichment can
+                        // still proceed even when the live article fetch fails.
+                        if !item.og_content.trim().is_empty() {
+                            println!(
+                                "Article fetch failed for '{}', using RSS fallback text ({} chars): {}",
+                                item.title, item.og_content.len(), err
+                            );
+                            logging::info(
+                                "Extract",
+                                format!(
+                                    "Using RSS fallback text for '{}' ({} chars); live fetch error: {}",
+                                    item.title, item.og_content.len(), err
+                                ),
+                                Some(item.og_content.len()),
+                            );
+                            llm_inputs.push((i, item.title.clone(), item.og_content.clone()));
+                        } else {
+                            println!("Failed to fetch article text: {}", err);
+                            logging::warn("Extract", format!("Text fetch failed: {}", err), None);
+                            if first_error.is_none() {
+                                first_error = Some(err.clone());
+                            }
                         }
                     }
                 }
@@ -1222,7 +1241,12 @@ async fn run_enrichment_stage(
                     continue;
                 }
 
-                let (text, thumbnail) = fetch_result.unwrap(); // Safe: we know it succeeded
+                let (text, thumbnail) = match fetch_result {
+                    Ok((t, th)) => (t, th),
+                    // Fetch failed but we used og_content as RSS fallback text —
+                    // thumbnail stays as whatever the scraper already set.
+                    Err(_) => (item.og_content.clone(), None),
+                };
 
             // Get the LLM result for this article
                 let llm_result = if llm_result_idx < llm_results.len() {
@@ -1902,6 +1926,8 @@ struct UpsertFeedSourceRequest {
     source_ref: String,
     display_name: String,
     enabled: bool,
+    #[serde(default)]
+    tag_color: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -1934,7 +1960,7 @@ async fn upsert_feed_source_action(
     }
     if source_ref.is_empty() { return Err("source_ref is required".to_string()); }
     if display_name.is_empty() { return Err("display_name is required".to_string()); }
-    upsert_feed_source(&state.db, source_type, source_ref, display_name, request.enabled)
+    upsert_feed_source(&state.db, source_type, source_ref, display_name, request.enabled, &request.tag_color)
         .await
         .map_err(|e| format!("Failed to upsert feed source: {}", e))?;
     // When a source is disabled its pill must be turned off in all feeds.
