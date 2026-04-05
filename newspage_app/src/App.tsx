@@ -33,7 +33,6 @@ import { SettingsModal } from "./components/SettingsModal";
 import { ArticleDetailModal } from "./components/ArticleDetailModal";
 import { CalendarModal } from "./components/CalendarModal";
 import { LogPanel } from "./components/LogPanel";
-import { SourceBlacklistModal } from "./components/SourceBlacklistModal";
 import { CategoryLimitsModal } from "./components/CategoryLimitsModal";
 import { CustomRssFeedModal } from "./components/CustomRssFeedModal";
 import { FeedManagerPanel } from "./components/FeedManagerPanel";
@@ -41,6 +40,7 @@ import { FeedNavigationList } from "./components/FeedNavigationList";
 import { DotsSpinner } from "./components/DotsSpinner";
 import { NeonCheckbox } from "./components/NeonCheckbox";
 import { VirtualizedArticleList } from "./components/VirtualizedArticleList";
+import { OnboardingGuide } from "./components/OnboardingGuide";
 import type { TranslationRuntimeConfig } from "./hooks/useLiveTranslation";
 import { addSourceToBlacklist, normalizeSourceName, parseSourceBlacklist, toNormalizedSourceSet } from "./utils/sourceBlacklist";
 import "./App.css";
@@ -132,7 +132,6 @@ function App(): React.JSX.Element {
   const [isPurging, setIsPurging] = useState(false);
   const [showLayoutSwitcher, setShowLayoutSwitcher] = useState(true);
   const [showConfigPopup, setShowConfigPopup] = useState(false);
-  const [showSourceBlacklistManager, setShowSourceBlacklistManager] = useState(false);
   const [showCategoryLimitsManager, setShowCategoryLimitsManager] = useState(false);
   const [showCustomRssFeedSettings, setShowCustomRssFeedSettings] = useState(false);
   const [feeds, setFeeds] = useState<FeedDefinition[]>([]);
@@ -149,6 +148,10 @@ function App(): React.JSX.Element {
   const [startupErrorMessage, setStartupErrorMessage] = useState("");
   const isEmbeddingConfigured = settings.localEmbeddingModel.trim().length > 0;
 
+  // Onboarding guide state
+  const [showOnboardingGuide, setShowOnboardingGuide] = useState(false);
+  const [settingsScrollToEmbedding, setSettingsScrollToEmbedding] = useState(false);
+  const [showSettingsHints, setShowSettingsHints] = useState(false);
 
   const translatePanelTransition = usePanelTransition(showTranslatePanel, 140);
   const categoryManagerTransition = usePanelTransition(showCategoryManager, 170);
@@ -156,6 +159,13 @@ function App(): React.JSX.Element {
   const pendingFeedDeletionTransition = usePanelTransition(!!pendingFeedDeletion, 170);
   const contextMenuTransition = usePanelTransition(!!contextMenu, 140);
   const [isFilterTransitioning, setIsFilterTransitioning] = useState(false);
+
+  // Show onboarding guide on first run (when embedding is not yet configured)
+  useEffect(() => {
+    if (startupPhase === "ready" && !isEmbeddingConfigured) {
+      setShowOnboardingGuide(true);
+    }
+  }, [startupPhase, isEmbeddingConfigured]);
 
   useEffect(() => {
     if (pendingFeedDeletion) {
@@ -894,6 +904,15 @@ function App(): React.JSX.Element {
     };
   }, [showSettings, settings.llmProvider, settings.ollamaAddress, settings.ollamaModel, testOllamaConnection, refreshOllamaModels, refreshLocalEmbeddingStatus]);
 
+  // Handler: open Settings from the onboarding guide, with scroll + hints
+  const openSettingsFromGuide = useCallback(() => {
+    setShowOnboardingGuide(false);
+    setShowSettings(true);
+    setSettingsScrollToEmbedding(true);
+    setShowSettingsHints(true);
+    void refreshLocalEmbeddingStatus();
+  }, [refreshLocalEmbeddingStatus]);
+
   useEffect(() => {
     const handleContextMenu = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
@@ -1444,7 +1463,6 @@ function App(): React.JSX.Element {
         isPurging={isPurging}
         setIsPurging={setIsPurging}
         onPurgeDatabase={handleCleanReset}
-        onOpenSourceBlacklistManager={() => setShowSourceBlacklistManager(true)}
         onOpenCategoryLimits={() => setShowCategoryLimitsManager(true)}
         feedSources={feedSources}
         onOpenCustomRssFeedSettings={() => setShowCustomRssFeedSettings(true)}
@@ -1452,15 +1470,12 @@ function App(): React.JSX.Element {
           setShowSettings(false);
           setPurgeConfirmStep(0);
         }}
-      />
-
-      <SourceBlacklistModal
-        show={showSourceBlacklistManager}
-        isDarkMode={isDarkMode}
-        settings={settings}
-        setSettings={setSettings}
-        saveSetting={saveSetting}
-        onClose={() => setShowSourceBlacklistManager(false)}
+        scrollToEmbedding={settingsScrollToEmbedding}
+        onScrollConsumed={() => setSettingsScrollToEmbedding(false)}
+        showOnboardingHints={showSettingsHints}
+        onDismissHint={() => {
+          // bubble dismissal is managed locally inside SettingsModal
+        }}
       />
 
       <CategoryLimitsModal
@@ -1706,6 +1721,13 @@ function App(): React.JSX.Element {
           seenLogKeysRef.current.clear();
         }}
         onClose={() => setShowLogPanel(false)}
+      />
+
+      <OnboardingGuide
+        show={showOnboardingGuide}
+        isDarkMode={isDarkMode}
+        onDismiss={() => setShowOnboardingGuide(false)}
+        onGoToSettings={openSettingsFromGuide}
       />
 
     </div>

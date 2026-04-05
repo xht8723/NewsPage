@@ -11,6 +11,7 @@ struct DefaultFeedSeed {
     name: &'static str,
     slug: &'static str,
     categories: &'static [&'static str],
+    rss_categories: &'static [&'static str],
 }
 
 const DEFAULT_FEED_TOPICS: &[DefaultFeedSeed] = &[
@@ -19,30 +20,42 @@ const DEFAULT_FEED_TOPICS: &[DefaultFeedSeed] = &[
         name: "World & Nation",
         slug: "world-nation",
         categories: &["world", "nation"],
+        rss_categories: &[],
     },
     DefaultFeedSeed {
         id: "feed-entertainment",
         name: "Entertainment",
         slug: "entertainment",
         categories: &["anime", "gaming", "entertainment", "technology"],
+        rss_categories: &[],
     },
     DefaultFeedSeed {
         id: "feed-science-health",
         name: "Science & Health",
         slug: "science-health",
         categories: &["science", "health"],
+        rss_categories: &[],
     },
     DefaultFeedSeed {
         id: "feed-sports",
         name: "Sports",
         slug: "sports",
         categories: &["sports"],
+        rss_categories: &[],
     },
     DefaultFeedSeed {
         id: "feed-business",
         name: "Bussiness",
         slug: "business",
         categories: &["business"],
+        rss_categories: &[],
+    },
+    DefaultFeedSeed {
+        id: "feed-rss",
+        name: "RSS",
+        slug: "rss",
+        categories: &[],
+        rss_categories: &["ann"],
     },
 ];
 
@@ -520,6 +533,16 @@ VALUES (?1, ?2, ?3, 1, ?4)",
                 .bind(*category)
                 .execute(&mut *tx)
                 .await?;
+        }
+
+        for category in feed.rss_categories {
+            sqlx::query(
+                "INSERT INTO feed_topic_map(feed_id, category, article_type) VALUES (?1, ?2, 'rss')",
+            )
+            .bind(feed.id)
+            .bind(*category)
+            .execute(&mut *tx)
+            .await?;
         }
     }
 

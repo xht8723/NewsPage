@@ -1,8 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import { FolderOpen, RefreshCw, Settings, Sparkles, X } from "lucide-react";
+import { FolderOpen, RefreshCw, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
 import { DotsSpinner } from "./DotsSpinner";
 import type React from "react";
-import type { Dispatch, SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { addSourceToBlacklist, normalizeSourceName, removeSourceFromBlacklist } from "../utils/sourceBlacklist";
 import { NeonCheckbox } from "./NeonCheckbox";
 import {
   AVAILABLE_REGIONS,
@@ -40,11 +41,14 @@ interface SettingsModalProps {
   isPurging: boolean;
   setIsPurging: Dispatch<SetStateAction<boolean>>;
   onPurgeDatabase: () => Promise<void>;
-  onOpenSourceBlacklistManager: () => void;
   onOpenCategoryLimits: () => void;
   onOpenCustomRssFeedSettings: () => void;
   feedSources: FeedSource[];
   onClose: () => void;
+  scrollToEmbedding: boolean;
+  onScrollConsumed: () => void;
+  showOnboardingHints: boolean;
+  onDismissHint: (hint: "googleNews" | "rss") => void;
 }
 
 export function SettingsModal({
@@ -72,13 +76,117 @@ export function SettingsModal({
   isPurging,
   setIsPurging,
   onPurgeDatabase,
-  onOpenSourceBlacklistManager,
   onOpenCategoryLimits,
   onOpenCustomRssFeedSettings,
   feedSources,
   onClose,
+  scrollToEmbedding,
+  onScrollConsumed,
+  showOnboardingHints,
+  onDismissHint,
 }: SettingsModalProps): React.JSX.Element | null {
   const { isMounted, isClosing } = usePanelTransition(showSettings, 170);
+
+  // Refs for scroll-to and bubble positioning
+  const embeddingSectionRef = useRef<HTMLDivElement>(null);
+  const googleNewsSectionRef = useRef<HTMLDivElement>(null);
+  const rssFeedSectionRef = useRef<HTMLDivElement>(null);
+  const llmSectionRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // LLM section glow: counter so repeated toggles always re-fire the effect
+  const [llmGlowTrigger, setLlmGlowTrigger] = useState(0);
+  const [llmGlowing, setLlmGlowing] = useState(false);
+
+  // Inline blacklist state
+  const [blacklistQuery, setBlacklistQuery] = useState("");
+  const [blacklistDraft, setBlacklistDraft] = useState("");
+
+  const filteredBlacklistSources = useMemo(() => {
+    const normalizedQuery = normalizeSourceName(blacklistQuery);
+    const sorted = [...settings.sourceBlacklist].sort((a, b) => a.localeCompare(b));
+    if (!normalizedQuery) return sorted;
+    return sorted.filter((source) => normalizeSourceName(source).includes(normalizedQuery));
+  }, [blacklistQuery, settings.sourceBlacklist]);
+
+  const updateBlacklist = (nextSources: string[]) => {
+    setSettings((current) => ({ ...current, sourceBlacklist: nextSources }));
+    saveSetting("sourceBlacklist", JSON.stringify(nextSources));
+  };
+
+  const addBlacklistDraft = () => {
+    const nextSources = addSourceToBlacklist(settings.sourceBlacklist, blacklistDraft);
+    if (nextSources === settings.sourceBlacklist) return;
+    updateBlacklist(nextSources);
+    setBlacklistDraft("");
+  };
+
+  // Local dismissed state for each bubble — reset whenever hints become active
+  const [googleNewsBubbleDismissed, setGoogleNewsBubbleDismissed] = useState(false);
+  const [rssBubbleDismissed, setRssBubbleDismissed] = useState(false);
+
+  // Visibility state for 70% in-view fade
+  const [googleNewsVisible, setGoogleNewsVisible] = useState(false);
+  const [rssVisible, setRssVisible] = useState(false);
+
+  useEffect(() => {
+    if (showOnboardingHints) {
+      setGoogleNewsBubbleDismissed(false);
+      setRssBubbleDismissed(false);
+      setGoogleNewsVisible(false);
+      setRssVisible(false);
+    }
+  }, [showOnboardingHints]);
+
+  // IntersectionObserver: show bubbles only when section ≥70% visible
+  useEffect(() => {
+    if (!showOnboardingHints || !isMounted) return;
+    const root = scrollContainerRef.current;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.target === googleNewsSectionRef.current) {
+            setGoogleNewsVisible(entry.isIntersecting);
+          }
+          if (entry.target === rssFeedSectionRef.current) {
+            setRssVisible(entry.isIntersecting);
+          }
+        }
+      },
+      { root, threshold: 0.7 },
+    );
+    if (googleNewsSectionRef.current) observer.observe(googleNewsSectionRef.current);
+    if (rssFeedSectionRef.current) observer.observe(rssFeedSectionRef.current);
+    return () => observer.disconnect();
+  }, [showOnboardingHints, isMounted]);
+
+  // Scroll to embedding section when requested
+  useEffect(() => {
+    if (scrollToEmbedding && isMounted && embeddingSectionRef.current) {
+      // Small delay to let the modal finish its entry animation
+      const timer = setTimeout(() => {
+        embeddingSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+        onScrollConsumed();
+      }, 220);
+      return () => clearTimeout(timer);
+    }
+  }, [scrollToEmbedding, isMounted, onScrollConsumed]);
+
+  // Scroll to LLM section and glow it when AI mode is toggled on
+  useEffect(() => {
+    if (llmGlowTrigger === 0) return;
+    const scrollTimer = setTimeout(() => {
+      llmSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setLlmGlowing(true);
+    }, 220);
+    const clearTimer = setTimeout(() => {
+      setLlmGlowing(false);
+    }, 4400);
+    return () => {
+      clearTimeout(scrollTimer);
+      clearTimeout(clearTimer);
+    };
+  }, [llmGlowTrigger]);
 
   if (!isMounted) {
     return null;
@@ -123,7 +231,7 @@ export function SettingsModal({
             <X size={18} />
           </button>
         </div>
-        <div className={`max-h-[calc(100vh-10rem)] space-y-6 overflow-y-auto p-6 news-scroll ${isDarkMode ? "news-scroll-dark" : "news-scroll-light"}`}>
+        <div ref={scrollContainerRef} className={`max-h-[calc(100vh-10rem)] space-y-6 overflow-y-auto p-6 news-scroll ${isDarkMode ? "news-scroll-dark" : "news-scroll-light"}`}>
           <div className="space-y-4">
             {/* General Settings */}
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-10">
@@ -137,6 +245,7 @@ export function SettingsModal({
                         const next = !settings.aiModeEnabled;
                         setSettings((current) => ({ ...current, aiModeEnabled: next }));
                         saveSetting("aiModeEnabled", next ? "true" : "false");
+                        if (next) setLlmGlowTrigger((n) => n + 1);
                       }}
                       className={`w-full rounded-xl border px-4 py-3 text-left transition-all duration-200 ${
                         settings.aiModeEnabled
@@ -162,7 +271,7 @@ export function SettingsModal({
                               settings.aiModeEnabled
                                 ? isDarkMode ? "text-cyan-300" : "text-emerald-700"
                                 : isDarkMode ? "text-zinc-400" : "text-zinc-500"
-                            }`}>AI Enrichment Pipeline</p>
+                            }`}>AI Mode</p>
                             <p className={`text-[11px] transition-colors duration-200 ${
                               isDarkMode ? "text-zinc-500" : "text-zinc-400"
                             }`}>Summarise, tag and rank articles with LLM</p>
@@ -248,8 +357,8 @@ export function SettingsModal({
             </div>
 
             {/* Article Settings + Media Outlet Blacklist */}
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-10">
-            <div className={`rounded-xl border p-4 lg:col-span-7 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
               <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Article Settings</p>
               <div className="space-y-3">
                 <div>
@@ -265,7 +374,7 @@ export function SettingsModal({
                         setSettings((s) => ({ ...s, newsLimit: val }));
                         saveSetting("newsLimit", String(val));
                       }}
-                      className={`number-dial-${isDarkMode ? "dark" : "light"} flex-1 rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
+                      className={`number-dial-${isDarkMode ? "dark" : "light"} w-20 rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
                         isDarkMode
                           ? "border-zinc-700 bg-zinc-800 text-zinc-100"
                           : "border-zinc-300 bg-zinc-200 text-zinc-900"
@@ -297,7 +406,7 @@ export function SettingsModal({
                       setSettings((s) => ({ ...s, scrapeCooldownHours: val }));
                       saveSetting("scrapeCooldownHours", String(val));
                     }}
-                    className={`number-dial-${isDarkMode ? "dark" : "light"} w-full rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
+                    className={`number-dial-${isDarkMode ? "dark" : "light"} w-20 rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
                       isDarkMode
                         ? "border-zinc-700 bg-zinc-800 text-zinc-100"
                         : "border-zinc-300 bg-zinc-200 text-zinc-900"
@@ -317,7 +426,7 @@ export function SettingsModal({
                       setSettings((s) => ({ ...s, llmBatchSize: val }));
                       saveSetting("llmBatchSize", String(val));
                     }}
-                    className={`number-dial-${isDarkMode ? "dark" : "light"} w-full rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
+                    className={`number-dial-${isDarkMode ? "dark" : "light"} w-20 rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
                       isDarkMode
                         ? "border-zinc-700 bg-zinc-800 text-zinc-100"
                         : "border-zinc-300 bg-zinc-200 text-zinc-900"
@@ -393,27 +502,120 @@ export function SettingsModal({
                </div>
              </div>
 
-              <div className={`rounded-xl border p-4 lg:col-span-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
-               <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Media Outlet Blacklist</p>
-               <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
-                 Blacklisted sources are skipped and hidden in future queries.
-               </p>
-               <button
-                 type="button"
-                 onClick={onOpenSourceBlacklistManager}
-                 className={`rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
-                   isDarkMode
-                     ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                     : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
-                 }`}
-               >
-                 Manage Blacklist ({settings.sourceBlacklist.length})
-               </button>
-              </div>
+              <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
+                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Media Outlet Blacklist</p>
+                <div className="space-y-2">
+                  {/* Search + Clear All */}
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_auto]">
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 opacity-50" />
+                      <input
+                        type="text"
+                        placeholder="Search source name"
+                        value={blacklistQuery}
+                        onChange={(e) => setBlacklistQuery(e.target.value)}
+                        className={`w-full rounded-lg border py-2 pl-8 pr-3 text-xs focus:outline-none ${
+                          isDarkMode
+                            ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                            : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
+                        }`}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => updateBlacklist([])}
+                      disabled={settings.sourceBlacklist.length === 0}
+                      className="rounded-lg bg-red-600 px-3 py-2 text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Clear All
+                    </button>
+                  </div>
+
+                  {/* List */}
+                  <div className={`max-h-40 overflow-y-auto rounded-xl border news-scroll ${isDarkMode ? "news-scroll-dark border-zinc-800" : "news-scroll-light border-zinc-200"}`}>
+                    {filteredBlacklistSources.length === 0 ? (
+                      <p className={`p-3 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+                        {settings.sourceBlacklist.length === 0 ? "No blacklisted sources yet." : "No sources match your search."}
+                      </p>
+                    ) : (
+                      <div className={`divide-y ${isDarkMode ? "divide-zinc-800/70" : "divide-zinc-200"}`}>
+                        {filteredBlacklistSources.map((source) => (
+                          <div key={`blacklist-${normalizeSourceName(source)}`} className="flex items-center justify-between gap-3 px-3 py-2">
+                            <span className="truncate text-xs font-medium">{source}</span>
+                            <button
+                              type="button"
+                              onClick={() => updateBlacklist(removeSourceFromBlacklist(settings.sourceBlacklist, source))}
+                              className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                                isDarkMode
+                                  ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                                  : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
+                              }`}
+                            >
+                              <Trash2 size={11} /> Remove
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Add source */}
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_auto]">
+                    <input
+                      type="text"
+                      placeholder="Add source name manually"
+                      value={blacklistDraft}
+                      onChange={(e) => setBlacklistDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { e.preventDefault(); addBlacklistDraft(); }
+                      }}
+                      className={`w-full rounded-lg border px-3 py-2 text-xs focus:outline-none ${
+                        isDarkMode
+                          ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                          : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
+                      }`}
+                    />
+                    <button
+                      type="button"
+                      onClick={addBlacklistDraft}
+                      className={`rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+                        isDarkMode
+                          ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                          : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
+                      }`}
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+               </div>
             </div>
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
+              <div ref={googleNewsSectionRef} className={`relative rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
+                {/* Onboarding tooltip bubble: Google News Regions */}
+                {showOnboardingHints && !googleNewsBubbleDismissed && (
+                  <div className={`onboarding-bubble ${isDarkMode ? "" : "onboarding-bubble-light"} left-0 right-0 bottom-full mb-2 rounded-xl border px-4 py-3 shadow-xl ${
+                    isDarkMode
+                      ? "border-cyan-800/60 bg-zinc-900/95 text-zinc-300"
+                      : "border-cyan-300 bg-white text-zinc-700"
+                  } ${googleNewsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="text-xs leading-relaxed">
+                        <strong className={isDarkMode ? "text-white" : "text-cyan-600"}>Choose your regions for news!</strong> 
+                        <br />{}
+                        Multiple regions supported!
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => { setGoogleNewsBubbleDismissed(true); onDismissHint("googleNews"); }}
+                        className={`shrink-0 rounded p-0.5 transition-opacity hover:opacity-60 ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Google News Regions</p>
                 <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>Select regions for Google News sources</p>
                 <div className="space-y-2">
@@ -444,7 +646,29 @@ export function SettingsModal({
                 )}
               </div>
 
-              <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
+              <div ref={rssFeedSectionRef} className={`relative rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
+                {/* Onboarding tooltip bubble: RSS Feed Settings */}
+                {showOnboardingHints && !rssBubbleDismissed && (
+                  <div className={`onboarding-bubble ${isDarkMode ? "" : "onboarding-bubble-light"} left-0 right-0 bottom-full mb-2 rounded-xl border px-4 py-3 shadow-xl ${
+                    isDarkMode
+                      ? "border-cyan-800/60 bg-zinc-900/95 text-zinc-300"
+                      : "border-cyan-300 bg-white text-zinc-700"
+                  } ${rssVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="text-xs leading-relaxed">
+                        <strong className={isDarkMode ? "text-white" : "text-cyan-600"}>Add your own RSS sources!</strong>
+                        <br />{} Or select what we provides!
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => { setRssBubbleDismissed(true); onDismissHint("rss"); }}
+                        className={`shrink-0 rounded p-0.5 transition-opacity hover:opacity-60 ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>RSS Feed Settings</p>
                 <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
                   Configure custom RSS feeds. Assign sources to feeds in Feed Settings.
@@ -467,7 +691,7 @@ export function SettingsModal({
             </div>
 
             <div className={`grid grid-cols-1 gap-4 ${settings.aiModeEnabled ? "lg:grid-cols-2" : "lg:grid-cols-1"}`}>
-              <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
+              <div ref={embeddingSectionRef} className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
                 <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Embedding Settings</p>
                 <div className="space-y-3">
                   <div>
@@ -507,7 +731,7 @@ export function SettingsModal({
                           isDarkMode
                             ? `border-zinc-700 bg-zinc-800 text-zinc-200 ${downloadButtonDisabled ? "" : "hover:bg-zinc-700"}`
                             : `border-zinc-300 bg-zinc-150 text-zinc-700 ${downloadButtonDisabled ? "" : "hover:bg-zinc-200"}`
-                        } shrink-0 disabled:opacity-50`}
+                        } shrink-0 disabled:opacity-50 ${showOnboardingHints && !downloadButtonDisabled && !embeddingIsBusy ? "embedding-download-glow" : ""}`}
                       >
                         <RefreshCw size={12} className={embeddingIsBusy ? "animate-spin" : ""} />
                         {embeddingIsBusy ? "Preparing..." : selectedModelReady ? "Downloaded" : "Download Model"}
@@ -540,7 +764,7 @@ export function SettingsModal({
               </div>
 
               {settings.aiModeEnabled && (
-                <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
+                <div ref={llmSectionRef} className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"} ${llmGlowing ? "llm-section-glow" : ""}`}>
                   <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>LLM Provider Settings</p>
                   <div className="space-y-3">
                     <div>
