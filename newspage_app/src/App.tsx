@@ -1260,7 +1260,7 @@ function App(): React.JSX.Element {
                         : (isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-400" : "border-zinc-300 bg-zinc-100 text-zinc-500");
 
                 return (
-                  <span key={stage} className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest ${badgeClass}`} title={item.message || stageLabel}>
+                  <span key={stage} className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest ${badgeClass}`} title={item.message || stageLabel}>
                     <span className={`inline-block h-1.5 w-1.5 rounded-full ${isRunning ? "animate-pulse bg-current" : "bg-current"}`} />
                     {stageLabel}
                     {typeof item.current === "number" && typeof item.total === "number" ? ` ${item.current}/${item.total}` : ""}
@@ -1362,7 +1362,7 @@ function App(): React.JSX.Element {
               <button
                 onClick={generateNews}
                 disabled={loading}
-                className={`flex items-center gap-2 rounded-full px-5 py-2.5 text-xs font-bold uppercase tracking-widest shadow-md transition-all ${
+                className={`flex items-center gap-2 whitespace-nowrap rounded-full px-5 py-2.5 text-xs font-bold uppercase tracking-widest shadow-md transition-all ${
                   isDarkMode ? "bg-zinc-300 text-zinc-900 hover:bg-amber-300" : "bg-white text-black hover:bg-zinc-300"
                 } disabled:opacity-50`}
               >
@@ -1374,7 +1374,7 @@ function App(): React.JSX.Element {
                   type="button"
                   onClick={stopGenerate}
                   disabled={stopping}
-                  className={`absolute left-1/2 top-full mt-1 -translate-x-1/2 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest whitespace-nowrap transition-colors disabled:opacity-50 ${
+                  className={`absolute left-1/2 top-full mt-1 -translate-x-1/2 inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest whitespace-nowrap transition-colors disabled:opacity-50 ${
                     isDarkMode ? "border-zinc-700 bg-zinc-800/60 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/60" : "border-zinc-300 bg-zinc-100/70 text-zinc-500 hover:text-zinc-700 hover:bg-zinc-200/70"
                   }`}
                 >

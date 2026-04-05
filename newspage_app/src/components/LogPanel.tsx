@@ -88,7 +88,7 @@ export function LogPanel({ isDarkMode, logs, isOpen, onClear, onClose }: LogPane
             <button
               type="button"
               onClick={onClear}
-              className={`rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-widest transition-colors ${
+              className={`rounded-md border px-3 py-1 text-[10px] font-black uppercase tracking-widest transition-colors ${
                 isDarkMode
                   ? "border-zinc-700 text-zinc-300 hover:bg-zinc-800"
                   : "border-zinc-300 text-zinc-700 hover:bg-zinc-200"

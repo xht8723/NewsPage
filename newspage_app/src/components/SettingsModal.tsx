@@ -396,42 +396,72 @@ export function SettingsModal({
                 <div>
                   <label className="mb-1.5 block text-xs font-medium opacity-70">Scrape cooldown (hours)</label>
                   <p className="mb-1.5 text-xs opacity-50">Min time between website scrapes. 0 = always scrape.</p>
-                  <input
-                    type="number"
-                    min={0}
-                    max={24}
-                    value={settings.scrapeCooldownHours}
-                    onChange={(e) => {
-                      const val = Math.min(24, Math.max(0, Number(e.target.value)));
-                      setSettings((s) => ({ ...s, scrapeCooldownHours: val }));
-                      saveSetting("scrapeCooldownHours", String(val));
-                    }}
-                    className={`number-dial-${isDarkMode ? "dark" : "light"} w-20 rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
-                      isDarkMode
-                        ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                        : "border-zinc-300 bg-zinc-200 text-zinc-900"
-                    }`}
-                  />
+                  <div>
+                    <div className="relative h-6 w-full">
+                      <div className={`absolute top-1/2 h-1.5 w-full -translate-y-1/2 rounded-full ${isDarkMode ? "bg-zinc-700" : "bg-zinc-300"}`} />
+                      <div
+                        className={`absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full ${isDarkMode ? "bg-cyan-600/85" : "bg-emerald-500"}`}
+                        style={{ left: 0, width: `${(settings.scrapeCooldownHours / 24) * 100}%` }}
+                      />
+                      <input
+                        type="range"
+                        min={0}
+                        max={24}
+                        step={1}
+                        value={settings.scrapeCooldownHours}
+                        onChange={(e) => {
+                          const val = Number(e.target.value);
+                          setSettings((s) => ({ ...s, scrapeCooldownHours: val }));
+                          saveSetting("scrapeCooldownHours", String(val));
+                        }}
+                        className={`absolute top-0 h-6 w-full appearance-none bg-transparent [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 ${
+                          isDarkMode
+                            ? "[&::-moz-range-thumb]:border-cyan-600 [&::-moz-range-thumb]:bg-zinc-900 [&::-webkit-slider-thumb]:border-cyan-600 [&::-webkit-slider-thumb]:bg-zinc-900"
+                            : "[&::-moz-range-thumb]:border-emerald-500 [&::-moz-range-thumb]:bg-white [&::-webkit-slider-thumb]:border-emerald-500 [&::-webkit-slider-thumb]:bg-white"
+                        }`}
+                      />
+                    </div>
+                    <div className="mt-1 flex items-center justify-between">
+                      <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>0</span>
+                      <span className={`text-xs font-semibold ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>{settings.scrapeCooldownHours} h</span>
+                      <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>24</span>
+                    </div>
+                  </div>
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs font-medium opacity-70">LLM batch size</label>
                   <p className="mb-1.5 text-xs opacity-50">How many articles for the LLM to process in a single batch.</p>
-                  <input
-                    type="number"
-                    min={1}
-                    max={20}
-                    value={settings.llmBatchSize}
-                    onChange={(e) => {
-                      const val = Math.min(20, Math.max(1, Number(e.target.value)));
-                      setSettings((s) => ({ ...s, llmBatchSize: val }));
-                      saveSetting("llmBatchSize", String(val));
-                    }}
-                    className={`number-dial-${isDarkMode ? "dark" : "light"} w-20 rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
-                      isDarkMode
-                        ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                        : "border-zinc-300 bg-zinc-200 text-zinc-900"
-                    }`}
-                  />
+                  <div>
+                    <div className="relative h-6 w-full">
+                      <div className={`absolute top-1/2 h-1.5 w-full -translate-y-1/2 rounded-full ${isDarkMode ? "bg-zinc-700" : "bg-zinc-300"}`} />
+                      <div
+                        className={`absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full ${isDarkMode ? "bg-cyan-600/85" : "bg-emerald-500"}`}
+                        style={{ left: 0, width: `${((settings.llmBatchSize - 1) / (10 - 1)) * 100}%` }}
+                      />
+                      <input
+                        type="range"
+                        min={1}
+                        max={10}
+                        step={1}
+                        value={settings.llmBatchSize}
+                        onChange={(e) => {
+                          const val = Number(e.target.value);
+                          setSettings((s) => ({ ...s, llmBatchSize: val }));
+                          saveSetting("llmBatchSize", String(val));
+                        }}
+                        className={`absolute top-0 h-6 w-full appearance-none bg-transparent [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 ${
+                          isDarkMode
+                            ? "[&::-moz-range-thumb]:border-cyan-600 [&::-moz-range-thumb]:bg-zinc-900 [&::-webkit-slider-thumb]:border-cyan-600 [&::-webkit-slider-thumb]:bg-zinc-900"
+                            : "[&::-moz-range-thumb]:border-emerald-500 [&::-moz-range-thumb]:bg-white [&::-webkit-slider-thumb]:border-emerald-500 [&::-webkit-slider-thumb]:bg-white"
+                        }`}
+                      />
+                    </div>
+                    <div className="mt-1 flex items-center justify-between">
+                      <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>1</span>
+                      <span className={`text-xs font-semibold ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>{settings.llmBatchSize}</span>
+                      <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>10</span>
+                    </div>
+                  </div>
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs font-medium opacity-70">Summary bullet points</label>

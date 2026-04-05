@@ -19,7 +19,7 @@ import { TOPIC_CATEGORIES } from "../constants/news";
 import type { FeedDefinition, FeedSource } from "../types/news";
 
 function pillClass(active: boolean, isDarkMode: boolean): string {
-  return `rounded-full border px-2 py-1 text-[10px] font-bold uppercase tracking-wide transition-all duration-200 hover:scale-[1.03] ${
+  return `rounded-md border px-2 py-1 text-[10px] font-bold uppercase tracking-wide transition-all duration-200 hover:scale-[1.03] ${
     active
       ? isDarkMode
         ? "border-cyan-500/80 bg-cyan-600/12 text-cyan-200 shadow-[0_0_8px_rgba(8,145,178,0.28)]"

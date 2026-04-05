@@ -59,7 +59,7 @@ export function VirtualizedArticleList({
       <div className="flex flex-col items-center justify-center space-y-4 py-32 text-center opacity-40">
         <Search size={48} className="text-zinc-500" />
         <div>
-          <h3 className="text-lg font-bold">No briefings for this date</h3>
+          <h3 className="text-lg font-bold">No articles yet.</h3>
         </div>
       </div>
     );
