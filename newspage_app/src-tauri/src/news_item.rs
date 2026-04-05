@@ -12,6 +12,7 @@ pub struct NewsItem {
     pub language: String,
     pub thumbnail: String,
     pub category: String,
+    pub article_type: String,
     pub ai_summary: String,
     pub og_content: String,
     pub snippet: String,

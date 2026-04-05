@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate};
 use reqwest::Client;
 use scraper::{ElementRef, Html, Selector};
+use std::collections::HashSet;
 
 use crate::id_generator::generate_article_id;
 use crate::news_item::NewsItem;
@@ -17,9 +18,13 @@ const ANN_SOURCE_ICON: &str = "src/assets/favicon.ico";
 pub type AnnNewsItem = NewsItem;
 
 pub async fn get_news_html() -> Result<String, String> {
+    get_news_html_for_url(ANN_NEWS_URL).await
+}
+
+pub async fn get_news_html_for_url(news_url: &str) -> Result<String, String> {
     let client = Client::new();
 
-    match client.get(ANN_NEWS_URL).send().await {
+    match client.get(news_url).send().await {
         Ok(response) => match response.text().await {
             Ok(html) => Ok(html),
             Err(e) => Err(format!("Failed to read response body: {}", e)),
@@ -29,7 +34,11 @@ pub async fn get_news_html() -> Result<String, String> {
 }
 
 pub async fn get_news_items() -> Result<Vec<String>, String> {
-    let html_content = get_news_html().await?;
+    get_news_items_for_url(ANN_NEWS_URL).await
+}
+
+pub async fn get_news_items_for_url(news_url: &str) -> Result<Vec<String>, String> {
+    let html_content = get_news_html_for_url(news_url).await?;
     let document = Html::parse_document(&html_content);
 
     let selector = Selector::parse("div.herald.box.news.t-news")
@@ -172,6 +181,7 @@ pub fn extract_news_item_fields(item_html: &str) -> Option<AnnNewsItem> {
         language: "en".to_string(),
         thumbnail,
         category: "anime".to_string(),
+        article_type: "rss".to_string(),
         ai_summary: String::new(),
         og_content: String::new(),
         snippet: String::new(),
@@ -181,7 +191,11 @@ pub fn extract_news_item_fields(item_html: &str) -> Option<AnnNewsItem> {
 }
 
 pub async fn scrape_ann(limit: Option<usize>) -> Result<Vec<AnnNewsItem>, String> {
-    let news_items_html = get_news_items().await?;
+    scrape_ann_for_url(limit, ANN_NEWS_URL).await
+}
+
+pub async fn scrape_ann_for_url(limit: Option<usize>, news_url: &str) -> Result<Vec<AnnNewsItem>, String> {
+    let news_items_html = get_news_items_for_url(news_url).await?;
     let mut items: Vec<_> = news_items_html
         .iter()
         .filter_map(|item_html| extract_news_item_fields(item_html))
@@ -201,7 +215,97 @@ impl ScraperStage for AnnScraperStage {
         "ANN"
     }
 
-    async fn run(&self, _ctx: &ScrapeContext) -> Result<Vec<NewsItem>, String> {
-        scrape_ann(None).await
+    fn should_run(&self, ctx: &ScrapeContext) -> bool {
+        ctx.rss_sources
+            .iter()
+            .any(|s| s.source_type == "ann" && ctx.subscribed_rss_names.contains(&s.display_name.to_ascii_lowercase()))
+    }
+
+    async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<NewsItem>, String> {
+        let active_sources: Vec<_> = ctx
+            .rss_sources
+            .iter()
+            .filter(|s| s.source_type == "ann" && ctx.subscribed_rss_names.contains(&s.display_name.to_ascii_lowercase()))
+            .collect();
+
+        if active_sources.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut out: Vec<NewsItem> = Vec::new();
+        let mut seen_ids: HashSet<String> = HashSet::new();
+
+        for source in active_sources {
+            let source_url = if source.source_ref.trim().is_empty() {
+                ANN_NEWS_URL
+            } else {
+                source.source_ref.as_str()
+            };
+            let category = source.display_name.to_lowercase();
+            let source_name = source.display_name.clone();
+
+            let items = scrape_ann_for_url(None, source_url).await?;
+            for mut item in items {
+                item.category = category.clone();
+                item.source_name = source_name.clone();
+                if seen_ids.insert(item.id.clone()) {
+                    out.push(item);
+                }
+            }
+        }
+
+        for item in &mut out {
+            crate::image_search::fill_thumbnail_if_missing(&mut item.thumbnail, &item.title).await;
+        }
+
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::FeedSource;
+    use std::collections::HashSet;
+
+    fn ann_source() -> FeedSource {
+        FeedSource {
+            source_type: "ann".to_string(),
+            source_ref: "https://www.animenewsnetwork.com/news/?topic=anime".to_string(),
+            display_name: "ANN".to_string(),
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn stage_should_run_only_when_ann_source_subscribed() {
+        let stage = AnnScraperStage;
+
+        // No sources, no subscriptions.
+        let empty = ScrapeContext {
+            selected_regions: vec![],
+            rss_sources: vec![],
+            subscribed_rss_names: HashSet::new(),
+            subscribed_news_categories: HashSet::new(),
+        };
+        assert!(!stage.should_run(&empty));
+
+        // Source present but not subscribed in any feed.
+        let unsubscribed_ann = ScrapeContext {
+            selected_regions: vec![],
+            rss_sources: vec![ann_source()],
+            subscribed_rss_names: HashSet::new(),
+            subscribed_news_categories: HashSet::new(),
+        };
+        assert!(!stage.should_run(&unsubscribed_ann));
+
+        // Source subscribed in at least one feed.
+        let subscribed_ann = ScrapeContext {
+            selected_regions: vec![],
+            rss_sources: vec![ann_source()],
+            subscribed_rss_names: ["ann".to_string()].into(),
+            subscribed_news_categories: HashSet::new(),
+        };
+        assert!(stage.should_run(&subscribed_ann));
     }
 }

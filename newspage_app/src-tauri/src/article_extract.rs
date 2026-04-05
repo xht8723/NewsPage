@@ -3,6 +3,7 @@ use base64::Engine;
 use scraper::{Html, Selector};
 use trafilatura::{extract, Options};
 
+use crate::image_search::check_image_url;
 use crate::logging;
 
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -482,43 +483,6 @@ pub fn extract_thumbnail_from_html(html: &str, base_url: &str) -> Option<String>
     None
 }
 
-/// Returns `Ok(())` if the URL looks like a real article image, or
-/// `Err(reason)` explaining why it was rejected.
-fn check_image_url(url: &str) -> Result<(), &'static str> {
-    if url.is_empty() {
-        return Err("empty URL");
-    }
-    if url.starts_with("data:") {
-        return Err("data URI");
-    }
-    if url.ends_with(".svg") || url.contains(".svg?") {
-        return Err("SVG file");
-    }
-    // Reject obvious 1×1 tracking pixel URLs (not just any URL that mentions the word).
-    // Match patterns like: /pixel.gif, /1x1.gif, ?width=1&height=1,
-    // tracking pixel paths (/tp/, /t.gif), but NOT legitimate images about e.g. Google Pixel.
-    let lower_url = url.to_ascii_lowercase();
-    if lower_url.ends_with("/pixel.gif")
-        || lower_url.ends_with("/pixel.png")
-        || lower_url.ends_with("/spacer.gif")
-        || lower_url.ends_with("/spacer.png")
-        || lower_url.contains("/1x1")
-        || lower_url.contains("1x1.gif")
-        || lower_url.contains("1x1.png")
-        || lower_url.contains("clear.gif")
-        || lower_url.contains("blank.gif")
-    {
-        return Err("tracking pixel");
-    }
-    if url.contains("news.google.com") {
-        return Err("Google News URL");
-    }
-    if url.contains("lh3.googleusercontent.com") && !url.contains("blogspot") {
-        return Err("Google News logo (lh3.googleusercontent.com)");
-    }
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Junk article text detection
 // ---------------------------------------------------------------------------
@@ -570,7 +534,7 @@ pub fn is_junk_article_text(text: &str) -> Option<&'static str> {
 }
 
 // ---------------------------------------------------------------------------
-// Thumbnail quality check + Google CSE image search fallback
+// Junk article text detection
 // ---------------------------------------------------------------------------
 
 /// Returns `true` if the thumbnail URL is missing or likely low quality.

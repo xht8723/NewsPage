@@ -29,17 +29,17 @@ pub type AutomatonNewsItem = NewsItem;
 // RSS strategy — primary
 // ---------------------------------------------------------------------------
 
-async fn fetch_rss() -> Result<String, String> {
+async fn fetch_rss_from_url(rss_url: &str) -> Result<String, String> {
     let client = Client::new();
     let response = client
-        .get(RSS_FEED_URL)
+        .get(rss_url)
         .send()
         .await
-        .map_err(|e| format!("Automaton RSS fetch failed: {}", e))?;
+        .map_err(|e| format!("Automaton RSS fetch failed for {}: {}", rss_url, e))?;
     response
         .text()
         .await
-        .map_err(|e| format!("Automaton RSS body read failed: {}", e))
+        .map_err(|e| format!("Automaton RSS body read failed for {}: {}", rss_url, e))
 }
 
 /// Light XML extraction: pull text between `<open>` and `</open>` tags.
@@ -193,6 +193,7 @@ fn parse_rss_items(xml: &str) -> Vec<AutomatonNewsItem> {
             language: "en".to_string(),
             thumbnail,
             category: CATEGORY.to_string(),
+            article_type: "rss".to_string(),
             ai_summary: String::new(),
             og_content: String::new(),
             snippet: String::new(),
@@ -211,8 +212,13 @@ fn normalize_rss_date(date_str: &str) -> String {
         .unwrap_or_else(|_| date_str.to_string())
 }
 
+#[cfg(test)]
 async fn scrape_via_rss() -> Result<Vec<AutomatonNewsItem>, String> {
-    let xml = fetch_rss().await?;
+    scrape_via_rss_from_url(RSS_FEED_URL).await
+}
+
+async fn scrape_via_rss_from_url(rss_url: &str) -> Result<Vec<AutomatonNewsItem>, String> {
+    let xml = fetch_rss_from_url(rss_url).await?;
     let items = parse_rss_items(&xml);
     if items.is_empty() {
         return Err("Automaton RSS returned 0 parseable items".to_string());
@@ -224,17 +230,17 @@ async fn scrape_via_rss() -> Result<Vec<AutomatonNewsItem>, String> {
 // HTML strategy — fallback
 // ---------------------------------------------------------------------------
 
-async fn fetch_html() -> Result<String, String> {
+async fn fetch_html_from_url(html_url: &str) -> Result<String, String> {
     let client = Client::new();
     let response = client
-        .get(HTML_NEWS_URL)
+        .get(html_url)
         .send()
         .await
-        .map_err(|e| format!("Automaton HTML fetch failed: {}", e))?;
+        .map_err(|e| format!("Automaton HTML fetch failed for {}: {}", html_url, e))?;
     response
         .text()
         .await
-        .map_err(|e| format!("Automaton HTML body read failed: {}", e))
+        .map_err(|e| format!("Automaton HTML body read failed for {}: {}", html_url, e))
 }
 
 fn parse_html_items(html: &str) -> Vec<AutomatonNewsItem> {
@@ -330,6 +336,7 @@ fn parse_html_items(html: &str) -> Vec<AutomatonNewsItem> {
             language: "en".to_string(),
             thumbnail,
             category: CATEGORY.to_string(),
+            article_type: "rss".to_string(),
             ai_summary: String::new(),
             og_content: String::new(),
             snippet: String::new(),
@@ -341,8 +348,13 @@ fn parse_html_items(html: &str) -> Vec<AutomatonNewsItem> {
     items
 }
 
+#[cfg(test)]
 async fn scrape_via_html() -> Result<Vec<AutomatonNewsItem>, String> {
-    let html = fetch_html().await?;
+    scrape_via_html_from_url(HTML_NEWS_URL).await
+}
+
+async fn scrape_via_html_from_url(html_url: &str) -> Result<Vec<AutomatonNewsItem>, String> {
+    let html = fetch_html_from_url(html_url).await?;
     let items = parse_html_items(&html);
     if items.is_empty() {
         return Err("Automaton HTML returned 0 parseable items".to_string());
@@ -377,35 +389,48 @@ fn dedup_by_id(items: Vec<AutomatonNewsItem>) -> Vec<AutomatonNewsItem> {
 }
 
 pub async fn scrape_automaton(limit: Option<usize>) -> Result<Vec<AutomatonNewsItem>, String> {
-    // Strategy order: RSS first, HTML fallback
-    let strategies: Vec<(&str, fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<AutomatonNewsItem>, String>> + Send>>)> = vec![
-        ("RSS", || Box::pin(scrape_via_rss())),
-        ("HTML", || Box::pin(scrape_via_html())),
-    ];
+    scrape_automaton_for_urls(limit, RSS_FEED_URL, HTML_NEWS_URL).await
+}
 
-    let mut last_err = String::new();
-    for (label, strategy_fn) in &strategies {
-        match strategy_fn().await {
-            Ok(items) => {
-                let mut items = dedup_by_id(items);
-                sort_by_date_desc(&mut items);
-                let limit = limit.unwrap_or(DEFAULT_ITEM_LIMIT);
-                items.truncate(limit);
-                eprintln!("[AUTOMATON] {} strategy succeeded with {} items", label, items.len());
-                return Ok(items);
-            }
-            Err(e) => {
-                eprintln!("[AUTOMATON] {} strategy failed: {}", label, e);
-                last_err = format!("{} failed: {}", label, e);
-            }
+pub async fn scrape_automaton_for_urls(
+    limit: Option<usize>,
+    rss_url: &str,
+    html_url: &str,
+) -> Result<Vec<AutomatonNewsItem>, String> {
+    // Strategy order: RSS first, HTML fallback.
+    // Each strategy is only attempted if the previous one fails, so the HTML
+    // request is never made when RSS succeeds.
+    let finalize = |items: Vec<AutomatonNewsItem>| {
+        let mut items = dedup_by_id(items);
+        sort_by_date_desc(&mut items);
+        items.truncate(limit.unwrap_or(DEFAULT_ITEM_LIMIT));
+        items
+    };
+
+    match scrape_via_rss_from_url(rss_url).await {
+        Ok(items) => {
+            let items = finalize(items);
+            eprintln!("[AUTOMATON] RSS strategy succeeded with {} items", items.len());
+            return Ok(items);
+        }
+        Err(e) => {
+            eprintln!("[AUTOMATON] RSS strategy failed: {}", e);
         }
     }
 
-    // All strategies failed — soft-skip: log warning, return empty
-    eprintln!(
-        "[AUTOMATON] All strategies exhausted. Last error: {}. Returning empty.",
-        last_err
-    );
+    match scrape_via_html_from_url(html_url).await {
+        Ok(items) => {
+            let items = finalize(items);
+            eprintln!("[AUTOMATON] HTML strategy succeeded with {} items", items.len());
+            return Ok(items);
+        }
+        Err(e) => {
+            eprintln!("[AUTOMATON] HTML strategy failed: {}", e);
+        }
+    }
+
+    // All strategies exhausted — soft-skip: log warning, return empty
+    eprintln!("[AUTOMATON] All strategies exhausted. Returning empty.");
     Ok(Vec::new())
 }
 
@@ -427,12 +452,52 @@ impl ScraperStage for AutomatonScraperStage {
         "AUTOMATON"
     }
 
-    fn should_run(&self, _ctx: &ScrapeContext) -> bool {
+    fn should_run(&self, ctx: &ScrapeContext) -> bool {
         ENABLED
+            && ctx
+                .rss_sources
+                .iter()
+                .any(|s| s.source_type == "automaton" && ctx.subscribed_rss_names.contains(&s.display_name.to_ascii_lowercase()))
     }
 
-    async fn run(&self, _ctx: &ScrapeContext) -> Result<Vec<NewsItem>, String> {
-        scrape_automaton(None).await
+    async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<NewsItem>, String> {
+        let active_sources: Vec<_> = ctx
+            .rss_sources
+            .iter()
+            .filter(|s| s.source_type == "automaton" && ctx.subscribed_rss_names.contains(&s.display_name.to_ascii_lowercase()))
+            .collect();
+
+        if active_sources.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut out: Vec<NewsItem> = Vec::new();
+        let mut seen_ids: HashSet<String> = HashSet::new();
+
+        for source in active_sources {
+            let rss_url = if source.source_ref.trim().is_empty() {
+                RSS_FEED_URL
+            } else {
+                source.source_ref.as_str()
+            };
+            let category = source.display_name.to_lowercase();
+            let source_name = source.display_name.clone();
+
+            let items = scrape_automaton_for_urls(None, rss_url, HTML_NEWS_URL).await?;
+            for mut item in items {
+                item.category = category.clone();
+                item.source_name = source_name.clone();
+                if seen_ids.insert(item.id.clone()) {
+                    out.push(item);
+                }
+            }
+        }
+
+        for item in &mut out {
+            crate::image_search::fill_thumbnail_if_missing(&mut item.thumbnail, &item.title).await;
+        }
+
+        Ok(out)
     }
 }
 
@@ -628,6 +693,7 @@ mod tests {
             language: "en".to_string(),
             thumbnail: String::new(),
             category: CATEGORY.to_string(),
+            article_type: "rss".to_string(),
             ai_summary: String::new(),
             og_content: String::new(),
             snippet: String::new(),
@@ -682,6 +748,47 @@ mod tests {
             first_img_src(html),
             Some("https://example.com/img.jpg".to_string())
         );
+    }
+
+    #[test]
+    fn stage_should_run_only_when_automaton_source_subscribed() {
+        let stage = AutomatonScraperStage;
+
+        let empty = ScrapeContext {
+            selected_regions: vec![],
+            rss_sources: vec![],
+            subscribed_rss_names: std::collections::HashSet::new(),
+            subscribed_news_categories: std::collections::HashSet::new(),
+        };
+        assert!(!stage.should_run(&empty));
+
+        // Source present but not subscribed in any feed.
+        let unsubscribed_automaton = ScrapeContext {
+            selected_regions: vec![],
+            rss_sources: vec![crate::db::FeedSource {
+                source_type: "automaton".to_string(),
+                source_ref: "https://automaton-media.com/en/feed/".to_string(),
+                display_name: "AUTOMATON".to_string(),
+                enabled: true,
+            }],
+            subscribed_rss_names: std::collections::HashSet::new(),
+            subscribed_news_categories: std::collections::HashSet::new(),
+        };
+        assert!(!stage.should_run(&unsubscribed_automaton));
+
+        // Source subscribed in at least one feed.
+        let subscribed_automaton = ScrapeContext {
+            selected_regions: vec![],
+            rss_sources: vec![crate::db::FeedSource {
+                source_type: "automaton".to_string(),
+                source_ref: "https://automaton-media.com/en/feed/".to_string(),
+                display_name: "AUTOMATON".to_string(),
+                enabled: true,
+            }],
+            subscribed_rss_names: ["automaton".to_string()].into(),
+            subscribed_news_categories: std::collections::HashSet::new(),
+        };
+        assert!(stage.should_run(&subscribed_automaton));
     }
 
     // ── Live tests (opt-in) ─────────────────────────────────────────────

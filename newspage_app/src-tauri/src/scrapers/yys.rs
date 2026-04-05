@@ -10,10 +10,12 @@ use crate::news_item::NewsItem;
 use super::rss_common::{decode_entities, fetch_rss_feed, parse_pub_date, strip_cdata};
 use super::{ScrapeContext, ScraperStage};
 
-pub struct GcoresScraperStage;
+const YYS_FEED_URL: &str = "https://www.yystv.cn/rss/feed";
+
+pub struct YysScraperStage;
 
 // ---------------------------------------------------------------------------
-// XML helpers (scoped to GCores — avoid pulling in rss_common internals)
+// XML helpers
 // ---------------------------------------------------------------------------
 
 /// Extract the text content between the first matching `<tag…>` and `</tag>`.
@@ -46,15 +48,33 @@ fn first_img_src(html: &str) -> Option<String> {
     }
 }
 
+/// Parse the `<source …>` element text into an author name.
+/// The text looks like "游研社 by AuthorName"; we strip the prefix.
+fn parse_author_from_source(source_text: &str) -> Option<String> {
+    let decoded = decode_entities(&strip_cdata(source_text));
+    let trimmed = decoded.trim().to_string();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Try to extract "by <name>" portion
+    if let Some(idx) = trimmed.find(" by ") {
+        let name = trimmed[idx + 4..].trim().to_string();
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+    // Fallback: return the whole thing if no "by" separator
+    Some(trimmed)
+}
+
 // ---------------------------------------------------------------------------
-// GCores-specific item parser
+// Item parser
 // ---------------------------------------------------------------------------
 
-fn parse_gcores_item(
+fn parse_yys_item(
     item_xml: &str,
     category: &str,
     source_name: &str,
-    source_icon: &str,
 ) -> Option<NewsItem> {
     let title = xml_inner(item_xml, "title")
         .map(|s| decode_entities(&strip_cdata(s)))
@@ -72,27 +92,17 @@ fn parse_gcores_item(
         .map(|dt| dt.to_rfc3339())
         .unwrap_or(pub_date_raw);
 
-    // Authors: GCores uses comma-separated names in <author>
-    let authors: Vec<String> = xml_inner(item_xml, "author")
-        .map(|s| {
-            let decoded = decode_entities(&strip_cdata(s));
-            decoded
-                .split(',')
-                .map(|a| a.trim().to_string())
-                .filter(|a| !a.is_empty())
-                .collect()
-        })
+    // Author: extracted from the <source> element text ("游研社 by Name")
+    let authors: Vec<String> = xml_inner(item_xml, "source")
+        .and_then(parse_author_from_source)
+        .map(|a| vec![a])
         .unwrap_or_default();
 
-    // Thumbnail: prefer dedicated <thumb> tag, fall back to first <img> in description CDATA
-    let thumbnail = xml_inner(item_xml, "thumb")
-        .map(|s| s.trim().to_string())
-        .filter(|s| s.starts_with("http"))
-        .or_else(|| {
-            xml_inner(item_xml, "description").and_then(|desc| {
-                let decoded = strip_cdata(&decode_entities(desc));
-                first_img_src(&decoded)
-            })
+    // Thumbnail: first <img src=...> found inside the <description> CDATA block
+    let thumbnail = xml_inner(item_xml, "description")
+        .and_then(|desc| {
+            let decoded = strip_cdata(&decode_entities(desc));
+            first_img_src(&decoded)
         })
         .unwrap_or_default();
 
@@ -104,7 +114,7 @@ fn parse_gcores_item(
         url: link,
         date,
         source_name: source_name.to_string(),
-        source_icon: source_icon.to_string(),
+        source_icon: String::new(),
         authors,
         language: "zh-CN".to_string(),
         thumbnail,
@@ -118,12 +128,7 @@ fn parse_gcores_item(
     })
 }
 
-fn parse_gcores_feed(
-    xml: &str,
-    category: &str,
-    source_name: &str,
-    source_icon: &str,
-) -> Vec<NewsItem> {
+fn parse_yys_feed(xml: &str, category: &str, source_name: &str) -> Vec<NewsItem> {
     let mut items = Vec::new();
     let mut search_from = 0usize;
 
@@ -138,7 +143,7 @@ fn parse_gcores_feed(
         let item_xml = &xml[abs_start..abs_start + item_end + 7];
         search_from = abs_start + item_end + 7;
 
-        if let Some(item) = parse_gcores_item(item_xml, category, source_name, source_icon) {
+        if let Some(item) = parse_yys_item(item_xml, category, source_name) {
             items.push(item);
         }
     }
@@ -150,31 +155,35 @@ fn parse_gcores_feed(
 // Scraper
 // ---------------------------------------------------------------------------
 
-async fn scrape_gcores_sources(sources: &[&FeedSource]) -> Result<Vec<NewsItem>, String> {
+async fn scrape_yys_sources(sources: &[&FeedSource]) -> Result<Vec<NewsItem>, String> {
     let client = Client::new();
     let mut out: Vec<NewsItem> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
 
     logging::info(
         "Scrape",
-        format!("GcoresStage: {} subscribed source(s)", sources.len()),
+        format!("YysStage: {} subscribed source(s)", sources.len()),
         Some(sources.len()),
     );
 
     for source in sources {
-        let url = source.source_ref.clone();
+        let url = if source.source_ref.trim().is_empty() {
+            YYS_FEED_URL.to_string()
+        } else {
+            source.source_ref.clone()
+        };
         let category = source.display_name.to_lowercase();
         let source_name = source.display_name.clone();
 
         logging::info(
             "Scrape",
-            format!("Fetching GCores RSS '{}' -> {}", source.display_name, url),
+            format!("Fetching YYS RSS '{}' -> {}", source.display_name, url),
             None,
         );
 
         match fetch_rss_feed(&client, &url).await {
             Ok(xml) => {
-                let items = parse_gcores_feed(&xml, &category, &source_name, "");
+                let items = parse_yys_feed(&xml, &category, &source_name);
                 let total = items.len();
                 let mut added = 0usize;
                 for item in items {
@@ -186,7 +195,7 @@ async fn scrape_gcores_sources(sources: &[&FeedSource]) -> Result<Vec<NewsItem>,
                 logging::info(
                     "Scrape",
                     format!(
-                        "GCores RSS '{}': {} parsed, {} new",
+                        "YYS RSS '{}': {} parsed, {} new",
                         source.display_name, total, added
                     ),
                     Some(added),
@@ -195,7 +204,7 @@ async fn scrape_gcores_sources(sources: &[&FeedSource]) -> Result<Vec<NewsItem>,
             Err(e) => {
                 logging::warn(
                     "Scrape",
-                    format!("GCores RSS '{}' fetch failed: {}", source.display_name, e),
+                    format!("YYS RSS '{}' fetch failed: {}", source.display_name, e),
                     None,
                 );
             }
@@ -206,24 +215,24 @@ async fn scrape_gcores_sources(sources: &[&FeedSource]) -> Result<Vec<NewsItem>,
 }
 
 #[async_trait]
-impl ScraperStage for GcoresScraperStage {
+impl ScraperStage for YysScraperStage {
     fn name(&self) -> &'static str {
-        "GCORES_RSS"
+        "YYS_RSS"
     }
 
     fn should_run(&self, ctx: &ScrapeContext) -> bool {
         ctx.rss_sources
             .iter()
-            .any(|s| s.source_type == "gcores" && ctx.subscribed_rss_names.contains(&s.display_name.to_ascii_lowercase()))
+            .any(|s| s.source_type == "yys" && ctx.subscribed_rss_names.contains(&s.display_name.to_ascii_lowercase()))
     }
 
     async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<NewsItem>, String> {
         let active_sources: Vec<&FeedSource> = ctx
             .rss_sources
             .iter()
-            .filter(|s| s.source_type == "gcores" && ctx.subscribed_rss_names.contains(&s.display_name.to_ascii_lowercase()))
+            .filter(|s| s.source_type == "yys" && ctx.subscribed_rss_names.contains(&s.display_name.to_ascii_lowercase()))
             .collect();
-        let mut items = scrape_gcores_sources(&active_sources).await?;
+        let mut items = scrape_yys_sources(&active_sources).await?;
         for item in &mut items {
             crate::image_search::fill_thumbnail_if_missing(&mut item.thumbnail, &item.title).await;
         }
@@ -242,100 +251,96 @@ mod tests {
 
     const SAMPLE_FEED: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
-  <channel>
-    <title>机核</title>
-    <item>
-      <title>主要还是压抑，核周报4.4</title>
-      <link>https://www.gcores.com/radios/212637</link>
-      <author>Ryoma,雪豆,白广大</author>
-      <guid>https://www.gcores.com/radios/212637</guid>
-      <pubDate>Sat, 04 Apr 2026 23:00:00 +0800</pubDate>
-      <thumb>https://image.gcores.com/cc7121c07475b28815a91899309a6f4d-1600-900.png</thumb>
-      <description><![CDATA[<img src="https://image.gcores.com/fallback.png" /><p>本期时间轴制作：佟和</p>]]></description>
-    </item>
-    <item>
-      <title>科幻|刘慈欣《微纪元》末日求生新思路</title>
-      <link>https://www.gcores.com/radios/212920</link>
-      <author>pxxzfm</author>
-      <guid>https://www.gcores.com/radios/212920</guid>
-      <pubDate>Sat, 04 Apr 2026 09:24:56 +0800</pubDate>
-      <description><![CDATA[<img src="https://image.gcores.com/scifi.jpg" /><p>本期主题：末日危机</p>]]></description>
-    </item>
-    <item>
-      <title></title>
-      <link>https://www.gcores.com/radios/empty</link>
-      <pubDate>Sat, 04 Apr 2026 01:00:00 +0800</pubDate>
-    </item>
-  </channel>
+<channel>
+<title><![CDATA[游研社]]></title>
+<link>https://www.yystv.cn</link>
+<item>
+<title><![CDATA[AI如何一层层"吃"进游戏行业]]></title>
+<category><![CDATA[文化]]></category>
+<link>https://www.yystv.cn/p/13769</link>
+<description><![CDATA[<p>Some text.</p><p class="picbox" ><img src="https://alioss.yystv.cn/doc/13769/thumbnail.jpg" width="1080" height="392"></p><p>More text.</p>]]></description>
+<pubDate>Sat, 04 Apr 2026 00:00:00 +0800</pubDate>
+<source url="https://www.yystv.cn">游研社 by Oracle</source>
+<guid isPermaLink="true">https://www.yystv.cn/p/13769</guid>
+</item>
+<item>
+<title><![CDATA[来到第三年，北大这场游戏学术趴]]></title>
+<category><![CDATA[文化]]></category>
+<link>https://www.yystv.cn/p/13767</link>
+<description><![CDATA[<p class="picbox" ><img src="https://alioss.yystv.cn/doc/13767/cover.jpg" width="1080" height="609"></p><p>Content here.</p>]]></description>
+<pubDate>Sat, 04 Apr 2026 00:00:00 +0800</pubDate>
+<source url="https://www.yystv.cn">游研社 by 郝磅磅</source>
+<guid isPermaLink="true">https://www.yystv.cn/p/13767</guid>
+</item>
+<item>
+<title></title>
+<link>https://www.yystv.cn/p/empty</link>
+<pubDate>Sat, 04 Apr 2026 00:00:00 +0800</pubDate>
+</item>
+</channel>
 </rss>"#;
 
     #[test]
-    fn parses_gcores_feed_items() {
-        let items = parse_gcores_feed(SAMPLE_FEED, "gcores", "GCORES", "");
+    fn parses_yys_feed_items() {
+        let items = parse_yys_feed(SAMPLE_FEED, "yys", "YYS");
         // Item with empty title should be skipped
         assert_eq!(items.len(), 2);
     }
 
     #[test]
     fn sets_language_to_zh_cn() {
-        let items = parse_gcores_feed(SAMPLE_FEED, "gcores", "GCORES", "");
+        let items = parse_yys_feed(SAMPLE_FEED, "yys", "YYS");
         assert!(items.iter().all(|i| i.language == "zh-CN"));
     }
 
     #[test]
-    fn splits_comma_separated_authors() {
-        let items = parse_gcores_feed(SAMPLE_FEED, "gcores", "GCORES", "");
-        let first = &items[0];
-        assert_eq!(first.authors, vec!["Ryoma", "雪豆", "白广大"]);
-    }
-
-    #[test]
-    fn single_author_produces_one_entry() {
-        let items = parse_gcores_feed(SAMPLE_FEED, "gcores", "GCORES", "");
-        let second = &items[1];
-        assert_eq!(second.authors, vec!["pxxzfm"]);
-    }
-
-    #[test]
-    fn prefers_thumb_tag_over_description_img() {
-        let items = parse_gcores_feed(SAMPLE_FEED, "gcores", "GCORES", "");
-        // First item has <thumb> — should use that
-        assert_eq!(
-            items[0].thumbnail,
-            "https://image.gcores.com/cc7121c07475b28815a91899309a6f4d-1600-900.png"
-        );
-        // Second item has no <thumb> — falls back to <img> in description
-        assert_eq!(items[1].thumbnail, "https://image.gcores.com/scifi.jpg");
-    }
-
-    #[test]
     fn article_type_is_rss() {
-        let items = parse_gcores_feed(SAMPLE_FEED, "gcores", "GCORES", "");
+        let items = parse_yys_feed(SAMPLE_FEED, "yys", "YYS");
         assert!(items.iter().all(|i| i.article_type == "rss"));
     }
 
     #[test]
     fn category_matches_provided_value() {
-        let items = parse_gcores_feed(SAMPLE_FEED, "gcores", "GCORES", "");
-        assert!(items.iter().all(|i| i.category == "gcores"));
+        let items = parse_yys_feed(SAMPLE_FEED, "yys", "YYS");
+        assert!(items.iter().all(|i| i.category == "yys"));
+    }
+
+    #[test]
+    fn extracts_author_from_source_element() {
+        let items = parse_yys_feed(SAMPLE_FEED, "yys", "YYS");
+        assert_eq!(items[0].authors, vec!["Oracle"]);
+        assert_eq!(items[1].authors, vec!["郝磅磅"]);
+    }
+
+    #[test]
+    fn extracts_thumbnail_from_description_img() {
+        let items = parse_yys_feed(SAMPLE_FEED, "yys", "YYS");
+        assert_eq!(
+            items[0].thumbnail,
+            "https://alioss.yystv.cn/doc/13769/thumbnail.jpg"
+        );
+        assert_eq!(
+            items[1].thumbnail,
+            "https://alioss.yystv.cn/doc/13767/cover.jpg"
+        );
     }
 
     #[test]
     fn ids_are_non_empty_and_unique() {
-        let items = parse_gcores_feed(SAMPLE_FEED, "gcores", "GCORES", "");
+        let items = parse_yys_feed(SAMPLE_FEED, "yys", "YYS");
         let ids: HashSet<&str> = items.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(ids.len(), items.len());
         assert!(items.iter().all(|i| !i.id.is_empty()));
     }
 
     #[test]
-    fn stage_should_run_only_when_gcores_subscribed() {
-        let stage = GcoresScraperStage;
+    fn stage_should_run_only_when_yys_subscribed() {
+        let stage = YysScraperStage;
 
-        let gcores_source = FeedSource {
-            source_type: "gcores".to_string(),
-            source_ref: "https://www.gcores.com/rss".to_string(),
-            display_name: "GCORES".to_string(),
+        let yys_source = FeedSource {
+            source_type: "yys".to_string(),
+            source_ref: YYS_FEED_URL.to_string(),
+            display_name: "YYS".to_string(),
             enabled: true,
         };
 
@@ -349,7 +354,7 @@ mod tests {
 
         let unsubscribed = ScrapeContext {
             selected_regions: vec![],
-            rss_sources: vec![gcores_source.clone()],
+            rss_sources: vec![yys_source.clone()],
             subscribed_rss_names: HashSet::new(),
             subscribed_news_categories: HashSet::new(),
         };
@@ -357,8 +362,8 @@ mod tests {
 
         let subscribed = ScrapeContext {
             selected_regions: vec![],
-            rss_sources: vec![gcores_source],
-            subscribed_rss_names: ["gcores".to_string()].into(),
+            rss_sources: vec![yys_source],
+            subscribed_rss_names: ["yys".to_string()].into(),
             subscribed_news_categories: HashSet::new(),
         };
         assert!(stage.should_run(&subscribed));

@@ -1,22 +1,23 @@
-﻿use crate::db::{
+use crate::db::{
     count_visible_feeds,
     create_feed,
     delete_feed,
     get_article_by_id,
-    get_rss_config,
     get_unenriched_articles_by_category_and_language,
     list_feed_sources,
     list_feeds_with_topics,
+    list_subscribed_news_categories,
+    list_subscribed_rss_categories,
     list_unenriched_categories,
     list_unenriched_languages_by_category,
     mark_enriched,
     remove_feed_source,
+    remove_rss_category_from_all_feeds,
     rename_feed,
     reorder_feeds,
     seed_default_feeds,
     set_feed_categories,
     set_feed_visibility,
-    set_rsshub_domain,
     upsert_article,
     upsert_feed_source,
 };
@@ -36,6 +37,7 @@ use tauri::{Emitter, Manager};
 pub mod article_extract;
 pub mod db;
 pub mod id_generator;
+pub mod image_search;
 pub mod news_item;
 pub mod scrapers;
 pub mod platform_llm;
@@ -121,6 +123,12 @@ fn file_ext_from_content_type(content_type: &str) -> Option<String> {
     }
 }
 
+// Browser-like User-Agent used when downloading thumbnails so that CDNs
+// (e.g. image.gcores.com) serve the actual image instead of returning 204.
+const THUMBNAIL_USER_AGENT: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+     (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
 async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str) -> Result<String, String> {
     // Normalize protocol-relative URLs (e.g. //www.news.cn/...)
     let url = if thumbnail_url.starts_with("//") {
@@ -133,9 +141,27 @@ async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str
         return Err(format!("thumbnail URL is not http/https: {}", url));
     }
 
+    // Derive a Referer from the URL origin (scheme + host).
+    // Many image CDNs check this header before serving image bytes.
+    let referer = reqwest::Url::parse(&url)
+        .ok()
+        .and_then(|u| {
+            let host = u.host_str()?;
+            Some(format!("{}://{}", u.scheme(), host))
+        })
+        .unwrap_or_else(|| url.clone());
+
     println!("[thumbnail] downloading: {}", url);
 
-    let response = reqwest::get(&url)
+    let client = reqwest::Client::builder()
+        .user_agent(THUMBNAIL_USER_AGENT)
+        .build()
+        .map_err(|e| format!("failed to build thumbnail HTTP client: {}", e))?;
+
+    let response = client
+        .get(&url)
+        .header(reqwest::header::REFERER, &referer)
+        .send()
         .await
         .map_err(|e| format!("thumbnail request failed: {}", e))?;
 
@@ -163,6 +189,13 @@ async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str
 
     println!("[thumbnail] received {} bytes", bytes.len());
 
+    if bytes.is_empty() {
+        return Err(format!(
+            "thumbnail response body is empty (status {}); CDN may require different headers",
+            status
+        ));
+    }
+
     let ext = content_type
         .as_deref()
         .and_then(file_ext_from_content_type)
@@ -187,29 +220,15 @@ async fn enrich_media_and_embedding(
     enriched: &mut NewsItem,
     local_embedding_model: &str,
 ) {
-    // If thumbnail is missing or low quality, try DuckDuckGo Image Search
-    if article_extract::is_low_quality_thumbnail(&Some(enriched.thumbnail.clone())) {
-        println!(
-            "[image-search] thumbnail missing/low-quality for '{}', searching...",
-            enriched.title
-        );
-        let search_query = if enriched.snippet.trim().is_empty() {
-            enriched.title.clone()
-        } else {
-            enriched.snippet.clone()
-        };
-        match article_extract::search_image_by_title(&search_query)
-        .await
-        {
-            Some(url) => {
-                println!("[image-search] found replacement thumbnail: {}", url);
-                enriched.thumbnail = url;
-            }
-            None => {
-                println!("[image-search] no replacement found for '{}'", enriched.title);
-            }
-        }
-    }
+    // If thumbnail is missing or low quality, search DuckDuckGo for a replacement.
+    // In AI mode the snippet is available and makes a richer query; in None-AI mode
+    // snippet is empty so the title is used.
+    let search_query = if enriched.snippet.trim().is_empty() {
+        enriched.title.clone()
+    } else {
+        enriched.snippet.clone()
+    };
+    image_search::fill_thumbnail_if_missing(&mut enriched.thumbnail, &search_query).await;
 
     if !enriched.thumbnail.trim().is_empty() {
         println!("[thumbnail] caching thumbnail for '{}': {}", enriched.id, enriched.thumbnail);
@@ -717,14 +736,17 @@ async fn run_scrape_stage(
     let rss_sources = list_feed_sources(&state.db)
         .await
         .map_err(|e| format!("Failed to load RSS sources: {}", e))?;
-    let rsshub_domain = get_rss_config(&state.db)
+    let subscribed_rss_names = list_subscribed_rss_categories(&state.db)
         .await
-        .map(|c| c.rsshub_instance_domain)
-        .map_err(|e| format!("Failed to load RSS config: {}", e))?;
+        .map_err(|e| format!("Failed to load subscribed RSS categories: {}", e))?;
+    let subscribed_news_categories = list_subscribed_news_categories(&state.db)
+        .await
+        .map_err(|e| format!("Failed to load subscribed news categories: {}", e))?;
     let scrape_context = ScrapeContext {
         selected_regions: resolved.selected_regions.clone(),
         rss_sources,
-        rsshub_domain,
+        subscribed_rss_names,
+        subscribed_news_categories,
     };
     let (stage_results, scrape_was_stopped) = run_default_scrapers(&scrape_context, &state.stop_requested).await?;
     if scrape_was_stopped {
@@ -1423,10 +1445,12 @@ async fn get_enriched_news(
                 // The system All feed always aggregates persisted articles across categories.
                 None
             } else {
-                let categories = db::list_feed_categories(&state.db, selected_feed_id)
+                let (news_cats, rss_cats) = db::list_feed_categories(&state.db, selected_feed_id)
                     .await
                     .map_err(|e| format!("DB feed topic read error: {}", e))?;
-                Some(categories.into_iter().collect::<HashSet<String>>())
+                let news_set: HashSet<String> = news_cats.into_iter().collect();
+                let rss_set: HashSet<String> = rss_cats.into_iter().collect();
+                Some((news_set, rss_set))
             }
         } else {
             None
@@ -1435,7 +1459,7 @@ async fn get_enriched_news(
         None
     };
 
-    if category.is_none() && matches!(feed_categories.as_ref(), Some(categories) if categories.is_empty()) {
+    if category.is_none() && matches!(feed_categories.as_ref(), Some((n, r)) if n.is_empty() && r.is_empty()) {
         return Ok(vec![]);
     }
 
@@ -1525,8 +1549,12 @@ async fn get_enriched_news(
         let mut ranked: Vec<RankedNewsItem> = rows
             .into_iter()
             .filter(|(item, _)| {
-                if let Some(ref allowed_categories) = feed_categories {
-                    allowed_categories.contains(&item.category.to_ascii_lowercase())
+                if let Some((ref news_set, ref rss_set)) = feed_categories {
+                    if item.article_type == "rss" {
+                        rss_set.contains(&item.category.to_ascii_lowercase())
+                    } else {
+                        news_set.contains(&item.category.to_ascii_lowercase())
+                    }
                 } else {
                     true
                 }
@@ -1578,8 +1606,14 @@ async fn get_enriched_news(
         };
 
         let mut items = items;
-        if let Some(ref allowed_categories) = feed_categories {
-            items.retain(|item| allowed_categories.contains(&item.category.to_ascii_lowercase()));
+        if let Some((ref news_set, ref rss_set)) = feed_categories {
+            items.retain(|item| {
+                if item.article_type == "rss" {
+                    rss_set.contains(&item.category.to_ascii_lowercase())
+                } else {
+                    news_set.contains(&item.category.to_ascii_lowercase())
+                }
+            });
             let start = offset as usize;
             let end = (start + limit as usize).min(items.len());
             items = if start < items.len() {
@@ -1606,7 +1640,8 @@ async fn get_enriched_news(
 #[derive(serde::Deserialize)]
 struct CreateFeedRequest {
     name: String,
-    categories: Vec<String>,
+    news_categories: Vec<String>,
+    rss_categories: Vec<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1634,7 +1669,8 @@ struct SetFeedVisibilityRequest {
 #[derive(serde::Deserialize)]
 struct SetFeedCategoriesRequest {
     feed_id: String,
-    categories: Vec<String>,
+    news_categories: Vec<String>,
+    rss_categories: Vec<String>,
 }
 
 #[tauri::command]
@@ -1665,7 +1701,7 @@ async fn create_feed_action(
         return Err(format!("A feed named '{}' already exists", name));
     }
 
-    create_feed(&state.db, name, &request.categories)
+    create_feed(&state.db, name, &request.news_categories, &request.rss_categories)
         .await
         .map_err(|e| format!("Failed to create feed: {}", e))
 }
@@ -1767,7 +1803,7 @@ async fn set_feed_categories_action(
         return Err("The default All Topics feed cannot be customized".to_string());
     }
 
-    set_feed_categories(&state.db, feed_id, &request.categories)
+    set_feed_categories(&state.db, feed_id, &request.news_categories, &request.rss_categories)
         .await
         .map_err(|e| format!("Failed to update feed categories: {}", e))
 }
@@ -1800,7 +1836,7 @@ fn default_settings_map() -> HashMap<String, String> {
     map.insert("geminiModel".to_string(), DEFAULT_GEMINI_MODEL.to_string());
     map.insert("selectedRegions".to_string(), "[]".to_string());
     map.insert("sourceBlacklist".to_string(), "[]".to_string());
-    // rssHubInstanceDomain, selectedRssHubRoutes, customRssFeeds removed — now in DB (rss_config / feed_sources).
+    // RSS source settings are managed in feed_sources (DB-backed).
     map.insert("showFeedDeletionConfirmation".to_string(), "true".to_string());
     map.insert("likedConcepts".to_string(), "".to_string());
     map.insert("dislikedConcepts".to_string(), "".to_string());
@@ -1853,36 +1889,6 @@ fn load_settings(app: tauri::AppHandle) -> Result<HashMap<String, String>, Strin
     serde_json::from_str(&raw).map_err(|e| format!("Failed to parse settings.json: {}", e))
 }
 
-// ─── RSS config commands ─────────────────────────────────────────────────────
-
-#[tauri::command]
-async fn get_rss_config_action(
-    state: tauri::State<'_, AppState>,
-) -> Result<db::RssConfig, String> {
-    get_rss_config(&state.db)
-        .await
-        .map_err(|e| format!("Failed to get RSS config: {}", e))
-}
-
-#[tauri::command]
-async fn set_rsshub_domain_action(
-    state: tauri::State<'_, AppState>,
-    domain: String,
-) -> Result<(), String> {
-    let trimmed = domain.trim();
-    if trimmed.is_empty() {
-        return Err("RSSHub domain cannot be empty".to_string());
-    }
-    let parsed = reqwest::Url::parse(trimmed)
-        .map_err(|_| "RSSHub domain must be a valid http(s) URL".to_string())?;
-    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
-        return Err("RSSHub domain must be a valid http(s) URL".to_string());
-    }
-    set_rsshub_domain(&state.db, trimmed)
-        .await
-        .map_err(|e| format!("Failed to set RSSHub domain: {}", e))
-}
-
 // ─── Feed source commands ─────────────────────────────────────────────────────
 
 #[derive(serde::Deserialize)]
@@ -1917,11 +1923,22 @@ async fn upsert_feed_source_action(
     let source_ref = request.source_ref.trim();
     let display_name = request.display_name.trim();
     if source_type.is_empty() { return Err("source_type is required".to_string()); }
+    let allowed_types = ["custom_rss", "gcores", "ann", "automaton", "yys"];
+    if !allowed_types.contains(&source_type) {
+        return Err("Unsupported source_type. Allowed: custom_rss, gcores, ann, automaton, yys".to_string());
+    }
     if source_ref.is_empty() { return Err("source_ref is required".to_string()); }
     if display_name.is_empty() { return Err("display_name is required".to_string()); }
     upsert_feed_source(&state.db, source_type, source_ref, display_name, request.enabled)
         .await
-        .map_err(|e| format!("Failed to upsert feed source: {}", e))
+        .map_err(|e| format!("Failed to upsert feed source: {}", e))?;
+    // When a source is disabled its pill must be turned off in all feeds.
+    if !request.enabled {
+        remove_rss_category_from_all_feeds(&state.db, &display_name.to_ascii_lowercase())
+            .await
+            .map_err(|e| format!("Failed to clear disabled source from feeds: {}", e))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1929,7 +1946,13 @@ async fn remove_feed_source_action(
     state: tauri::State<'_, AppState>,
     request: RemoveFeedSourceRequest,
 ) -> Result<bool, String> {
-    remove_feed_source(&state.db, &request.source_type, &request.source_ref)
+    let source_type = request.source_type.trim();
+    let source_ref = request.source_ref.trim();
+    let allowed_types = ["custom_rss", "gcores", "ann", "automaton", "yys"];
+    if !allowed_types.contains(&source_type) {
+        return Err("Unsupported source_type. Allowed: custom_rss, gcores, ann, automaton, yys".to_string());
+    }
+    remove_feed_source(&state.db, source_type, source_ref)
         .await
         .map_err(|e| format!("Failed to remove feed source: {}", e))
 }
@@ -1945,10 +1968,10 @@ async fn purge_database(app: tauri::AppHandle, state: tauri::State<'_, AppState>
         .execute(&state.db)
         .await
         .map_err(|e| format!("Failed to purge feed_topic_map table: {}", e))?;
-    sqlx::query("DELETE FROM feed_sources")
+    sqlx::query("DELETE FROM feed_sources WHERE source_type = 'custom_rss'")
         .execute(&state.db)
         .await
-        .map_err(|e| format!("Failed to purge feed_sources table: {}", e))?;
+        .map_err(|e| format!("Failed to purge custom feed_sources: {}", e))?;
     sqlx::query("DELETE FROM feed_definitions")
         .execute(&state.db)
         .await
@@ -1965,10 +1988,9 @@ async fn purge_database(app: tauri::AppHandle, state: tauri::State<'_, AppState>
 
     let settings_path = app_data.join("settings.json");
     let img_cache_dir = app_data.join("img_cache");
-    let embedding_cache_dir = app_data.join("embedding_models");
     let logs_dir = app_data.join("logs");
 
-    for dir in [&img_cache_dir, &embedding_cache_dir, &logs_dir] {
+    for dir in [&img_cache_dir, &logs_dir] {
         if dir.exists() {
             std::fs::remove_dir_all(dir)
                 .map_err(|e| format!("Failed to remove '{}': {}", dir.to_string_lossy(), e))?;
@@ -1982,8 +2004,6 @@ async fn purge_database(app: tauri::AppHandle, state: tauri::State<'_, AppState>
 
     std::fs::create_dir_all(&img_cache_dir)
         .map_err(|e| format!("Failed to recreate img_cache: {}", e))?;
-    std::fs::create_dir_all(&embedding_cache_dir)
-        .map_err(|e| format!("Failed to recreate embedding_models: {}", e))?;
     std::fs::create_dir_all(&logs_dir)
         .map_err(|e| format!("Failed to recreate logs: {}", e))?;
 
@@ -2454,8 +2474,6 @@ pub fn run() {
             save_setting,
             load_settings,
             purge_database,
-            get_rss_config_action,
-            set_rsshub_domain_action,
             list_feed_sources_action,
             upsert_feed_source_action,
             remove_feed_source_action
@@ -2480,6 +2498,7 @@ mod helper_tests {
             language: "en".to_string(),
             thumbnail: "".to_string(),
             category: "world".to_string(),
+            article_type: "news".to_string(),
             ai_summary: "".to_string(),
             og_content: "".to_string(),
             snippet: "".to_string(),

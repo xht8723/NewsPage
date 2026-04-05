@@ -2,6 +2,7 @@ import type React from "react";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, Pencil, Plus, Rss, Trash2, X } from "lucide-react";
+import { NeonCheckbox } from "./NeonCheckbox";
 import type { FeedSource } from "../types/news";
 import { normalizeRssFeedUrl } from "../utils/rssSettings";
 import { usePanelTransition } from "../hooks/usePanelTransition";
@@ -28,7 +29,10 @@ export function CustomRssFeedModal({
   const [editingFeedUrl, setEditingFeedUrl] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const customFeeds = feedSources.filter((s) => s.source_type === "custom_rss");
+  const DEFAULT_SOURCE_TYPES = ["ann", "automaton", "gcores"];
+  const customFeeds = feedSources.filter((s) =>
+    ["ann", "automaton", "gcores", "custom_rss"].includes(s.source_type),
+  );
   const canAddFeed = draftName.trim().length > 0 && normalizeRssFeedUrl(draftFeed).length > 0;
   const canSaveEdit = editingName.trim().length > 0 && normalizeRssFeedUrl(editingFeedUrl).length > 0;
 
@@ -80,6 +84,20 @@ export function CustomRssFeedModal({
     setEditingFeedUrl("");
   };
 
+  const toggleFeedEnabled = async (source: FeedSource) => {
+    setSaving(true);
+    try {
+      await invoke("upsert_feed_source_action", {
+        request: { source_type: source.source_type, source_ref: source.source_ref, display_name: source.display_name, enabled: !source.enabled },
+      });
+      await onRefresh();
+    } catch (error) {
+      console.warn("Failed to toggle feed", error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const saveEditedFeed = async (source: FeedSource) => {
     const newName = editingName.trim();
     const newUrl = normalizeRssFeedUrl(editingFeedUrl);
@@ -88,14 +106,14 @@ export function CustomRssFeedModal({
     try {
       if (source.source_ref !== newUrl) {
         await invoke("remove_feed_source_action", {
-          request: { source_type: "custom_rss", source_ref: source.source_ref },
+          request: { source_type: source.source_type, source_ref: source.source_ref },
         });
         await invoke("upsert_feed_source_action", {
-          request: { source_type: "custom_rss", source_ref: newUrl, display_name: newName, enabled: source.enabled },
+          request: { source_type: source.source_type, source_ref: newUrl, display_name: newName, enabled: source.enabled },
         });
       } else {
         await invoke("upsert_feed_source_action", {
-          request: { source_type: "custom_rss", source_ref: source.source_ref, display_name: newName, enabled: source.enabled },
+          request: { source_type: source.source_type, source_ref: source.source_ref, display_name: newName, enabled: source.enabled },
         });
       }
       await onRefresh();
@@ -111,7 +129,7 @@ export function CustomRssFeedModal({
     setSaving(true);
     try {
       await invoke("remove_feed_source_action", {
-        request: { source_type: "custom_rss", source_ref: source.source_ref },
+        request: { source_type: source.source_type, source_ref: source.source_ref },
       });
       await onRefresh();
     } catch (error) {
@@ -283,6 +301,14 @@ export function CustomRssFeedModal({
                             <X size={12} /> Cancel
                           </button>
                         </>
+                      ) : DEFAULT_SOURCE_TYPES.includes(source.source_type) ? (
+                        <NeonCheckbox
+                          checked={source.enabled}
+                          onChange={() => void toggleFeedEnabled(source)}
+                          isDarkMode={isDarkMode}
+                          ariaLabel={`Toggle ${source.display_name}`}
+                          disabled={saving}
+                        />
                       ) : (
                         <>
                           <button

@@ -42,7 +42,6 @@ interface SettingsModalProps {
   onPurgeDatabase: () => Promise<void>;
   onOpenSourceBlacklistManager: () => void;
   onOpenCategoryLimits: () => void;
-  onOpenRssHubSettings: () => void;
   onOpenCustomRssFeedSettings: () => void;
   feedSources: FeedSource[];
   onClose: () => void;
@@ -75,7 +74,6 @@ export function SettingsModal({
   onPurgeDatabase,
   onOpenSourceBlacklistManager,
   onOpenCategoryLimits,
-  onOpenRssHubSettings,
   onOpenCustomRssFeedSettings,
   feedSources,
   onClose,
@@ -407,21 +405,9 @@ export function SettingsModal({
               <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
                 <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>RSS Feed Settings</p>
                 <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
-                  Configure RSSHub routes and custom RSS feeds. Assign sources to feeds in Feed Settings.
+                  Configure custom RSS feeds. Assign sources to feeds in Feed Settings.
                 </p>
                 <div className="space-y-2">
-                  <button
-                    type="button"
-                    onClick={onOpenRssHubSettings}
-                    className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
-                      isDarkMode
-                        ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                        : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
-                    }`}
-                  >
-                    <span>RSSHub Settings</span>
-                    <span className="text-[10px] opacity-70">{feedSources.filter((s) => s.source_type === "rsshub").length} selected</span>
-                  </button>
                   <button
                     type="button"
                     onClick={onOpenCustomRssFeedSettings}
@@ -432,7 +418,7 @@ export function SettingsModal({
                     }`}
                   >
                     <span>Custom RSS Feed</span>
-                    <span className="text-[10px] opacity-70">{feedSources.filter((s) => s.source_type === "custom_rss").length} saved</span>
+                    <span className="text-[10px] opacity-70">{feedSources.filter((s) => ["ann", "automaton", "gcores", "custom_rss"].includes(s.source_type)).length} saved</span>
                   </button>
                 </div>
               </div>
@@ -768,7 +754,7 @@ export function SettingsModal({
             <div className={`rounded-xl border border-red-500/30 p-4 ${isDarkMode ? "bg-red-950/20" : "bg-red-50"}`}>
               <p className="mb-1 text-sm font-semibold">Clean Reset</p>
               <p className={`mb-4 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
-                Permanently deletes articles, cached thumbnails, embedding models, and settings, then recreates a fresh default setup. This cannot be undone.
+                Permanently deletes articles, cached thumbnails, and settings, then recreates a fresh default setup. Downloaded embedding models and default RSS feeds are preserved. This cannot be undone.
               </p>
 
               {purgeConfirmStep === 0 && (

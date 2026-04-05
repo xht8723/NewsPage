@@ -54,6 +54,7 @@ export function mapBackendNewsItem(item: BackendNewsItem): NewsArticle {
   return {
     id: item.id,
     category: toTopicCategory(item.category), // may be a known topic or an RSS source display name
+    articleType: item.article_type ?? "news",
     language: item.language || "unknown",
     enrichmentMode: item.enrichment_mode || "ai",
     title: item.title,

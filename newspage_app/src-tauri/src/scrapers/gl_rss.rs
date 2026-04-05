@@ -3,11 +3,20 @@ use chrono::{DateTime, Utc};
 use reqwest::Client;
 use std::collections::HashSet;
 
-use crate::id_generator::generate_article_id;
 use crate::logging;
 use crate::news_item::NewsItem;
 
 use super::{ScrapeContext, ScraperStage};
+pub use super::rss_common::{
+    decode_entities,
+    extract_rss_thumbnail,
+    fetch_rss_feed,
+    parse_pub_date,
+    parse_rss_items,
+    rss_item_to_news_item,
+    strip_cdata,
+    RssItem,
+};
 
 // ---------------------------------------------------------------------------
 // Topic feed type — either a standard named topic or a region-specific hash
@@ -118,249 +127,12 @@ fn build_feed_url(region: &RegionConfig, topic: &TopicDef) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// RSS XML parsing (lightweight, no XML crate required)
-// ---------------------------------------------------------------------------
-
-/// Extract text between the first `<tag...>` and `</tag>` in `xml`.
-fn xml_tag_content<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let open = format!("<{}", tag);
-    let close = format!("</{}>", tag);
-    let start = xml.find(&open)?;
-    let after_open = &xml[start + open.len()..];
-    let content_start = after_open.find('>')? + 1;
-    let content = &after_open[content_start..];
-    let end = content.find(&close)?;
-    Some(content[..end].trim())
-}
-
-fn strip_cdata(s: &str) -> String {
-    let s = s.trim();
-    if let Some(inner) = s.strip_prefix("<![CDATA[") {
-        inner.strip_suffix("]]>").unwrap_or(inner).trim().to_string()
-    } else {
-        s.to_string()
-    }
-}
-
-/// Decode a small set of common HTML/XML entities.
-fn decode_entities(s: &str) -> String {
-    s.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&apos;", "'")
-}
-
-/// Parse the `<source url="...">SourceName</source>` tag.
-fn parse_source_tag(item_xml: &str) -> (String, String) {
-    let tag = "source";
-    let open = format!("<{}", tag);
-    let close = format!("</{}>", tag);
-    let Some(start) = item_xml.find(&open) else {
-        return (String::new(), String::new());
-    };
-    let after_open = &item_xml[start + open.len()..];
-    let Some(gt) = after_open.find('>') else {
-        return (String::new(), String::new());
-    };
-    let attrs = &after_open[..gt];
-    let source_icon = extract_attr(attrs, "url").unwrap_or_default();
-    let content = &after_open[gt + 1..];
-    let end = content.find(&close).unwrap_or(content.len());
-    let source_name = decode_entities(content[..end].trim());
-    (source_name, source_icon)
-}
-
-fn extract_attr(attrs: &str, name: &str) -> Option<String> {
-    let needle = format!("{}=\"", name);
-    let start = attrs.find(&needle)?;
-    let after = &attrs[start + needle.len()..];
-    let end = after.find('"')?;
-    Some(after[..end].to_string())
-}
-
-/// Parse RFC-2822 date (the format used in RSS `<pubDate>`).
-pub fn parse_pub_date(date_str: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc2822(date_str.trim())
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
-}
-
-/// Google News RSS wraps the real article URL in a redirect link.
-/// Extract the real URL from the `<link>` value if possible.
-fn clean_google_news_link(raw: &str) -> String {
-    // Google News links look like: https://news.google.com/rss/articles/...
-    // The actual article URL is in the redirect; however the RSS <link> is the
-    // Google redirect URL itself. We keep it as-is (article_extract will follow
-    // redirects when fetching content).
-    raw.trim().to_string()
-}
-
-pub struct RssItem {
-    pub title: String,
-    pub link: String,
-    pub pub_date: String,
-    pub pub_date_parsed: Option<DateTime<Utc>>,
-    pub source_name: String,
-    pub source_icon: String,
-    pub thumbnail: String,
-}
-
-/// Extract a thumbnail URL from an RSS `<item>` block.
-///
-/// Priority:
-/// 1. `<media:content url="..." />` (Google News standard)
-/// 2. `<enclosure url="..." />` (generic RSS)
-/// 3. First `<img src="...">` inside `<description>` CDATA
-fn extract_rss_thumbnail(item_xml: &str) -> String {
-    // 1. <media:content url="..." />
-    if let Some(url) = extract_media_content_url(item_xml) {
-        return url;
-    }
-    // 2. <enclosure url="..." />
-    if let Some(url) = extract_enclosure_url(item_xml) {
-        return url;
-    }
-    // 3. <img> inside <description>
-    if let Some(desc) = xml_tag_content(item_xml, "description") {
-        let decoded = strip_cdata(&decode_entities(desc));
-        if let Some(url) = first_img_src(&decoded) {
-            return url;
-        }
-    }
-    String::new()
-}
-
-fn extract_media_content_url(xml: &str) -> Option<String> {
-    let start = xml.find("<media:content")?;
-    let rest = &xml[start..];
-    let end = rest.find('>')?;
-    let tag = &rest[..end];
-    extract_attr(tag, "url").filter(|u| u.starts_with("http"))
-}
-
-fn extract_enclosure_url(xml: &str) -> Option<String> {
-    let start = xml.find("<enclosure")?;
-    let rest = &xml[start..];
-    let end = rest.find('>')?;
-    let tag = &rest[..end];
-    extract_attr(tag, "url").filter(|u| u.starts_with("http"))
-}
-
-fn first_img_src(html: &str) -> Option<String> {
-    let start = html.find("<img ")?;
-    let rest = &html[start..];
-    let end = rest.find('>')?;
-    let tag = &rest[..end];
-    extract_attr(tag, "src").filter(|u| u.starts_with("http"))
-}
-
-pub fn parse_rss_items(xml: &str) -> Vec<RssItem> {
-    let mut items = Vec::new();
-    let mut search_from = 0usize;
-
-    loop {
-        let Some(item_start) = xml[search_from..].find("<item>") else {
-            break;
-        };
-        let abs_start = search_from + item_start;
-        let Some(item_end) = xml[abs_start..].find("</item>") else {
-            break;
-        };
-        let item_xml = &xml[abs_start..abs_start + item_end + 7];
-        search_from = abs_start + item_end + 7;
-
-        let title = xml_tag_content(item_xml, "title")
-            .map(|s| decode_entities(&strip_cdata(s)))
-            .unwrap_or_default();
-        let link = xml_tag_content(item_xml, "link")
-            .map(|s| clean_google_news_link(s))
-            .unwrap_or_default();
-        let pub_date_raw = xml_tag_content(item_xml, "pubDate")
-            .unwrap_or("")
-            .to_string();
-        let pub_date_parsed = parse_pub_date(&pub_date_raw);
-        let (source_name, source_icon) = parse_source_tag(item_xml);
-        let thumbnail = extract_rss_thumbnail(item_xml);
-
-        if title.is_empty() || link.is_empty() {
-            continue;
-        }
-
-        items.push(RssItem {
-            title,
-            link,
-            pub_date: pub_date_parsed
-                .map(|dt| dt.to_rfc3339())
-                .unwrap_or_else(|| pub_date_raw.clone()),
-            pub_date_parsed,
-            source_name,
-            source_icon,
-            thumbnail,
-        });
-    }
-
-    items
-}
-
-// ---------------------------------------------------------------------------
-// Conversion to NewsItem
-// ---------------------------------------------------------------------------
-
 fn region_language(region: &RegionConfig) -> &'static str {
     match region.id {
         "chinese" => "zh-CN",
         "canada" => "en-CA",
         _ => "unknown",
     }
-}
-
-pub fn rss_item_to_news_item(rss: &RssItem, category: &str, language: &str) -> NewsItem {
-    NewsItem {
-        id: generate_article_id(&rss.link, &rss.title),
-        title: rss.title.clone(),
-        url: rss.link.clone(),
-        date: rss.pub_date.clone(),
-        source_name: rss.source_name.clone(),
-        source_icon: rss.source_icon.clone(),
-        authors: Vec::new(),
-        language: language.to_string(),
-        thumbnail: rss.thumbnail.clone(),
-        category: category.to_string(),
-        ai_summary: String::new(),
-        og_content: String::new(),
-        snippet: String::new(),
-        enrichment_mode: "pending".to_string(),
-        is_enriched: false,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Fetching & scraping
-// ---------------------------------------------------------------------------
-
-pub async fn fetch_rss_feed(client: &Client, url: &str) -> Result<String, String> {
-    let response = client
-        .get(url)
-        .header("User-Agent", "Mozilla/5.0 (compatible; NewsPageBot/1.0)")
-        .send()
-        .await
-        .map_err(|e| format!("RSS fetch failed for {}: {}", url, e))?;
-
-    if !response.status().is_success() {
-        return Err(format!(
-            "RSS fetch returned HTTP {} for {}",
-            response.status(),
-            url
-        ));
-    }
-
-    response
-        .text()
-        .await
-        .map_err(|e| format!("RSS body read failed for {}: {}", url, e))
 }
 
 fn is_within_24h(dt: &DateTime<Utc>) -> bool {
@@ -372,15 +144,26 @@ fn is_within_24h(dt: &DateTime<Utc>) -> bool {
 async fn scrape_region(
     client: &Client,
     region: &RegionConfig,
+    subscribed_news_categories: &HashSet<String>,
     seen_ids: &mut HashSet<String>,
     out: &mut Vec<NewsItem>,
 ) {
+    let active_topics: Vec<&TopicDef> = region
+        .topics
+        .iter()
+        .filter(|t| subscribed_news_categories.contains(t.category))
+        .collect();
     logging::info(
         "Scrape",
-        format!("Starting RSS scrape for region '{}' ({} topics)", region.id, region.topics.len()),
-        Some(region.topics.len()),
+        format!(
+            "Starting RSS scrape for region '{}' ({}/{} subscribed topics)",
+            region.id,
+            active_topics.len(),
+            region.topics.len()
+        ),
+        Some(active_topics.len()),
     );
-    for topic in region.topics {
+    for topic in active_topics {
         let url = build_feed_url(region, topic);
         println!(
             "[gl_rss] Fetching {} / {} → {}",
@@ -403,7 +186,7 @@ async fn scrape_region(
                             continue;
                         }
                     }
-                    let news = rss_item_to_news_item(rss_item, topic.category, region_language(region));
+                    let news = rss_item_to_news_item(rss_item, topic.category, region_language(region), "news");
                     if seen_ids.insert(news.id.clone()) {
                         out.push(news);
                         added += 1;
@@ -437,7 +220,7 @@ async fn scrape_region(
     }
 }
 
-pub async fn scrape_rss_regions(region_ids: &[String]) -> Result<Vec<NewsItem>, String> {
+pub async fn scrape_rss_regions(region_ids: &[String], subscribed_news_categories: &HashSet<String>) -> Result<Vec<NewsItem>, String> {
     let client = Client::new();
     let mut all_items: Vec<NewsItem> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
@@ -456,7 +239,7 @@ pub async fn scrape_rss_regions(region_ids: &[String]) -> Result<Vec<NewsItem>, 
             );
             continue;
         };
-        scrape_region(&client, region, &mut seen_ids, &mut all_items).await;
+        scrape_region(&client, region, subscribed_news_categories, &mut seen_ids, &mut all_items).await;
     }
 
     // Sort by date descending
@@ -484,11 +267,15 @@ impl ScraperStage for GlRssScraperStage {
     }
 
     fn should_run(&self, ctx: &ScrapeContext) -> bool {
-        !ctx.selected_regions.is_empty()
+        !ctx.selected_regions.is_empty() && !ctx.subscribed_news_categories.is_empty()
     }
 
     async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<NewsItem>, String> {
-        scrape_rss_regions(&ctx.selected_regions).await
+        let mut items = scrape_rss_regions(&ctx.selected_regions, &ctx.subscribed_news_categories).await?;
+        for item in &mut items {
+            crate::image_search::fill_thumbnail_if_missing(&mut item.thumbnail, &item.title).await;
+        }
+        Ok(items)
     }
 }
 
@@ -549,7 +336,7 @@ mod tests {
             source_icon: "https://example.com/icon.png".to_string(),
             thumbnail: "https://example.com/thumb.jpg".to_string(),
         };
-        let news = rss_item_to_news_item(&rss, "world", "en-CA");
+        let news = rss_item_to_news_item(&rss, "world", "en-CA", "news");
         assert_eq!(news.category, "world");
         assert_eq!(news.language, "en-CA");
         assert_eq!(news.title, "Test Article");
@@ -688,19 +475,32 @@ mod tests {
     fn stage_should_run_with_regions() {
         let stage = GlRssScraperStage;
 
+        // No regions, no categories → should not run.
         let empty = ScrapeContext {
             selected_regions: vec![],
             rss_sources: vec![],
-            rsshub_domain: "https://rsshub.app/".to_string(),
+            subscribed_rss_names: std::collections::HashSet::new(),
+            subscribed_news_categories: std::collections::HashSet::new(),
         };
         assert!(!stage.should_run(&empty));
 
-        let with_regions = ScrapeContext {
+        // Regions present but no news categories toggled ON → should not run.
+        let regions_no_cats = ScrapeContext {
             selected_regions: vec!["canada".to_string()],
             rss_sources: vec![],
-            rsshub_domain: "https://rsshub.app/".to_string(),
+            subscribed_rss_names: std::collections::HashSet::new(),
+            subscribed_news_categories: std::collections::HashSet::new(),
         };
-        assert!(stage.should_run(&with_regions));
+        assert!(!stage.should_run(&regions_no_cats));
+
+        // Both regions and at least one subscribed category → should run.
+        let with_regions_and_cats = ScrapeContext {
+            selected_regions: vec!["canada".to_string()],
+            rss_sources: vec![],
+            subscribed_rss_names: std::collections::HashSet::new(),
+            subscribed_news_categories: ["world".to_string()].into(),
+        };
+        assert!(stage.should_run(&with_regions_and_cats));
     }
 
     #[test]

@@ -28,8 +28,8 @@ export function NeonCheckbox({
       role="checkbox"
       aria-checked={checked}
       aria-label={ariaLabel}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
+      aria-disabled={disabled}
+      onClick={() => { if (!disabled) onChange(!checked); }}
       className={`group inline-flex items-center justify-center border transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 ${sizeClass} ${
         checked
           ? isDarkMode
@@ -38,7 +38,7 @@ export function NeonCheckbox({
           : isDarkMode
             ? "border-zinc-600 bg-zinc-900 text-zinc-600 focus-visible:ring-zinc-500 hover:scale-[1.04] hover:shadow-[0_0_7px_rgba(82,82,91,0.28)]"
             : "border-zinc-300 bg-zinc-100 text-zinc-400 focus-visible:ring-zinc-400 hover:scale-[1.04] hover:shadow-[0_0_7px_rgba(113,113,122,0.22)]"
-      } ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"} ${className}`}
+      } ${disabled ? "opacity-60" : ""} cursor-pointer ${className}`}
     >
       <span className={`${glyphClass} font-black leading-none transition-transform duration-200 ${checked ? "scale-100" : "scale-75 opacity-0"}`}>
         ✓

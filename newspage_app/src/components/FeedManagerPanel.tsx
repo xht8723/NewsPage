@@ -34,11 +34,11 @@ interface FeedManagerPanelProps {
   feeds: FeedDefinition[];
   feedSources: FeedSource[];
   isDarkMode: boolean;
-  onCreateFeed: (name: string, categories: string[]) => Promise<FeedDefinition | null>;
+  onCreateFeed: (name: string, newsCategories: string[], rssCategories: string[]) => Promise<FeedDefinition | null>;
   onRenameFeed: (feedId: string, name: string) => Promise<void>;
   onDeleteFeed: (feedId: string) => Promise<void>;
   onToggleFeedVisibility: (feedId: string, isVisible: boolean) => Promise<void>;
-  onSetFeedCategories: (feedId: string, categories: string[]) => Promise<void>;
+  onSetFeedCategories: (feedId: string, newsCategories: string[], rssCategories: string[]) => Promise<void>;
   onReorderFeed: (feedId: string, direction: "up" | "down") => Promise<void>;
   onReorderFeedByDrag: (orderedFeedIds: string[]) => Promise<void>;
 }
@@ -138,7 +138,7 @@ export function FeedManagerPanel({
   }, [orderedFeeds]);
 
   const sortedSources = useMemo(
-    () => [...feedSources].sort((left, right) => left.display_name.localeCompare(right.display_name)),
+    () => [...feedSources].filter((s) => s.enabled).sort((left, right) => left.display_name.localeCompare(right.display_name)),
     [feedSources],
   );
 
@@ -232,7 +232,7 @@ export function FeedManagerPanel({
         <button
           type="button"
           onClick={async () => {
-            const createdFeed = await onCreateFeed(draftName, []);
+            const createdFeed = await onCreateFeed(draftName, [], []);
             if (createdFeed) {
               setExpandedFeedIds((current) => ({
                 ...current,
@@ -262,8 +262,9 @@ export function FeedManagerPanel({
         <SortableContext items={orderedFeeds.map((feed) => feed.id)} strategy={verticalListSortingStrategy}>
           <div className="space-y-2">
             {orderedFeeds.map((feed, index) => {
-              const normalizedCategories = feed.categories.map((item) => item.toLowerCase());
-              const isFeedEmpty = normalizedCategories.length === 0;
+              const normalizedNewsCategories = feed.news_categories.map((item) => item.toLowerCase());
+              const normalizedRssCategories = feed.rss_categories.map((item) => item.toLowerCase());
+              const isFeedEmpty = normalizedNewsCategories.length === 0 && normalizedRssCategories.length === 0;
               const isExpanded = !!expandedFeedIds[feed.id];
               const canDrag = orderedFeeds.length > 1;
               const showInsertionLine = activeFeedId !== null && overFeedId === feed.id && activeFeedId !== feed.id;
@@ -414,16 +415,16 @@ export function FeedManagerPanel({
                   <div className="flex flex-wrap gap-1">
                     {TOPIC_CATEGORIES.map((category) => {
                       const key = category.toLowerCase();
-                      const active = normalizedCategories.includes(key);
+                      const active = normalizedNewsCategories.includes(key);
                       return (
                         <button
                           key={`${feed.id}-${category}`}
                           type="button"
                           onClick={async () => {
                             const next = active
-                              ? normalizedCategories.filter((item) => item !== key)
-                              : [...normalizedCategories, key];
-                            await onSetFeedCategories(feed.id, next);
+                              ? normalizedNewsCategories.filter((item) => item !== key)
+                              : [...normalizedNewsCategories, key];
+                            await onSetFeedCategories(feed.id, next, normalizedRssCategories);
                           }}
                           className={pillClass(active, isDarkMode)}
                         >
@@ -447,16 +448,16 @@ export function FeedManagerPanel({
                       {sortedSources.map((source) => {
                         const key = `${source.source_type}:${source.source_ref}`;
                         const sourceCategory = source.display_name.toLowerCase();
-                        const active = normalizedCategories.includes(sourceCategory);
+                        const active = normalizedRssCategories.includes(sourceCategory);
                         return (
                           <button
                             key={key}
                             type="button"
                             onClick={async () => {
                               const next = active
-                                ? normalizedCategories.filter((item) => item !== sourceCategory)
-                                : [...normalizedCategories, sourceCategory];
-                              await onSetFeedCategories(feed.id, next);
+                                ? normalizedRssCategories.filter((item) => item !== sourceCategory)
+                                : [...normalizedRssCategories, sourceCategory];
+                              await onSetFeedCategories(feed.id, normalizedNewsCategories, next);
                             }}
                             title={active ? `Remove "${source.display_name}" articles from this feed` : `Include "${source.display_name}" articles in this feed`}
                             className={pillClass(active, isDarkMode)}

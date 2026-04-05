@@ -19,7 +19,7 @@ import {
   type LayoutMode,
   type OllamaConnectionState,
 } from "./constants/news";
-import type { NewsArticle, BackendNewsItem, UserSettings, CardContextMenuState, LocalEmbeddingStatus, ProcessLogEntry, ProcessStageEvent, FeedDefinition, FeedSource, RssConfig } from "./types/news";
+import type { NewsArticle, BackendNewsItem, UserSettings, CardContextMenuState, LocalEmbeddingStatus, ProcessLogEntry, ProcessStageEvent, FeedDefinition, FeedSource } from "./types/news";
 import { mapBackendNewsItem } from "./utils/newsMapper";
 import { formatDateLocal, offsetDateString, getProviderLabel } from "./utils/newsMeta";
 import { buildLLMArgs, getSelectedApiKey, getSelectedEndpoint, getSelectedModel } from "./utils/llmConfig";
@@ -35,7 +35,6 @@ import { CalendarModal } from "./components/CalendarModal";
 import { LogPanel } from "./components/LogPanel";
 import { SourceBlacklistModal } from "./components/SourceBlacklistModal";
 import { CategoryLimitsModal } from "./components/CategoryLimitsModal";
-import { RssHubSettingsModal } from "./components/RssHubSettingsModal";
 import { CustomRssFeedModal } from "./components/CustomRssFeedModal";
 import { FeedManagerPanel } from "./components/FeedManagerPanel";
 import { FeedNavigationList } from "./components/FeedNavigationList";
@@ -135,10 +134,8 @@ function App(): React.JSX.Element {
   const [showConfigPopup, setShowConfigPopup] = useState(false);
   const [showSourceBlacklistManager, setShowSourceBlacklistManager] = useState(false);
   const [showCategoryLimitsManager, setShowCategoryLimitsManager] = useState(false);
-  const [showRssHubSettings, setShowRssHubSettings] = useState(false);
   const [showCustomRssFeedSettings, setShowCustomRssFeedSettings] = useState(false);
   const [feeds, setFeeds] = useState<FeedDefinition[]>([]);
-  const [rssConfig, setRssConfig] = useState<RssConfig>({ rsshub_instance_domain: "https://rsshub.app/" });
   const [feedSources, setFeedSources] = useState<FeedSource[]>([]);
   const [pendingFeedDeletion, setPendingFeedDeletion] = useState<FeedDefinition | null>(null);
   const [pendingFeedDeletionSnapshot, setPendingFeedDeletionSnapshot] = useState<FeedDefinition | null>(null);
@@ -151,6 +148,11 @@ function App(): React.JSX.Element {
   const [startupPhase, setStartupPhase] = useState<StartupPhase>("loading-settings");
   const [startupErrorMessage, setStartupErrorMessage] = useState("");
   const isEmbeddingConfigured = settings.localEmbeddingModel.trim().length > 0;
+
+  const subscribedFeedSources = useMemo(() => {
+    const subscribedNames = new Set(feeds.flatMap((f) => f.rss_categories.map((c) => c.toLowerCase())));
+    return feedSources.filter((s) => subscribedNames.has(s.display_name.toLowerCase()));
+  }, [feeds, feedSources]);
   const translatePanelTransition = usePanelTransition(showTranslatePanel, 140);
   const categoryManagerTransition = usePanelTransition(showCategoryManager, 170);
   const configPopupTransition = usePanelTransition(showConfigPopup, 170);
@@ -423,19 +425,15 @@ function App(): React.JSX.Element {
 
   const loadRssSources = useCallback(async () => {
     try {
-      const [sources, config] = await Promise.all([
-        invoke<FeedSource[]>("list_feed_sources_action"),
-        invoke<RssConfig>("get_rss_config_action"),
-      ]);
+      const sources = await invoke<FeedSource[]>("list_feed_sources_action");
       setFeedSources(sources);
-      setRssConfig(config);
     } catch (error) {
       console.warn("Failed to load RSS sources", error);
     }
   }, []);
 
-  const createFeed = useCallback(async (name: string, categories: string[]) => {
-    const created = await invoke<FeedDefinition>("create_feed_action", { request: { name, categories } });
+  const createFeed = useCallback(async (name: string, newsCategories: string[], rssCategories: string[]) => {
+    const created = await invoke<FeedDefinition>("create_feed_action", { request: { name, news_categories: newsCategories, rss_categories: rssCategories } });
     await loadFeeds();
     return created;
   }, [loadFeeds]);
@@ -470,8 +468,8 @@ function App(): React.JSX.Element {
     await loadFeeds();
   }, [loadFeeds]);
 
-  const updateFeedCategories = useCallback(async (feedId: string, categories: string[]) => {
-    await invoke("set_feed_categories_action", { request: { feed_id: feedId, categories } });
+  const updateFeedCategories = useCallback(async (feedId: string, newsCategories: string[], rssCategories: string[]) => {
+    await invoke("set_feed_categories_action", { request: { feed_id: feedId, news_categories: newsCategories, rss_categories: rssCategories } });
     await loadFeeds();
   }, [loadFeeds]);
 
@@ -539,7 +537,6 @@ function App(): React.JSX.Element {
     setStartupErrorMessage("");
     setStartupPhase("ready");
     setFeedSources([]);
-    setRssConfig({ rsshub_instance_domain: "https://rsshub.app/" });
     await Promise.all([loadFeeds(), loadRssSources()]);
   }, [cancelPendingSave, loadFeeds, loadRssSources, setNews]);
 
@@ -1452,7 +1449,6 @@ function App(): React.JSX.Element {
         onOpenSourceBlacklistManager={() => setShowSourceBlacklistManager(true)}
         onOpenCategoryLimits={() => setShowCategoryLimitsManager(true)}
         feedSources={feedSources}
-        onOpenRssHubSettings={() => setShowRssHubSettings(true)}
         onOpenCustomRssFeedSettings={() => setShowCustomRssFeedSettings(true)}
         onClose={() => {
           setShowSettings(false);
@@ -1476,15 +1472,6 @@ function App(): React.JSX.Element {
         setSettings={setSettings}
         saveSetting={saveSetting}
         onClose={() => setShowCategoryLimitsManager(false)}
-      />
-
-      <RssHubSettingsModal
-        show={showRssHubSettings}
-        isDarkMode={isDarkMode}
-        rssConfig={rssConfig}
-        feedSources={feedSources}
-        onRefresh={loadRssSources}
-        onClose={() => setShowRssHubSettings(false)}
       />
 
       <CustomRssFeedModal
@@ -1523,11 +1510,11 @@ function App(): React.JSX.Element {
             <div className="hide-scrollbar max-h-[80vh] overflow-y-auto p-4">
               <FeedManagerPanel
                 feeds={feeds}
-                feedSources={feedSources}
+                feedSources={subscribedFeedSources}
                 isDarkMode={isDarkMode}
-                onCreateFeed={async (name, categories) => {
+                onCreateFeed={async (name, newsCategories, rssCategories) => {
                   try {
-                    return await createFeed(name, categories);
+                    return await createFeed(name, newsCategories, rssCategories);
                   } catch (error) {
                     setConfigPopupMessage(String(error));
                     setShowConfigPopup(true);
@@ -1558,9 +1545,9 @@ function App(): React.JSX.Element {
                     setShowConfigPopup(true);
                   }
                 }}
-                onSetFeedCategories={async (feedId, categories) => {
+                onSetFeedCategories={async (feedId, newsCategories, rssCategories) => {
                   try {
-                    await updateFeedCategories(feedId, categories);
+                    await updateFeedCategories(feedId, newsCategories, rssCategories);
                   } catch (error) {
                     setConfigPopupMessage(String(error));
                     setShowConfigPopup(true);

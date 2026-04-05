@@ -62,7 +62,8 @@ pub struct FeedDefinitionWithTopics {
     pub slug: String,
     pub is_visible: bool,
     pub sort_order: i64,
-    pub categories: Vec<String>,
+    pub news_categories: Vec<String>,
+    pub rss_categories: Vec<String>,
 }
 
 fn normalize_feed_slug(value: &str) -> String {
@@ -145,6 +146,7 @@ authors: decode_string_list(&row.get::<String, _>("authors")),
 language: row.try_get::<String, _>("language").unwrap_or_else(|_| "unknown".to_string()),
 thumbnail: row.get("thumbnail"),
 category: row.get("category"),
+article_type: row.try_get::<String, _>("article_type").unwrap_or_else(|_| "news".to_string()),
 ai_summary: row.get("ai_summary"),
 og_content: row.get("og_content"),
 snippet: row.get("snippet"),
@@ -191,6 +193,7 @@ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         "CREATE TABLE IF NOT EXISTS feed_topic_map (
 feed_id TEXT NOT NULL,
 category TEXT NOT NULL,
+article_type TEXT NOT NULL DEFAULT 'news',
 PRIMARY KEY(feed_id, category),
 FOREIGN KEY(feed_id) REFERENCES feed_definitions(id) ON DELETE CASCADE
 )",
@@ -243,21 +246,206 @@ PRIMARY KEY(source_type, source_ref)
         tx.commit().await?;
     }
 
+    // Hard cleanup for deprecated RSSHub storage paths.
+    sqlx::query("DROP TABLE IF EXISTS rss_config")
+        .execute(pool)
+        .await?;
+    sqlx::query("DELETE FROM feed_sources WHERE source_type = 'rsshub'")
+        .execute(pool)
+        .await?;
+
+    // Migration: normalize seeded GCores source type to canonical "gcores".
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS rss_config (
-id INTEGER PRIMARY KEY CHECK (id = 1),
-rsshub_instance_domain TEXT NOT NULL DEFAULT 'https://rsshub.app/'
+        "UPDATE feed_sources
+         SET source_type = 'gcores'
+         WHERE source_type = 'custom_rss'
+           AND source_ref = 'https://www.gcores.com/rss'
+           AND display_name = 'GCores'",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "UPDATE feed_sources
+         SET source_type = 'gcores'
+         WHERE source_type = 'gcores_rss'",
+    )
+    .execute(pool)
+    .await?;
+
+    // Migration: normalize ANN and Automaton defaults to explicit source types.
+    sqlx::query(
+        "UPDATE feed_sources
+         SET source_type = 'ann'
+         WHERE source_type = 'custom_rss'
+             AND source_ref = 'https://www.animenewsnetwork.com/news/?topic=anime'",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "UPDATE feed_sources
+         SET source_type = 'automaton'
+         WHERE source_type = 'custom_rss'
+             AND source_ref = 'https://automaton-media.com/en/feed/'",
+    )
+    .execute(pool)
+    .await?;
+
+    // Track one-time feed seeds so removed defaults are not reinserted.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS feed_source_seed_state (
+seed_key TEXT PRIMARY KEY,
+created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )",
     )
     .execute(pool)
     .await?;
 
-    // Seed a single rss_config row if none exists.
-    sqlx::query(
-        "INSERT OR IGNORE INTO rss_config(id, rsshub_instance_domain) VALUES (1, 'https://rsshub.app/')",
+    let gcores_source_exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM feed_sources
+            WHERE source_type = 'gcores' AND source_ref = 'https://www.gcores.com/rss'",
     )
-    .execute(pool)
+    .fetch_one(pool)
     .await?;
+
+    // Backfill marker for existing DBs that already have GCores seeded.
+    if gcores_source_exists > 0 {
+        sqlx::query(
+            "INSERT OR IGNORE INTO feed_source_seed_state(seed_key)
+             VALUES ('default-custom-rss-gcores-v1')",
+        )
+        .execute(pool)
+        .await?;
+    }
+
+    let gcores_seeded_before: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM feed_source_seed_state
+         WHERE seed_key = 'default-custom-rss-gcores-v1'",
+    )
+    .fetch_one(pool)
+    .await?;
+
+    // Seed GCores only once per DB lifetime.
+    if gcores_seeded_before == 0 {
+        sqlx::query(
+            "INSERT OR IGNORE INTO feed_sources(source_type, source_ref, display_name, enabled)
+             VALUES ('gcores', 'https://www.gcores.com/rss', 'GCores', 1)",
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            "INSERT OR IGNORE INTO feed_source_seed_state(seed_key)
+             VALUES ('default-custom-rss-gcores-v1')",
+        )
+        .execute(pool)
+        .await?;
+    }
+
+    let ann_source_exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM feed_sources
+         WHERE source_type = 'ann' AND source_ref = 'https://www.animenewsnetwork.com/news/?topic=anime'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if ann_source_exists > 0 {
+        sqlx::query(
+            "INSERT OR IGNORE INTO feed_source_seed_state(seed_key)
+             VALUES ('default-source-ann-v1')",
+        )
+        .execute(pool)
+        .await?;
+    }
+    let ann_seeded_before: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM feed_source_seed_state
+         WHERE seed_key = 'default-source-ann-v1'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if ann_seeded_before == 0 {
+        sqlx::query(
+            "INSERT OR IGNORE INTO feed_sources(source_type, source_ref, display_name, enabled)
+             VALUES ('ann', 'https://www.animenewsnetwork.com/news/?topic=anime', 'ANN', 1)",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO feed_source_seed_state(seed_key)
+             VALUES ('default-source-ann-v1')",
+        )
+        .execute(pool)
+        .await?;
+    }
+
+    let automaton_source_exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM feed_sources
+         WHERE source_type = 'automaton' AND source_ref = 'https://automaton-media.com/en/feed/'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if automaton_source_exists > 0 {
+        sqlx::query(
+            "INSERT OR IGNORE INTO feed_source_seed_state(seed_key)
+             VALUES ('default-source-automaton-v1')",
+        )
+        .execute(pool)
+        .await?;
+    }
+    let automaton_seeded_before: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM feed_source_seed_state
+         WHERE seed_key = 'default-source-automaton-v1'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if automaton_seeded_before == 0 {
+        sqlx::query(
+            "INSERT OR IGNORE INTO feed_sources(source_type, source_ref, display_name, enabled)
+             VALUES ('automaton', 'https://automaton-media.com/en/feed/', 'AUTOMATON', 1)",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO feed_source_seed_state(seed_key)
+             VALUES ('default-source-automaton-v1')",
+        )
+        .execute(pool)
+        .await?;
+    }
+
+    // Seed default YYS (游研社) RSS source — one-time, never reinserted after removal.
+    let yys_source_exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM feed_sources
+         WHERE source_type = 'yys' AND source_ref = 'https://www.yystv.cn/rss/feed'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if yys_source_exists > 0 {
+        sqlx::query(
+            "INSERT OR IGNORE INTO feed_source_seed_state(seed_key)
+             VALUES ('default-source-yys-v1')",
+        )
+        .execute(pool)
+        .await?;
+    }
+    let yys_seeded_before: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM feed_source_seed_state
+         WHERE seed_key = 'default-source-yys-v1'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if yys_seeded_before == 0 {
+        sqlx::query(
+            "INSERT OR IGNORE INTO feed_sources(source_type, source_ref, display_name, enabled)
+             VALUES ('yys', 'https://www.yystv.cn/rss/feed', 'YYS', 1)",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO feed_source_seed_state(seed_key)
+             VALUES ('default-source-yys-v1')",
+        )
+        .execute(pool)
+        .await?;
+    }
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_feed_definitions_sort_order ON feed_definitions(sort_order)")
         .execute(pool)
@@ -268,6 +456,21 @@ rsshub_instance_domain TEXT NOT NULL DEFAULT 'https://rsshub.app/'
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_feed_sources_enabled ON feed_sources(enabled)")
         .execute(pool)
         .await?;
+
+    // Migration: add article_type column to feed_topic_map for existing databases.
+    let _ = sqlx::query("ALTER TABLE feed_topic_map ADD COLUMN article_type TEXT NOT NULL DEFAULT 'news'")
+        .execute(pool)
+        .await; // Ignore error — column already exists on fresh installs or already-migrated DBs.
+
+    // Backfill: any category that is not a standard Google News topic belongs to an RSS source.
+    let _ = sqlx::query(
+        "UPDATE feed_topic_map SET article_type = 'rss'
+         WHERE article_type = 'news'
+           AND category NOT IN ('world','nation','business','technology',
+                                'entertainment','science','sports','health','anime','gaming')",
+    )
+    .execute(pool)
+    .await;
 
     Ok(())
 }
@@ -328,9 +531,9 @@ pub async fn list_feeds(pool: &SqlitePool) -> Result<Vec<FeedDefinition>, sqlx::
     Ok(rows.iter().map(row_to_feed).collect())
 }
 
-pub async fn list_feed_categories(pool: &SqlitePool, feed_id: &str) -> Result<Vec<String>, sqlx::Error> {
+pub async fn list_feed_categories(pool: &SqlitePool, feed_id: &str) -> Result<(Vec<String>, Vec<String>), sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT category
+        "SELECT category, article_type
  FROM feed_topic_map
  WHERE feed_id = ?1
  ORDER BY category ASC",
@@ -338,21 +541,33 @@ pub async fn list_feed_categories(pool: &SqlitePool, feed_id: &str) -> Result<Ve
     .bind(feed_id)
     .fetch_all(pool)
     .await?;
-    Ok(rows.iter().map(|row| row.get::<String, _>("category")).collect())
+    let mut news_categories = Vec::new();
+    let mut rss_categories = Vec::new();
+    for row in &rows {
+        let cat: String = row.get("category");
+        let art_type: String = row.try_get("article_type").unwrap_or_else(|_| "news".to_string());
+        if art_type == "rss" {
+            rss_categories.push(cat);
+        } else {
+            news_categories.push(cat);
+        }
+    }
+    Ok((news_categories, rss_categories))
 }
 
 pub async fn list_feeds_with_topics(pool: &SqlitePool) -> Result<Vec<FeedDefinitionWithTopics>, sqlx::Error> {
     let feeds = list_feeds(pool).await?;
     let mut output = Vec::with_capacity(feeds.len());
     for feed in feeds {
-        let categories = list_feed_categories(pool, &feed.id).await?;
+        let (news_categories, rss_categories) = list_feed_categories(pool, &feed.id).await?;
         output.push(FeedDefinitionWithTopics {
             id: feed.id,
             name: feed.name,
             slug: feed.slug,
             is_visible: feed.is_visible,
             sort_order: feed.sort_order,
-            categories,
+            news_categories,
+            rss_categories,
         });
     }
     Ok(output)
@@ -361,7 +576,8 @@ pub async fn list_feeds_with_topics(pool: &SqlitePool) -> Result<Vec<FeedDefinit
 pub async fn create_feed(
     pool: &SqlitePool,
     name: &str,
-    categories: &[String],
+    news_categories: &[String],
+    rss_categories: &[String],
 ) -> Result<FeedDefinitionWithTopics, sqlx::Error> {
     let normalized_name = name.trim();
     let base_slug = normalize_feed_slug(normalized_name);
@@ -379,7 +595,8 @@ pub async fn create_feed(
 
     let next_sort_order: i64 = 0;
     let id = generate_feed_id(&slug);
-    let normalized_categories = normalize_categories(categories);
+    let normalized_news = normalize_categories(news_categories);
+    let normalized_rss = normalize_categories(rss_categories);
 
     let mut tx = pool.begin().await?;
     sqlx::query("UPDATE feed_definitions SET sort_order = sort_order + 1, updated_at = CURRENT_TIMESTAMP")
@@ -396,8 +613,15 @@ VALUES (?1, ?2, ?3, 1, ?4)",
     .execute(&mut *tx)
     .await?;
 
-    for category in &normalized_categories {
-        sqlx::query("INSERT INTO feed_topic_map(feed_id, category) VALUES (?1, ?2)")
+    for category in &normalized_news {
+        sqlx::query("INSERT INTO feed_topic_map(feed_id, category, article_type) VALUES (?1, ?2, 'news')")
+            .bind(id.as_str())
+            .bind(category.as_str())
+            .execute(&mut *tx)
+            .await?;
+    }
+    for category in &normalized_rss {
+        sqlx::query("INSERT INTO feed_topic_map(feed_id, category, article_type) VALUES (?1, ?2, 'rss')")
             .bind(id.as_str())
             .bind(category.as_str())
             .execute(&mut *tx)
@@ -411,7 +635,8 @@ VALUES (?1, ?2, ?3, 1, ?4)",
         slug,
         is_visible: true,
         sort_order: next_sort_order,
-        categories: normalized_categories,
+        news_categories: normalized_news,
+        rss_categories: normalized_rss,
     })
 }
 
@@ -460,15 +685,28 @@ pub async fn set_feed_visibility(pool: &SqlitePool, feed_id: &str, is_visible: b
     Ok(())
 }
 
-pub async fn set_feed_categories(pool: &SqlitePool, feed_id: &str, categories: &[String]) -> Result<(), sqlx::Error> {
-    let normalized_categories = normalize_categories(categories);
+pub async fn set_feed_categories(
+    pool: &SqlitePool,
+    feed_id: &str,
+    news_categories: &[String],
+    rss_categories: &[String],
+) -> Result<(), sqlx::Error> {
+    let normalized_news = normalize_categories(news_categories);
+    let normalized_rss = normalize_categories(rss_categories);
     let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM feed_topic_map WHERE feed_id = ?1")
         .bind(feed_id)
         .execute(&mut *tx)
         .await?;
-    for category in &normalized_categories {
-        sqlx::query("INSERT INTO feed_topic_map(feed_id, category) VALUES (?1, ?2)")
+    for category in &normalized_news {
+        sqlx::query("INSERT INTO feed_topic_map(feed_id, category, article_type) VALUES (?1, ?2, 'news')")
+            .bind(feed_id)
+            .bind(category.as_str())
+            .execute(&mut *tx)
+            .await?;
+    }
+    for category in &normalized_rss {
+        sqlx::query("INSERT INTO feed_topic_map(feed_id, category, article_type) VALUES (?1, ?2, 'rss')")
             .bind(feed_id)
             .bind(category.as_str())
             .execute(&mut *tx)
@@ -497,6 +735,7 @@ authors TEXT NOT NULL DEFAULT '[]',
 language TEXT NOT NULL DEFAULT '',
 thumbnail TEXT NOT NULL,
 category TEXT NOT NULL,
+article_type TEXT NOT NULL DEFAULT 'news',
 ai_summary TEXT NOT NULL DEFAULT '',
 og_content TEXT NOT NULL DEFAULT '',
 snippet TEXT NOT NULL DEFAULT '',
@@ -545,6 +784,26 @@ sqlx::query("CREATE INDEX IF NOT EXISTS idx_news_is_enriched ON news(is_enriched
     .execute(pool)
     .await;
 
+    // Migration: add article_type column to existing databases.
+    let _ = sqlx::query("ALTER TABLE news ADD COLUMN article_type TEXT NOT NULL DEFAULT 'news'")
+        .execute(pool)
+        .await; // Ignore error — column already exists on fresh installs or already-migrated DBs.
+
+    // Backfill: any article whose category is not a standard Google News topic is from an RSS source.
+    let _ = sqlx::query(
+        "UPDATE news SET article_type = 'rss'
+         WHERE article_type = 'news'
+           AND category NOT IN ('world','nation','business','technology',
+                                'entertainment','science','sports','health','anime','gaming')",
+    )
+    .execute(pool)
+    .await;
+
+    // Create index on article_type for efficient type-aware feed filtering.
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_news_article_type ON news(article_type)")
+        .execute(pool)
+        .await?;
+
     Ok(())
 }
 
@@ -575,7 +834,7 @@ pub async fn get_articles_with_embeddings(
     let rows = if let Some(cat) = category {
         sqlx::query(
             "SELECT id, title, url, date, source_name, source_icon, authors,
-                    language, thumbnail, category, ai_summary, og_content, snippet, is_enriched,
+                    language, thumbnail, category, article_type, ai_summary, og_content, snippet, is_enriched,
                           enrichment_mode,
                     embedding
              FROM news
@@ -591,7 +850,7 @@ pub async fn get_articles_with_embeddings(
     } else {
         sqlx::query(
             "SELECT id, title, url, date, source_name, source_icon, authors,
-                    language, thumbnail, category, ai_summary, og_content, snippet, is_enriched,
+                    language, thumbnail, category, article_type, ai_summary, og_content, snippet, is_enriched,
                           enrichment_mode,
                     embedding
              FROM news
@@ -624,8 +883,8 @@ pub async fn upsert_article(pool: &SqlitePool, article: &NewsItem) -> Result<(),
 let result = sqlx::query(
 "INSERT INTO news (
 id, title, url, date, source_name, source_icon, authors,
-language, thumbnail, category, ai_summary, og_content, snippet, enrichment_mode, is_enriched
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+language, thumbnail, category, article_type, ai_summary, og_content, snippet, enrichment_mode, is_enriched
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
 ON CONFLICT(id) DO UPDATE SET
 title       = excluded.title,
 url         = excluded.url,
@@ -635,6 +894,7 @@ source_icon = excluded.source_icon,
 authors     = excluded.authors,
 language    = excluded.language,
 category    = excluded.category,
+article_type = excluded.article_type,
 thumbnail   = CASE WHEN excluded.is_enriched = 1 THEN excluded.thumbnail  ELSE news.thumbnail  END,
 ai_summary  = CASE WHEN excluded.is_enriched = 1 THEN excluded.ai_summary  ELSE news.ai_summary  END,
 og_content  = CASE WHEN excluded.is_enriched = 1 THEN excluded.og_content  ELSE news.og_content  END,
@@ -653,6 +913,7 @@ updated_at  = CURRENT_TIMESTAMP",
 .bind(&article.language)
 .bind(&article.thumbnail)
 .bind(&article.category)
+.bind(&article.article_type)
 .bind(&article.ai_summary)
 .bind(&article.og_content)
 .bind(&article.snippet)
@@ -750,7 +1011,7 @@ limit: i64,
 ) -> Result<Vec<NewsItem>, sqlx::Error> {
 let rows = sqlx::query(
 "SELECT id, title, url, date, source_name, source_icon, authors,
-    language, thumbnail, category, ai_summary, og_content, snippet, enrichment_mode, is_enriched
+    language, thumbnail, category, article_type, ai_summary, og_content, snippet, enrichment_mode, is_enriched
  FROM news
  WHERE is_enriched = 0 AND category = ?1
  ORDER BY date DESC
@@ -778,7 +1039,7 @@ limit: i64,
 ) -> Result<Vec<NewsItem>, sqlx::Error> {
 let rows = sqlx::query(
 "SELECT id, title, url, date, source_name, source_icon, authors,
-    language, thumbnail, category, ai_summary, og_content, snippet, enrichment_mode, is_enriched
+    language, thumbnail, category, article_type, ai_summary, og_content, snippet, enrichment_mode, is_enriched
  FROM news
  WHERE is_enriched = 0 AND category = ?1 AND language = ?2
  ORDER BY date DESC
@@ -805,7 +1066,7 @@ Ok(items)
 pub async fn get_article_by_id(pool: &SqlitePool, id: &str) -> Result<Option<NewsItem>, sqlx::Error> {
 let row = sqlx::query(
 "SELECT id, title, url, date, source_name, source_icon, authors,
-    language, thumbnail, category, ai_summary, og_content, snippet, enrichment_mode, is_enriched
+    language, thumbnail, category, article_type, ai_summary, og_content, snippet, enrichment_mode, is_enriched
  FROM news WHERE id = ?1",
 )
 .bind(id)
@@ -817,7 +1078,7 @@ Ok(row.as_ref().map(row_to_news_item))
 pub async fn list_articles(pool: &SqlitePool, limit: i64, offset: i64) -> Result<Vec<NewsItem>, sqlx::Error> {
 let rows = sqlx::query(
 "SELECT id, title, url, date, source_name, source_icon, authors,
-    language, thumbnail, category, ai_summary, og_content, snippet, enrichment_mode, is_enriched
+    language, thumbnail, category, article_type, ai_summary, og_content, snippet, enrichment_mode, is_enriched
  FROM news
  WHERE is_enriched = 1
  ORDER BY date DESC
@@ -838,7 +1099,7 @@ offset: i64,
 ) -> Result<Vec<NewsItem>, sqlx::Error> {
 let rows = sqlx::query(
 "SELECT id, title, url, date, source_name, source_icon, authors,
-    language, thumbnail, category, ai_summary, og_content, snippet, enrichment_mode, is_enriched
+    language, thumbnail, category, article_type, ai_summary, og_content, snippet, enrichment_mode, is_enriched
  FROM news
  WHERE is_enriched = 1 AND category = ?1
  ORDER BY date DESC
@@ -855,7 +1116,7 @@ Ok(rows.iter().map(row_to_news_item).collect())
 pub async fn get_articles_on_date(pool: &SqlitePool, date: &str) -> Result<Vec<NewsItem>, sqlx::Error> {
 let rows = sqlx::query(
 "SELECT id, title, url, date, source_name, source_icon, authors,
-    language, thumbnail, category, ai_summary, og_content, snippet, enrichment_mode, is_enriched
+    language, thumbnail, category, article_type, ai_summary, og_content, snippet, enrichment_mode, is_enriched
  FROM news
  WHERE is_enriched = 1 AND date = ?1
  ORDER BY date DESC",
@@ -875,7 +1136,7 @@ offset: i64,
 let pattern = format!("%{}%", keyword);
 let rows = sqlx::query(
 "SELECT id, title, url, date, source_name, source_icon, authors,
-    language, thumbnail, category, ai_summary, og_content, snippet, enrichment_mode, is_enriched
+    language, thumbnail, category, article_type, ai_summary, og_content, snippet, enrichment_mode, is_enriched
  FROM news
  WHERE is_enriched = 1 AND title LIKE ?1
  ORDER BY date DESC
@@ -912,34 +1173,6 @@ let result = sqlx::query("DELETE FROM news WHERE id = ?1")
 .execute(pool)
 .await?;
 Ok(result.rows_affected() > 0)
-}
-
-// ─── RSS config ──────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct RssConfig {
-    pub rsshub_instance_domain: String,
-}
-
-pub async fn get_rss_config(pool: &SqlitePool) -> Result<RssConfig, sqlx::Error> {
-    let row = sqlx::query("SELECT rsshub_instance_domain FROM rss_config WHERE id = 1")
-        .fetch_optional(pool)
-        .await?;
-    Ok(match row {
-        Some(r) => RssConfig { rsshub_instance_domain: r.get("rsshub_instance_domain") },
-        None => RssConfig { rsshub_instance_domain: "https://rsshub.app/".to_string() },
-    })
-}
-
-pub async fn set_rsshub_domain(pool: &SqlitePool, domain: &str) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO rss_config(id, rsshub_instance_domain) VALUES (1, ?1)
-         ON CONFLICT(id) DO UPDATE SET rsshub_instance_domain = excluded.rsshub_instance_domain",
-    )
-    .bind(domain.trim())
-    .execute(pool)
-    .await?;
-    Ok(())
 }
 
 // ─── Feed sources ─────────────────────────────────────────────────────────────
@@ -1001,14 +1234,64 @@ pub async fn remove_feed_source(
     source_type: &str,
     source_ref: &str,
 ) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    // Clean up feed_topic_map entries for this source before removing it.
+    sqlx::query(
+        "DELETE FROM feed_topic_map
+         WHERE article_type = 'rss'
+           AND category = (
+               SELECT LOWER(display_name) FROM feed_sources
+               WHERE source_type = ?1 AND source_ref = ?2
+           )",
+    )
+    .bind(source_type)
+    .bind(source_ref)
+    .execute(&mut *tx)
+    .await?;
     let result = sqlx::query(
         "DELETE FROM feed_sources WHERE source_type = ?1 AND source_ref = ?2",
     )
     .bind(source_type)
     .bind(source_ref)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Returns the set of distinct RSS category names (lowercase display names) that
+/// are subscribed to by at least one feed in `feed_topic_map`.
+pub async fn list_subscribed_rss_categories(pool: &SqlitePool) -> Result<std::collections::HashSet<String>, sqlx::Error> {
+    let rows = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT category FROM feed_topic_map WHERE article_type = 'rss'",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Returns the set of distinct Google News category names (e.g. "world", "sports") that
+/// are toggled ON by at least one feed in `feed_topic_map`.
+pub async fn list_subscribed_news_categories(pool: &SqlitePool) -> Result<std::collections::HashSet<String>, sqlx::Error> {
+    let rows = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT category FROM feed_topic_map WHERE article_type = 'news'",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Removes all feed subscriptions for a given RSS category (lowercase display name).
+/// Called when a source is disabled in Custom RSS Feed Settings so that its pill
+/// is immediately turned off in all feeds.
+pub async fn remove_rss_category_from_all_feeds(pool: &SqlitePool, category: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM feed_topic_map WHERE article_type = 'rss' AND category = ?1",
+    )
+    .bind(category)
     .execute(pool)
     .await?;
-    Ok(result.rows_affected() > 0)
+    Ok(())
 }
 
 
@@ -1041,6 +1324,7 @@ authors: vec!["Author One".to_string()],
 language: "en".to_string(),
 thumbnail: "https://example.com/thumb.png".to_string(),
 category: "anime".to_string(),
+article_type: "news".to_string(),
 ai_summary: String::new(),
 og_content: String::new(),
 snippet: "hello".to_string(),
@@ -1107,32 +1391,32 @@ assert!(after_delete.is_none());
 }
 
 #[tokio::test]
-async fn feed_sources_and_rss_config_queries_work() {
+async fn feed_sources_queries_work() {
 let db_url = temp_db_path();
 let pool = init_db(&db_url).await.expect("db init should succeed");
 
-let default_config = get_rss_config(&pool).await.expect("default config should load");
-assert_eq!(default_config.rsshub_instance_domain, "https://rsshub.app/");
-
-set_rsshub_domain(&pool, "https://example.rsshub.app/")
-    .await
-    .expect("rsshub domain update should work");
-let updated_config = get_rss_config(&pool).await.expect("updated config should load");
-assert_eq!(updated_config.rsshub_instance_domain, "https://example.rsshub.app/");
-
-upsert_feed_source(&pool, "rsshub", "github/trending/daily", "GitHub Trending", true)
-    .await
-    .expect("rsshub source upsert should work");
 upsert_feed_source(&pool, "custom_rss", "https://example.com/feed.xml", "Example Feed", false)
     .await
     .expect("custom source upsert should work");
 
 let sources = list_feed_sources(&pool).await.expect("sources should list");
-assert_eq!(sources.len(), 2);
+assert_eq!(sources.len(), 4);
 assert!(sources.iter().any(|source| {
-    source.source_type == "rsshub"
-        && source.source_ref == "github/trending/daily"
-        && source.display_name == "GitHub Trending"
+    source.source_type == "gcores"
+        && source.source_ref == "https://www.gcores.com/rss"
+        && source.display_name == "GCores"
+        && source.enabled
+}));
+assert!(sources.iter().any(|source| {
+    source.source_type == "ann"
+        && source.source_ref == "https://www.animenewsnetwork.com/news/?topic=anime"
+        && source.display_name == "ANN"
+        && source.enabled
+}));
+assert!(sources.iter().any(|source| {
+    source.source_type == "automaton"
+        && source.source_ref == "https://automaton-media.com/en/feed/"
+        && source.display_name == "AUTOMATON"
         && source.enabled
 }));
 assert!(sources.iter().any(|source| {
@@ -1142,11 +1426,11 @@ assert!(sources.iter().any(|source| {
         && !source.enabled
 }));
 
-let removed = remove_feed_source(&pool, "rsshub", "github/trending/daily")
+let removed = remove_feed_source(&pool, "custom_rss", "https://example.com/feed.xml")
     .await
     .expect("source remove should work");
 assert!(removed);
-assert_eq!(list_feed_sources(&pool).await.expect("sources should relist").len(), 1);
+assert_eq!(list_feed_sources(&pool).await.expect("sources should relist").len(), 3);
 }
 
 #[tokio::test]
@@ -1155,7 +1439,7 @@ let db_url = temp_db_path();
 let pool = init_db(&db_url).await.expect("db init should succeed");
 seed_default_feeds(&pool).await.expect("default feeds should seed");
 
-let created = create_feed(&pool, "Custom Feed", &["world".to_string()])
+let created = create_feed(&pool, "Custom Feed", &["world".to_string()], &[])
     .await
     .expect("feed create should work");
 upsert_feed_source(&pool, "custom_rss", "https://example.com/feed.xml", "Example Feed", true)
@@ -1165,8 +1449,92 @@ upsert_feed_source(&pool, "custom_rss", "https://example.com/feed.xml", "Example
 delete_feed(&pool, &created.id).await.expect("feed delete should work");
 
 let sources = list_feed_sources(&pool).await.expect("sources should remain");
-assert_eq!(sources.len(), 1);
-assert_eq!(sources[0].display_name, "Example Feed");
+assert_eq!(sources.len(), 4);
+assert!(sources.iter().any(|source| source.display_name == "GCores"));
+assert!(sources.iter().any(|source| source.display_name == "ANN"));
+assert!(sources.iter().any(|source| source.display_name == "AUTOMATON"));
+assert!(sources.iter().any(|source| source.display_name == "Example Feed"));
+}
+
+#[tokio::test]
+async fn gcores_default_source_is_not_reinserted_after_removal() {
+let db_url = temp_db_path();
+let pool = init_db(&db_url).await.expect("db init should succeed");
+
+let removed = remove_feed_source(&pool, "gcores", "https://www.gcores.com/rss")
+    .await
+    .expect("gcores remove should work");
+assert!(removed, "expected seeded gcores source to exist and be removable");
+
+// Re-running table setup should not reinsert the one-time seed.
+create_feed_tables(&pool)
+    .await
+    .expect("re-running create_feed_tables should succeed");
+
+let sources = list_feed_sources(&pool).await.expect("sources should list");
+assert!(!sources.iter().any(|source| {
+    source.source_type == "gcores" && source.source_ref == "https://www.gcores.com/rss"
+}));
+}
+
+#[tokio::test]
+async fn ann_default_source_is_not_reinserted_after_removal() {
+let db_url = temp_db_path();
+let pool = init_db(&db_url).await.expect("db init should succeed");
+
+let removed = remove_feed_source(&pool, "ann", "https://www.animenewsnetwork.com/news/?topic=anime")
+    .await
+    .expect("ann remove should work");
+assert!(removed, "expected seeded ann source to exist and be removable");
+
+create_feed_tables(&pool)
+    .await
+    .expect("re-running create_feed_tables should succeed");
+
+let sources = list_feed_sources(&pool).await.expect("sources should list");
+assert!(!sources.iter().any(|source| {
+    source.source_type == "ann" && source.source_ref == "https://www.animenewsnetwork.com/news/?topic=anime"
+}));
+}
+
+#[tokio::test]
+async fn automaton_default_source_is_not_reinserted_after_removal() {
+let db_url = temp_db_path();
+let pool = init_db(&db_url).await.expect("db init should succeed");
+
+let removed = remove_feed_source(&pool, "automaton", "https://automaton-media.com/en/feed/")
+    .await
+    .expect("automaton remove should work");
+assert!(removed, "expected seeded automaton source to exist and be removable");
+
+create_feed_tables(&pool)
+    .await
+    .expect("re-running create_feed_tables should succeed");
+
+let sources = list_feed_sources(&pool).await.expect("sources should list");
+assert!(!sources.iter().any(|source| {
+    source.source_type == "automaton" && source.source_ref == "https://automaton-media.com/en/feed/"
+}));
+}
+
+#[tokio::test]
+async fn yys_default_source_is_not_reinserted_after_removal() {
+let db_url = temp_db_path();
+let pool = init_db(&db_url).await.expect("db init should succeed");
+
+let removed = remove_feed_source(&pool, "yys", "https://www.yystv.cn/rss/feed")
+    .await
+    .expect("yys remove should work");
+assert!(removed, "expected seeded yys source to exist and be removable");
+
+create_feed_tables(&pool)
+    .await
+    .expect("re-running create_feed_tables should succeed");
+
+let sources = list_feed_sources(&pool).await.expect("sources should list");
+assert!(!sources.iter().any(|source| {
+    source.source_type == "yys" && source.source_ref == "https://www.yystv.cn/rss/feed"
+}));
 }
 
 #[tokio::test]
@@ -1174,19 +1542,21 @@ async fn feed_categories_can_be_empty() {
 let db_url = temp_db_path();
 let pool = init_db(&db_url).await.expect("db init should succeed");
 
-let created = create_feed(&pool, "Empty Feed", &[])
-    .await
-    .expect("feed create should allow empty categories");
-assert!(created.categories.is_empty(), "new feed should start empty");
+    let created = create_feed(&pool, "Empty Feed", &[], &[])
+        .await
+        .expect("feed create should allow empty categories");
+    assert!(created.news_categories.is_empty(), "new feed should start empty");
+    assert!(created.rss_categories.is_empty(), "new feed should start empty");
 
-set_feed_categories(&pool, &created.id, &[])
-    .await
-    .expect("set_feed_categories should allow empty categories");
+    set_feed_categories(&pool, &created.id, &[], &[])
+        .await
+        .expect("set_feed_categories should allow empty categories");
 
-let categories = list_feed_categories(&pool, &created.id)
-    .await
-    .expect("list_feed_categories should work");
-assert!(categories.is_empty(), "feed categories should remain empty");
+    let (news_cats, rss_cats) = list_feed_categories(&pool, &created.id)
+        .await
+        .expect("list_feed_categories should work");
+    assert!(news_cats.is_empty(), "feed news categories should remain empty");
+    assert!(rss_cats.is_empty(), "feed rss categories should remain empty");
 }
 
 #[tokio::test]
@@ -1194,10 +1564,10 @@ async fn create_feed_inserts_new_feed_at_top() {
 let db_url = temp_db_path();
 let pool = init_db(&db_url).await.expect("db init should succeed");
 
-let first = create_feed(&pool, "My First", &[])
+let first = create_feed(&pool, "My First", &[], &[])
     .await
     .expect("first feed create should work");
-let second = create_feed(&pool, "My Second", &[])
+let second = create_feed(&pool, "My Second", &[], &[])
     .await
     .expect("second feed create should work");
 
@@ -1229,7 +1599,7 @@ let all_topics = feeds
     .expect("all topics system feed should exist");
 assert_eq!(all_topics.name, "All");
 assert!(
-    all_topics.categories.is_empty(),
+    all_topics.news_categories.is_empty() && all_topics.rss_categories.is_empty(),
     "all topics feed should remain unmapped so it can aggregate persisted articles"
 );
 
@@ -1238,7 +1608,8 @@ let world_nation = feeds
     .find(|feed| feed.id == "feed-world-nation")
     .expect("world and nation default feed should exist");
 assert_eq!(world_nation.name, "World & Nation");
-assert_eq!(world_nation.categories, vec!["nation".to_string(), "world".to_string()]);
+assert_eq!(world_nation.news_categories, vec!["nation".to_string(), "world".to_string()]);
+assert!(world_nation.rss_categories.is_empty());
 
 let entertainment = feeds
     .iter()
@@ -1246,7 +1617,7 @@ let entertainment = feeds
     .expect("entertainment default feed should exist");
 assert_eq!(entertainment.name, "Entertainment");
 assert_eq!(
-    entertainment.categories,
+    entertainment.news_categories,
     vec![
         "anime".to_string(),
         "entertainment".to_string(),
@@ -1254,26 +1625,30 @@ assert_eq!(
         "technology".to_string(),
     ]
 );
+assert!(entertainment.rss_categories.is_empty());
 
 let science_health = feeds
     .iter()
     .find(|feed| feed.id == "feed-science-health")
     .expect("science and health default feed should exist");
 assert_eq!(science_health.name, "Science & Health");
-assert_eq!(science_health.categories, vec!["health".to_string(), "science".to_string()]);
+assert_eq!(science_health.news_categories, vec!["health".to_string(), "science".to_string()]);
+assert!(science_health.rss_categories.is_empty());
 
 let sports = feeds
     .iter()
     .find(|feed| feed.id == "feed-sports")
     .expect("sports default feed should exist");
 assert_eq!(sports.name, "Sports");
-assert_eq!(sports.categories, vec!["sports".to_string()]);
+assert_eq!(sports.news_categories, vec!["sports".to_string()]);
+assert!(sports.rss_categories.is_empty());
 
 let business = feeds
     .iter()
     .find(|feed| feed.id == "feed-business")
     .expect("business default feed should exist");
 assert_eq!(business.name, "Bussiness");
-assert_eq!(business.categories, vec!["business".to_string()]);
+assert_eq!(business.news_categories, vec!["business".to_string()]);
+assert!(business.rss_categories.is_empty());
 }
 }

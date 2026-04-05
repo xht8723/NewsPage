@@ -7,13 +7,10 @@ export interface FeedSource {
   enabled: boolean;
 }
 
-export interface RssConfig {
-  rsshub_instance_domain: string;
-}
-
 export interface NewsArticle {
   id: string;
   category: string;
+  articleType: "news" | "rss";
   language: string;
   enrichmentMode: "pending" | "ai" | "none";
   title: string;
@@ -40,6 +37,7 @@ export interface BackendNewsItem {
   language: string;
   thumbnail: string;
   category: string;
+  article_type: "news" | "rss";
   ai_summary: string;
   og_content: string;
   snippet: string;
@@ -53,7 +51,8 @@ export interface FeedDefinition {
   slug: string;
   is_visible: boolean;
   sort_order: number;
-  categories: string[];
+  news_categories: string[];
+  rss_categories: string[];
 }
 
 export interface UserSettings {
