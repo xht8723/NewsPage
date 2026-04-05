@@ -223,10 +223,7 @@ impl ScraperStage for GcoresScraperStage {
             .iter()
             .filter(|s| s.source_type == "gcores" && ctx.subscribed_rss_names.contains(&s.display_name.to_ascii_lowercase()))
             .collect();
-        let mut items = scrape_gcores_sources(&active_sources).await?;
-        for item in &mut items {
-            crate::image_search::fill_thumbnail_if_missing(&mut item.thumbnail, &item.title).await;
-        }
+        let items = scrape_gcores_sources(&active_sources).await?;
         Ok(items)
     }
 }

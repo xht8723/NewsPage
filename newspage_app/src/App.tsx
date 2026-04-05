@@ -149,10 +149,7 @@ function App(): React.JSX.Element {
   const [startupErrorMessage, setStartupErrorMessage] = useState("");
   const isEmbeddingConfigured = settings.localEmbeddingModel.trim().length > 0;
 
-  const subscribedFeedSources = useMemo(() => {
-    const subscribedNames = new Set(feeds.flatMap((f) => f.rss_categories.map((c) => c.toLowerCase())));
-    return feedSources.filter((s) => subscribedNames.has(s.display_name.toLowerCase()));
-  }, [feeds, feedSources]);
+
   const translatePanelTransition = usePanelTransition(showTranslatePanel, 140);
   const categoryManagerTransition = usePanelTransition(showCategoryManager, 170);
   const configPopupTransition = usePanelTransition(showConfigPopup, 170);
@@ -1510,7 +1507,7 @@ function App(): React.JSX.Element {
             <div className="hide-scrollbar max-h-[80vh] overflow-y-auto p-4">
               <FeedManagerPanel
                 feeds={feeds}
-                feedSources={subscribedFeedSources}
+                feedSources={feedSources}
                 isDarkMode={isDarkMode}
                 onCreateFeed={async (name, newsCategories, rssCategories) => {
                   try {

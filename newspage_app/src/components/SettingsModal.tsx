@@ -418,7 +418,7 @@ export function SettingsModal({
                     }`}
                   >
                     <span>Custom RSS Feed</span>
-                    <span className="text-[10px] opacity-70">{feedSources.filter((s) => ["ann", "automaton", "gcores", "custom_rss"].includes(s.source_type)).length} saved</span>
+                    <span className="text-[10px] opacity-70">{feedSources.filter((s) => ["ann", "automaton", "gcores", "yys", "custom_rss"].includes(s.source_type)).length} saved</span>
                   </button>
                 </div>
               </div>

@@ -254,10 +254,6 @@ impl ScraperStage for AnnScraperStage {
             }
         }
 
-        for item in &mut out {
-            crate::image_search::fill_thumbnail_if_missing(&mut item.thumbnail, &item.title).await;
-        }
-
         Ok(out)
     }
 }

@@ -271,10 +271,7 @@ impl ScraperStage for GlRssScraperStage {
     }
 
     async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<NewsItem>, String> {
-        let mut items = scrape_rss_regions(&ctx.selected_regions, &ctx.subscribed_news_categories).await?;
-        for item in &mut items {
-            crate::image_search::fill_thumbnail_if_missing(&mut item.thumbnail, &item.title).await;
-        }
+        let items = scrape_rss_regions(&ctx.selected_regions, &ctx.subscribed_news_categories).await?;
         Ok(items)
     }
 }

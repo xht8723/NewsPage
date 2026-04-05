@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+﻿use chrono::{DateTime, Utc};
 use reqwest::Client;
 
 use crate::id_generator::generate_article_id;
@@ -44,6 +44,46 @@ pub fn decode_entities(s: &str) -> String {
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
         .replace("&apos;", "'")
+}
+
+/// Strip a trailing source name appended by Google News RSS.
+///
+/// Google News titles look like `\"Article Title - Source Name\"` or
+/// `\"Article Title | Source Name\"`. This function removes the last
+/// occurrence of ` - `, ` | `, or ` \u{2013} ` (en-dash) and everything
+/// after it, returning the trimmed article title.
+///
+/// If none of the separators are found the original title is returned
+/// unchanged, so non-Google-News feeds are unaffected.
+pub fn strip_trailing_source(title: &str) -> String {
+    // Separators to look for (we pick the rightmost/last occurrence).
+    // U+2013 = en dash, U+2014 = em dash — both appear in real feeds.
+    const SEPARATORS: &[&str] = &[" - ", " | ", " \u{2013} ", " \u{2014} "];
+    let mut best: Option<usize> = None;
+    let mut best_sep_len = 0usize;
+    for sep in SEPARATORS {
+        if let Some(pos) = title.rfind(sep) {
+            if best.map_or(true, |b| pos > b) {
+                best = Some(pos);
+                best_sep_len = sep.len();
+            }
+        }
+    }
+    match best {
+        Some(pos) => {
+            let suffix = &title[pos + best_sep_len..];
+            // Sanity check: suffix must be non-empty and must not itself
+            // contain another separator (which would mean this was a
+            // mid-title dash, not a trailing source label).
+            let suspicious = SEPARATORS.iter().any(|s| suffix.contains(s));
+            if suffix.is_empty() || suspicious {
+                title.to_string()
+            } else {
+                title[..pos].trim().to_string()
+            }
+        }
+        None => title.to_string(),
+    }
 }
 
 /// Parse the `<source url="...">SourceName</source>` tag.
@@ -156,7 +196,7 @@ pub fn parse_rss_items(xml: &str) -> Vec<RssItem> {
         search_from = abs_start + item_end + 7;
 
         let title = xml_tag_content(item_xml, "title")
-            .map(|s| decode_entities(&strip_cdata(s)))
+            .map(|s| strip_trailing_source(&decode_entities(&strip_cdata(s))))
             .unwrap_or_default();
         let link = xml_tag_content(item_xml, "link")
             .map(clean_google_news_link)
@@ -206,6 +246,83 @@ pub fn rss_item_to_news_item(rss: &RssItem, category: &str, language: &str, arti
         snippet: String::new(),
         enrichment_mode: "pending".to_string(),
         is_enriched: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_trailing_source;
+
+    #[test]
+    fn strips_hyphen_source() {
+        assert_eq!(
+            strip_trailing_source("Man Arrested After Breaking into Ex-Girlfriend's Home - VOCM"),
+            "Man Arrested After Breaking into Ex-Girlfriend's Home"
+        );
+    }
+
+    #[test]
+    fn strips_pipe_source() {
+        assert_eq!(
+            strip_trailing_source("New iPhone Released | The Verge"),
+            "New iPhone Released"
+        );
+    }
+
+    #[test]
+    fn strips_en_dash_source() {
+        assert_eq!(
+            strip_trailing_source("Climate Summit Begins \u{2013} Reuters"),
+            "Climate Summit Begins"
+        );
+    }
+
+    #[test]
+    fn strips_em_dash_source() {
+        assert_eq!(
+            strip_trailing_source("Election Results \u{2014} BBC News"),
+            "Election Results"
+        );
+    }
+
+    #[test]
+    fn strips_rightmost_separator_only() {
+        // "Title - Subtitle - Source" → strips only the last " - Source"
+        assert_eq!(
+            strip_trailing_source("How to Fix It - A Guide - TechCrunch"),
+            "How to Fix It - A Guide"
+        );
+    }
+
+    #[test]
+    fn no_separator_returns_unchanged() {
+        assert_eq!(
+            strip_trailing_source("Breaking News About Something"),
+            "Breaking News About Something"
+        );
+    }
+
+    #[test]
+    fn empty_string_returns_empty() {
+        assert_eq!(strip_trailing_source(""), "");
+    }
+
+    #[test]
+    fn suspicious_suffix_returns_unchanged() {
+        // Suffix itself contains a separator → looks like mid-title, not a source label
+        assert_eq!(
+            strip_trailing_source("A - B - C - D | E"),
+            // rightmost is " | E"; "E" has no separator → strips to "A - B - C - D"
+            "A - B - C - D"
+        );
+    }
+
+    #[test]
+    fn trims_whitespace_from_result() {
+        assert_eq!(
+            strip_trailing_source("  Spaced Title - Source  "),
+            "Spaced Title"
+        );
     }
 }
 

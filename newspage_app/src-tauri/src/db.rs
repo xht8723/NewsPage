@@ -327,8 +327,8 @@ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     // Seed GCores only once per DB lifetime.
     if gcores_seeded_before == 0 {
         sqlx::query(
-            "INSERT OR IGNORE INTO feed_sources(source_type, source_ref, display_name, enabled)
-             VALUES ('gcores', 'https://www.gcores.com/rss', 'GCores', 1)",
+             "INSERT OR IGNORE INTO feed_sources(source_type, source_ref, display_name, enabled)
+             VALUES ('gcores', 'https://www.gcores.com/rss', '机核网', 1)",
         )
         .execute(pool)
         .await?;
@@ -435,7 +435,7 @@ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     if yys_seeded_before == 0 {
         sqlx::query(
             "INSERT OR IGNORE INTO feed_sources(source_type, source_ref, display_name, enabled)
-             VALUES ('yys', 'https://www.yystv.cn/rss/feed', 'YYS', 1)",
+             VALUES ('yys', 'https://www.yystv.cn/rss/feed', '游研社', 1)",
         )
         .execute(pool)
         .await?;
@@ -1404,7 +1404,7 @@ assert_eq!(sources.len(), 4);
 assert!(sources.iter().any(|source| {
     source.source_type == "gcores"
         && source.source_ref == "https://www.gcores.com/rss"
-        && source.display_name == "GCores"
+        && source.display_name == "机核网"
         && source.enabled
 }));
 assert!(sources.iter().any(|source| {
@@ -1450,7 +1450,7 @@ delete_feed(&pool, &created.id).await.expect("feed delete should work");
 
 let sources = list_feed_sources(&pool).await.expect("sources should remain");
 assert_eq!(sources.len(), 4);
-assert!(sources.iter().any(|source| source.display_name == "GCores"));
+assert!(sources.iter().any(|source| source.display_name == "机核网"));
 assert!(sources.iter().any(|source| source.display_name == "ANN"));
 assert!(sources.iter().any(|source| source.display_name == "AUTOMATON"));
 assert!(sources.iter().any(|source| source.display_name == "Example Feed"));

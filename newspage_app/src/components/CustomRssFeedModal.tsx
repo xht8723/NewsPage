@@ -29,9 +29,9 @@ export function CustomRssFeedModal({
   const [editingFeedUrl, setEditingFeedUrl] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const DEFAULT_SOURCE_TYPES = ["ann", "automaton", "gcores"];
+  const DEFAULT_SOURCE_TYPES = ["ann", "automaton", "gcores", "yys"];
   const customFeeds = feedSources.filter((s) =>
-    ["ann", "automaton", "gcores", "custom_rss"].includes(s.source_type),
+    ["ann", "automaton", "gcores", "yys", "custom_rss"].includes(s.source_type),
   );
   const canAddFeed = draftName.trim().length > 0 && normalizeRssFeedUrl(draftFeed).length > 0;
   const canSaveEdit = editingName.trim().length > 0 && normalizeRssFeedUrl(editingFeedUrl).length > 0;

@@ -232,10 +232,7 @@ impl ScraperStage for YysScraperStage {
             .iter()
             .filter(|s| s.source_type == "yys" && ctx.subscribed_rss_names.contains(&s.display_name.to_ascii_lowercase()))
             .collect();
-        let mut items = scrape_yys_sources(&active_sources).await?;
-        for item in &mut items {
-            crate::image_search::fill_thumbnail_if_missing(&mut item.thumbnail, &item.title).await;
-        }
+        let items = scrape_yys_sources(&active_sources).await?;
         Ok(items)
     }
 }
@@ -282,39 +279,39 @@ mod tests {
 
     #[test]
     fn parses_yys_feed_items() {
-        let items = parse_yys_feed(SAMPLE_FEED, "yys", "YYS");
+        let items = parse_yys_feed(SAMPLE_FEED, "yys", "游研社");
         // Item with empty title should be skipped
         assert_eq!(items.len(), 2);
     }
 
     #[test]
     fn sets_language_to_zh_cn() {
-        let items = parse_yys_feed(SAMPLE_FEED, "yys", "YYS");
+        let items = parse_yys_feed(SAMPLE_FEED, "yys", "游研社");
         assert!(items.iter().all(|i| i.language == "zh-CN"));
     }
 
     #[test]
     fn article_type_is_rss() {
-        let items = parse_yys_feed(SAMPLE_FEED, "yys", "YYS");
+        let items = parse_yys_feed(SAMPLE_FEED, "yys", "游研社");
         assert!(items.iter().all(|i| i.article_type == "rss"));
     }
 
     #[test]
     fn category_matches_provided_value() {
-        let items = parse_yys_feed(SAMPLE_FEED, "yys", "YYS");
+        let items = parse_yys_feed(SAMPLE_FEED, "yys", "游研社");
         assert!(items.iter().all(|i| i.category == "yys"));
     }
 
     #[test]
     fn extracts_author_from_source_element() {
-        let items = parse_yys_feed(SAMPLE_FEED, "yys", "YYS");
+        let items = parse_yys_feed(SAMPLE_FEED, "yys", "游研社");
         assert_eq!(items[0].authors, vec!["Oracle"]);
         assert_eq!(items[1].authors, vec!["郝磅磅"]);
     }
 
     #[test]
     fn extracts_thumbnail_from_description_img() {
-        let items = parse_yys_feed(SAMPLE_FEED, "yys", "YYS");
+        let items = parse_yys_feed(SAMPLE_FEED, "yys", "游研社");
         assert_eq!(
             items[0].thumbnail,
             "https://alioss.yystv.cn/doc/13769/thumbnail.jpg"
@@ -327,7 +324,7 @@ mod tests {
 
     #[test]
     fn ids_are_non_empty_and_unique() {
-        let items = parse_yys_feed(SAMPLE_FEED, "yys", "YYS");
+        let items = parse_yys_feed(SAMPLE_FEED, "yys", "游研社");
         let ids: HashSet<&str> = items.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(ids.len(), items.len());
         assert!(items.iter().all(|i| !i.id.is_empty()));
@@ -340,7 +337,7 @@ mod tests {
         let yys_source = FeedSource {
             source_type: "yys".to_string(),
             source_ref: YYS_FEED_URL.to_string(),
-            display_name: "YYS".to_string(),
+            display_name: "游研社".to_string(),
             enabled: true,
         };
 

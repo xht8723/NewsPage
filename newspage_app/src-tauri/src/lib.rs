@@ -26,6 +26,7 @@ use crate::article_extract::fetch_article_text_and_thumbnail;
 use crate::logging::ProcessLogEvent;
 use crate::scrapers::{run_default_scrapers, ScrapeContext};
 use crate::scrapers::gl_rss::list_region_ids;
+use crate::scrapers::rss_common::strip_trailing_source;
 use chrono::{DateTime, Local, Utc};
 use sqlx::sqlite::SqlitePool;
 use std::path::{Path, PathBuf};
@@ -776,7 +777,11 @@ async fn run_scrape_stage(
                 skipped_blacklisted += 1;
                 continue;
             }
-            upsert_article(&state.db, item)
+            // Strip trailing source attribution (e.g. "Title - VOCM") that some
+            // feeds append to titles. Source info is already shown on article cards.
+            let mut item = item.clone();
+            item.title = strip_trailing_source(&item.title);
+            upsert_article(&state.db, &item)
                 .await
                 .map_err(|e| format!("DB upsert error: {}", e))?;
         }
@@ -923,7 +928,7 @@ async fn run_none_ai_stage(
         "extract",
         "done",
         "Skipped extraction in None-AI mode",
-        Some(0),
+        Some(total),
         Some(total),
     )?;
     emit_process_stage(
@@ -931,7 +936,7 @@ async fn run_none_ai_stage(
         "enrich",
         "done",
         "Skipped LLM enrichment in None-AI mode",
-        Some(0),
+        Some(total),
         Some(total),
     )?;
     emit_process_stage(
