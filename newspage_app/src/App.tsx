@@ -1240,7 +1240,7 @@ function App(): React.JSX.Element {
           }`}
         >
           <div>
-            <h2 className={`text-2xl font-black ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{selectedFeedName} Feed</h2>
+            <h2 className={`text-2xl font-black ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{selectedFeedName}</h2>
             <p className="text-xs font-medium text-zinc-500">
               {`Briefings for ${selectedDate}`}
             </p>
