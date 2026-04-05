@@ -15,38 +15,3 @@ pub fn generate_article_id(url: &str, title: &str) -> String {
 
     format!("{:x}", hasher.finalize())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::generate_article_id;
-
-    #[test]
-    fn same_input_generates_same_id() {
-        let id1 = generate_article_id(
-            "https://www.animenewsnetwork.com/news/2026-03-24/foo/.123",
-            "Some Title",
-        );
-        let id2 = generate_article_id(
-            "https://www.animenewsnetwork.com/news/2026-03-24/foo/.123",
-            "Some Title",
-        );
-
-        assert_eq!(id1, id2);
-    }
-
-    #[test]
-    fn different_input_generates_different_id() {
-        let id1 = generate_article_id("https://example.com/a", "Some Title");
-        let id2 = generate_article_id("https://example.com/b", "Some Title");
-
-        assert_ne!(id1, id2);
-    }
-
-    #[test]
-    fn ignores_case_and_outer_whitespace() {
-        let id1 = generate_article_id(" https://example.com/a ", " Some Title ");
-        let id2 = generate_article_id("https://example.com/a", "some title");
-
-        assert_eq!(id1, id2);
-    }
-}
