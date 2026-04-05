@@ -15,6 +15,7 @@ pub struct NewsItem {
     pub ai_summary: String,
     pub og_content: String,
     pub snippet: String,
+    pub enrichment_mode: String,
     pub is_enriched: bool,
 }
 

@@ -945,6 +945,7 @@ async fn run_none_ai_stage(
             // Keep title-only presentation for None-AI mode output.
             enriched.snippet.clear();
             enriched.ai_summary.clear();
+            enriched.enrichment_mode = "none".to_string();
 
             enrich_media_and_embedding(
                 &state.db,
@@ -1209,6 +1210,7 @@ async fn run_enrichment_stage(
                         let mut enriched = apply_enrichment_payload(
                             item, text, snippet, ai_summary, thumbnail, false,
                         );
+                        enriched.enrichment_mode = "ai".to_string();
 
                         enrich_media_and_embedding(
                             &state.db,
@@ -2208,6 +2210,7 @@ async fn reprocess_article(
         fetch_and_enrich_article_with_timeouts(llm.as_ref(), &item, runtime.resolved.min_summary_points, runtime.resolved.max_summary_points).await?;
 
     let mut enriched = apply_enrichment_payload(item, text, snippet, ai_summary, thumbnail, true);
+    enriched.enrichment_mode = "ai".to_string();
 
     enrich_media_and_embedding(
         &state.db,
@@ -2480,6 +2483,7 @@ mod helper_tests {
             ai_summary: "".to_string(),
             og_content: "".to_string(),
             snippet: "".to_string(),
+            enrichment_mode: "pending".to_string(),
             is_enriched: false,
         }
     }

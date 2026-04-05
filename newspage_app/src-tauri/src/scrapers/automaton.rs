@@ -196,6 +196,7 @@ fn parse_rss_items(xml: &str) -> Vec<AutomatonNewsItem> {
             ai_summary: String::new(),
             og_content: String::new(),
             snippet: String::new(),
+            enrichment_mode: "pending".to_string(),
             is_enriched: false,
         });
     }
@@ -332,6 +333,7 @@ fn parse_html_items(html: &str) -> Vec<AutomatonNewsItem> {
             ai_summary: String::new(),
             og_content: String::new(),
             snippet: String::new(),
+            enrichment_mode: "pending".to_string(),
             is_enriched: false,
         });
     }
@@ -629,6 +631,7 @@ mod tests {
             ai_summary: String::new(),
             og_content: String::new(),
             snippet: String::new(),
+            enrichment_mode: "pending".to_string(),
             is_enriched: false,
         }
     }

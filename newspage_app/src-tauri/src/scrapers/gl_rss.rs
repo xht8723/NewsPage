@@ -332,6 +332,7 @@ pub fn rss_item_to_news_item(rss: &RssItem, category: &str, language: &str) -> N
         ai_summary: String::new(),
         og_content: String::new(),
         snippet: String::new(),
+        enrichment_mode: "pending".to_string(),
         is_enriched: false,
     }
 }

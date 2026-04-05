@@ -31,7 +31,7 @@ function ArticleCardComponent({
 }: ArticleCardProps): React.JSX.Element {
   const isListLayout = layout === "list";
   const isCompactListLayout = layout === "compact_list";
-  const isTitleOnlyCard = item.snippet.trim().length === 0 && item.aiSummary.trim().length === 0;
+  const isTitleOnlyCard = item.enrichmentMode === "none";
   const onThumbnailError = useImageFallback(ARTICLE_THUMBNAIL_FALLBACK_URL);
   const translatedTitle = useLiveTranslation({
     text: item.title,
@@ -153,6 +153,7 @@ function areEqual(prevProps: ArticleCardProps, nextProps: ArticleCardProps): boo
     prevProps.item.snippet === nextProps.item.snippet &&
     prevProps.item.thumbnailUrl === nextProps.item.thumbnailUrl &&
     prevProps.item.category === nextProps.item.category &&
+    prevProps.item.enrichmentMode === nextProps.item.enrichmentMode &&
     prevProps.item.preferenceScore === nextProps.item.preferenceScore &&
     prevProps.item.sourceName === nextProps.item.sourceName &&
     prevProps.item.sourceIconUrl === nextProps.item.sourceIconUrl &&

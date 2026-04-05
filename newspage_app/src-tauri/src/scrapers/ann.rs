@@ -175,6 +175,7 @@ pub fn extract_news_item_fields(item_html: &str) -> Option<AnnNewsItem> {
         ai_summary: String::new(),
         og_content: String::new(),
         snippet: String::new(),
+        enrichment_mode: "pending".to_string(),
         is_enriched: false,
     })
 }

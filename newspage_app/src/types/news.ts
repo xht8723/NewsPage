@@ -15,6 +15,7 @@ export interface NewsArticle {
   id: string;
   category: string;
   language: string;
+  enrichmentMode: "pending" | "ai" | "none";
   title: string;
   snippet: string;
   aiSummary: string;
@@ -42,6 +43,7 @@ export interface BackendNewsItem {
   ai_summary: string;
   og_content: string;
   snippet: string;
+  enrichment_mode: "pending" | "ai" | "none";
   preference_score?: number;
 }
 
