@@ -63,6 +63,7 @@ function makeInitialStageStatus(): Record<StageKey, { state: StageState; current
 
 function createDefaultSettings(): UserSettings {
   return {
+    aiModeEnabled: false,
     newsLimit: 5,
     perCategoryNewsLimits: {},
     scrapeCooldownHours: 2,
@@ -240,6 +241,7 @@ function App(): React.JSX.Element {
 
         setSettings(() => ({
           ...defaults,
+          aiModeEnabled: saved.aiModeEnabled === "true",
           newsLimit: saved.newsLimit ? Math.min(50, Math.max(1, Number(saved.newsLimit))) : defaults.newsLimit,
           perCategoryNewsLimits: (() => { try { return saved.perCategoryNewsLimits ? JSON.parse(saved.perCategoryNewsLimits) as Record<string, number> : {}; } catch { return {}; } })(),
           scrapeCooldownHours: saved.scrapeCooldownHours ? Math.min(24, Math.max(0, Number(saved.scrapeCooldownHours))) : defaults.scrapeCooldownHours,
@@ -605,14 +607,8 @@ function App(): React.JSX.Element {
       return;
     }
 
-    const selectedApiKey = getSelectedApiKey(settings);
-    if (settings.llmProvider !== "ollama" && !selectedApiKey?.trim()) {
-      setConfigPopupMessage(`${getProviderLabel(settings.llmProvider)} API key is not configured. Open Settings to add your key.`);
-      setShowConfigPopup(true);
-      return;
-    }
-
     const llmArgs = buildLLMArgs(settings);
+    const selectedApiKey = getSelectedApiKey(settings);
     const selectedModel = getSelectedModel(settings);
     const selectedEndpoint = getSelectedEndpoint(settings);
 
@@ -622,20 +618,29 @@ function App(): React.JSX.Element {
     setRelevanceWarning(null);
     setStageStatus(makeInitialStageStatus());
 
-    try {
-      await invoke<boolean>("test_provider_connection", {
-        provider: settings.llmProvider,
-        apiKey: selectedApiKey || null,
-        endpoint: selectedEndpoint || null,
-        model: selectedModel,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setLoading(false);
-      setEnrichmentProgress(null);
-      setConfigPopupMessage(message);
-      setShowConfigPopup(true);
-      return;
+    if (settings.aiModeEnabled) {
+      if (settings.llmProvider !== "ollama" && !selectedApiKey?.trim()) {
+        setLoading(false);
+        setConfigPopupMessage(`${getProviderLabel(settings.llmProvider)} API key is not configured. Open Settings to add your key.`);
+        setShowConfigPopup(true);
+        return;
+      }
+
+      try {
+        await invoke<boolean>("test_provider_connection", {
+          provider: settings.llmProvider,
+          apiKey: selectedApiKey || null,
+          endpoint: selectedEndpoint || null,
+          model: selectedModel,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setLoading(false);
+        setEnrichmentProgress(null);
+        setConfigPopupMessage(message);
+        setShowConfigPopup(true);
+        return;
+      }
     }
 
     setEnrichmentProgress({ current: 0, total: 0, enriched: 0 });
@@ -645,6 +650,7 @@ function App(): React.JSX.Element {
         limit: settings.newsLimit,
         perCategoryLimitsJson: JSON.stringify(settings.perCategoryNewsLimits),
         cooldownHours: settings.scrapeCooldownHours,
+        aiModeEnabled: settings.aiModeEnabled,
         ...llmArgs,
       });
       console.log("✅ Enrichment pipeline completed!");

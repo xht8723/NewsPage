@@ -227,7 +227,14 @@ async fn enrich_media_and_embedding(
     }
 
     // Generate and store embedding (soft failure — missing embedding degrades gracefully).
-    let embed_text = format!("{} {}", enriched.title, enriched.snippet);
+    // In None-AI mode snippets are intentionally empty, so fall back to title-only input.
+    let trimmed_title = enriched.title.trim();
+    let trimmed_snippet = enriched.snippet.trim();
+    let embed_text = if trimmed_snippet.is_empty() {
+        trimmed_title.to_string()
+    } else {
+        format!("{} {}", trimmed_title, trimmed_snippet)
+    };
     match local_embedding::embed_text(&embed_text, Some(local_embedding_model), local_embedding::EmbedPurpose::Passage).await {
         Ok(vec) => {
             if let Err(e) = db::save_embedding(db_pool, &enriched.id, &vec).await {
@@ -866,6 +873,120 @@ struct EnrichmentStageResult {
     enriched_count: usize,
     first_error: Option<String>,
     stopped: bool,
+}
+
+async fn run_none_ai_stage(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    image_cache_dir: &Path,
+    settings: &ResolvedLlmSettings,
+    items_to_enrich_by_language: Vec<(String, Vec<NewsItem>)>,
+) -> Result<EnrichmentStageResult, String> {
+    let total: usize = items_to_enrich_by_language
+        .iter()
+        .map(|(_, items)| items.len())
+        .sum();
+
+    logging::info(
+        "Enrichment",
+        format!(
+            "Starting None-AI mode for {} item(s): skipping LLM enrichment and persisting title-only records",
+            total
+        ),
+        Some(total),
+    );
+
+    emit_process_stage(
+        app,
+        "extract",
+        "done",
+        "Skipped extraction in None-AI mode",
+        Some(0),
+        Some(total),
+    )?;
+    emit_process_stage(
+        app,
+        "enrich",
+        "done",
+        "Skipped LLM enrichment in None-AI mode",
+        Some(0),
+        Some(total),
+    )?;
+    emit_process_stage(
+        app,
+        "persist",
+        "running",
+        "Persisting title-only records",
+        Some(0),
+        Some(total),
+    )?;
+
+    let mut enriched_count = 0usize;
+    let mut global_index = 0usize;
+    let mut stopped = false;
+
+    'outer: for (_language, items) in items_to_enrich_by_language {
+        for item in items {
+            if state.stop_requested.load(Ordering::Relaxed) {
+                stopped = true;
+                emit_process_stage(
+                    app,
+                    "persist",
+                    "stopped",
+                    "Stopped by user",
+                    Some(enriched_count),
+                    Some(total),
+                )?;
+                break 'outer;
+            }
+
+            global_index += 1;
+            let mut enriched = item;
+            // Keep title-only presentation for None-AI mode output.
+            enriched.snippet.clear();
+            enriched.ai_summary.clear();
+
+            enrich_media_and_embedding(
+                &state.db,
+                image_cache_dir,
+                &mut enriched,
+                &settings.local_embedding_model,
+            )
+            .await;
+
+            enriched.is_enriched = true;
+            persist_enriched_article(&state.db, &enriched).await?;
+            enriched_count += 1;
+
+            emit_enriched_news_updated(app, &enriched, global_index, total, enriched_count)?;
+            emit_process_stage(
+                app,
+                "persist",
+                "running",
+                format!("Persisted '{}'", enriched.title),
+                Some(enriched_count),
+                Some(total),
+            )?;
+        }
+    }
+
+    if !stopped {
+        emit_process_stage(
+            app,
+            "persist",
+            "done",
+            "None-AI persistence stage completed",
+            Some(enriched_count),
+            Some(total),
+        )?;
+    }
+
+    Ok(EnrichmentStageResult {
+        total,
+        enriched_count,
+        first_error: None,
+        stopped,
+    })
 }
 
 async fn run_enrichment_stage(
@@ -1665,6 +1786,7 @@ fn open_app_data_dir(app: tauri::AppHandle) -> Result<(), String> {
 
 fn default_settings_map() -> HashMap<String, String> {
     let mut map = HashMap::new();
+    map.insert("aiModeEnabled".to_string(), "false".to_string());
     map.insert("newsLimit".to_string(), "5".to_string());
     map.insert("perCategoryNewsLimits".to_string(), "{}".to_string());
     map.insert("scrapeCooldownHours".to_string(), "2".to_string());
@@ -1923,6 +2045,7 @@ async fn start_all_action(
     limit: usize,
     per_category_limits_json: Option<String>,
     cooldown_hours: u64,
+    ai_mode_enabled: Option<bool>,
     llm_provider: Option<String>,
     openai_api_key: Option<String>,
     claude_api_key: Option<String>,
@@ -1934,6 +2057,7 @@ async fn start_all_action(
     ollama_model: Option<String>,
     local_embedding_model: Option<String>,
 ) -> Result<(), String> {
+    let ai_mode_enabled = ai_mode_enabled.unwrap_or(false);
     let per_category_limit = limit.clamp(1, 100) as i64;
     let per_category_limits: HashMap<String, i64> = per_category_limits_json
         .as_deref()
@@ -1978,13 +2102,6 @@ async fn start_all_action(
         },
     )?;
 
-    let (llm_config, llm) = create_provider_from_resolved(&runtime.resolved, true).await?;
-    println!(
-        "Using LLM provider '{}' with model '{}'",
-        runtime.resolved.llm_provider,
-        llm_config.model
-    );
-
     let scrape_stopped = run_scrape_stage(&app, &state, &runtime.resolved, cooldown_hours, &runtime.settings_path).await?;
     if scrape_stopped {
         return emit_enriched_news_sync_complete(&app, EnrichmentStageResult {
@@ -2002,16 +2119,34 @@ async fn start_all_action(
         &runtime.resolved.source_blacklist,
     )
     .await?;
-    let result = run_enrichment_stage(
-        &app,
-        &state,
-        llm.as_ref(),
-        &runtime.image_cache_dir,
-        &runtime.resolved,
-        per_category_limit,
-        items_to_enrich_by_language,
-    )
-    .await?;
+    let result = if ai_mode_enabled {
+        let (llm_config, llm) = create_provider_from_resolved(&runtime.resolved, true).await?;
+        println!(
+            "Using LLM provider '{}' with model '{}'",
+            runtime.resolved.llm_provider,
+            llm_config.model
+        );
+
+        run_enrichment_stage(
+            &app,
+            &state,
+            llm.as_ref(),
+            &runtime.image_cache_dir,
+            &runtime.resolved,
+            per_category_limit,
+            items_to_enrich_by_language,
+        )
+        .await?
+    } else {
+        run_none_ai_stage(
+            &app,
+            &state,
+            &runtime.image_cache_dir,
+            &runtime.resolved,
+            items_to_enrich_by_language,
+        )
+        .await?
+    };
 
     if !result.stopped {
         emit_process_stage(

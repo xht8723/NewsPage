@@ -34,6 +34,9 @@ export function ArticleDetailModal({
   const [articleSnapshot, setArticleSnapshot] = useState<NewsArticle | null>(null);
   const { isMounted, isClosing } = usePanelTransition(!!selectedArticle, 170);
   const activeArticle = selectedArticle ?? articleSnapshot;
+  const isTitleOnlyArticle =
+    (activeArticle?.snippet.trim().length ?? 0) === 0
+    && (activeArticle?.aiSummary.trim().length ?? 0) === 0;
   const onThumbnailError = useImageFallback(ARTICLE_HERO_FALLBACK_URL);
 
   useEffect(() => {
@@ -58,7 +61,7 @@ export function ArticleDetailModal({
     text: activeArticle?.aiSummary ?? "",
     sourceLanguage: activeArticle?.language ?? "en",
     targetLanguage: translationTargetLanguage,
-    enabled: liveTranslationEnabled,
+    enabled: liveTranslationEnabled && !isTitleOnlyArticle,
     runtime: translationRuntime,
   });
 
@@ -126,26 +129,28 @@ export function ArticleDetailModal({
             </div>
           </div>
 
-          <div className={`rounded-2xl border-l-4 p-6 ${isDarkMode ? "border-zinc-400 bg-zinc-900" : "border-zinc-800 bg-zinc-150"}`}>
-            <ReactMarkdown
-              components={{
-                ul: ({ children }) => (
-                  <ul className={`space-y-2 text-lg leading-relaxed ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{children}</ul>
-                ),
-                li: ({ children }) => (
-                  <li className="flex gap-2">
-                    <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${isDarkMode ? "bg-zinc-400" : "bg-zinc-600"}`} />
-                    <span>{children}</span>
-                  </li>
-                ),
-                p: ({ children }) => (
-                  <p className={`text-lg leading-relaxed ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{children}</p>
-                ),
-              }}
-            >
-              {translatedSummary}
-            </ReactMarkdown>
-          </div>
+          {!isTitleOnlyArticle && (
+            <div className={`rounded-2xl border-l-4 p-6 ${isDarkMode ? "border-zinc-400 bg-zinc-900" : "border-zinc-800 bg-zinc-150"}`}>
+              <ReactMarkdown
+                components={{
+                  ul: ({ children }) => (
+                    <ul className={`space-y-2 text-lg leading-relaxed ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{children}</ul>
+                  ),
+                  li: ({ children }) => (
+                    <li className="flex gap-2">
+                      <span className={`mt-2 h-1.5 w-1.5 shrink-0 rounded-full ${isDarkMode ? "bg-zinc-400" : "bg-zinc-600"}`} />
+                      <span>{children}</span>
+                    </li>
+                  ),
+                  p: ({ children }) => (
+                    <p className={`text-lg leading-relaxed ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{children}</p>
+                  ),
+                }}
+              >
+                {translatedSummary}
+              </ReactMarkdown>
+            </div>
+          )}
 
           <div className={`flex flex-col items-start gap-4 text-lg leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-700"}`}>
             {activeArticle.url && (

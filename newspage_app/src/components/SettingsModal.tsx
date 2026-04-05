@@ -132,6 +132,22 @@ export function SettingsModal({
                 <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>General Settings</p>
                 <div className="space-y-3">
                   <div>
+                    <label className="mb-1.5 block text-xs font-medium opacity-70">AI mode</label>
+                    <p className="mb-1.5 text-xs opacity-50">Disable to skip AI article enrichment and keep title-only cards for newly processed items.</p>
+                    <label className="flex cursor-pointer items-center gap-2">
+                      <NeonCheckbox
+                        checked={settings.aiModeEnabled}
+                        onChange={(checked) => {
+                          setSettings((current) => ({ ...current, aiModeEnabled: checked }));
+                          saveSetting("aiModeEnabled", checked ? "true" : "false");
+                        }}
+                        isDarkMode={isDarkMode}
+                        ariaLabel="Enable AI mode"
+                      />
+                      <span className="text-sm">Enable AI enrichment pipeline</span>
+                    </label>
+                  </div>
+                  <div>
                     <label className="mb-1.5 block text-xs font-medium opacity-70">Number of news per category per pull</label>
                     <div className="flex items-center gap-2">
                       <input

@@ -55,6 +55,7 @@ export interface FeedDefinition {
 }
 
 export interface UserSettings {
+  aiModeEnabled: boolean;
   newsLimit: number;
   perCategoryNewsLimits: Record<string, number>;
   scrapeCooldownHours: number;

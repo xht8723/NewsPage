@@ -31,6 +31,7 @@ function ArticleCardComponent({
 }: ArticleCardProps): React.JSX.Element {
   const isListLayout = layout === "list";
   const isCompactListLayout = layout === "compact_list";
+  const isTitleOnlyCard = item.snippet.trim().length === 0 && item.aiSummary.trim().length === 0;
   const onThumbnailError = useImageFallback(ARTICLE_THUMBNAIL_FALLBACK_URL);
   const translatedTitle = useLiveTranslation({
     text: item.title,
@@ -43,7 +44,7 @@ function ArticleCardComponent({
     text: item.snippet,
     sourceLanguage: item.language,
     targetLanguage: translationTargetLanguage,
-    enabled: liveTranslationEnabled,
+    enabled: liveTranslationEnabled && !isTitleOnlyCard,
     runtime: translationRuntime,
   });
 
@@ -100,19 +101,21 @@ function ArticleCardComponent({
         >
           {translatedTitle}
         </h3>
-        <p
-          className={`${isCompactListLayout ? "mb-3" : "mb-5"} text-sm leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-600"}`}
-          style={isCompactListLayout
-            ? {
-              display: "-webkit-box",
-              WebkitBoxOrient: "vertical",
-              WebkitLineClamp: 2,
-              overflow: "hidden",
-            }
-            : undefined}
-        >
-          {translatedSnippet}
-        </p>
+        {!isTitleOnlyCard && (
+          <p
+            className={`${isCompactListLayout ? "mb-3" : "mb-5"} text-sm leading-relaxed ${isDarkMode ? "text-zinc-400" : "text-zinc-600"}`}
+            style={isCompactListLayout
+              ? {
+                display: "-webkit-box",
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: 2,
+                overflow: "hidden",
+              }
+              : undefined}
+          >
+            {translatedSnippet}
+          </p>
+        )}
         <div className="mt-auto flex items-center justify-between gap-3">
           <div className={`flex min-w-0 items-center gap-2 ${isCompactListLayout ? "text-[9px]" : "text-[10px]"} font-black uppercase tracking-widest ${
             isDarkMode ? "text-zinc-500" : "text-zinc-600"

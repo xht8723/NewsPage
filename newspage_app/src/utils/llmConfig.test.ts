@@ -3,6 +3,7 @@ import { buildLLMArgs, getSelectedApiKey, getSelectedEndpoint, getSelectedModel 
 import type { UserSettings } from "../types/news";
 
 const baseSettings: UserSettings = {
+  aiModeEnabled: false,
   newsLimit: 5,
   perCategoryNewsLimits: {},
   scrapeCooldownHours: 2,
