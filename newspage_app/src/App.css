@@ -191,48 +191,6 @@
 	contain: layout style paint;
 }
 
-/* List item stagger animations */
-@keyframes item-fade-in {
-	from {
-		opacity: 0;
-		transform: translate3d(0, 4px, 0);
-	}
-	to {
-		opacity: 1;
-		transform: translate3d(0, 0, 0);
-	}
-}
-
-.article-card-stagger {
-	animation: item-fade-in 300ms ease-out forwards;
-	will-change: transform, opacity;
-	backface-visibility: hidden;
-}
-
-.article-card-stagger-50 {
-	animation-delay: 50ms;
-}
-
-.article-card-stagger-100 {
-	animation-delay: 100ms;
-}
-
-.article-card-stagger-150 {
-	animation-delay: 150ms;
-}
-
-.article-card-stagger-200 {
-	animation-delay: 200ms;
-}
-
-.article-card-stagger-250 {
-	animation-delay: 250ms;
-}
-
-.article-card-stagger-300 {
-	animation-delay: 300ms;
-}
-
 /* Filter/sort transition animations */
 .filter-content {
 	transition: opacity 150ms ease-out;

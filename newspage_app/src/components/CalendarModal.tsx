@@ -1,4 +1,3 @@
-import type React from "react";
 import { usePanelTransition } from "../hooks/usePanelTransition";
 
 interface CalendarModalProps {

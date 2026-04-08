@@ -576,10 +576,11 @@ pub async fn list_feed_categories(pool: &SqlitePool, feed_id: &str) -> Result<(V
     for row in &rows {
         let cat: String = row.get("category");
         let art_type: String = row.try_get("article_type").unwrap_or_else(|_| "news".to_string());
+        let normalized = cat.to_ascii_lowercase();
         if art_type == "rss" {
-            rss_categories.push(cat);
+            rss_categories.push(normalized);
         } else {
-            news_categories.push(cat);
+            news_categories.push(normalized);
         }
     }
     Ok((news_categories, rss_categories))

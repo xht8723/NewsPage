@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   Calendar,
@@ -19,10 +18,10 @@ import {
   type LayoutMode,
   type OllamaConnectionState,
 } from "./constants/news";
-import type { NewsArticle, BackendNewsItem, UserSettings, CardContextMenuState, LocalEmbeddingStatus, ProcessLogEntry, ProcessStageEvent, FeedDefinition, FeedSource } from "./types/news";
+import type { NewsArticle, UserSettings, CardContextMenuState, LocalEmbeddingStatus, ProcessLogEntry, ProcessStageEvent, FeedDefinition, EnrichedNewsUpdatedEvent } from "./types/news";
 import { mapBackendNewsItem } from "./utils/newsMapper";
 import { formatDateLocal, offsetDateString, getProviderLabel } from "./utils/newsMeta";
-import { buildLLMArgs, getSelectedApiKey, getSelectedEndpoint, getSelectedModel } from "./utils/llmConfig";
+import { buildLLMArgs, getSelectedApiKey, getSelectedModel, getSelectedEndpoint } from "./utils/llmConfig";
 import { useEnrichedNews } from "./hooks/useEnrichedNews";
 import { useDebouncedSettingSaverController } from "./hooks/useDebouncedSettingSaver";
 import { usePanelTransition } from "./hooks/usePanelTransition";
@@ -43,6 +42,8 @@ import { VirtualizedArticleList } from "./components/VirtualizedArticleList";
 import { OnboardingGuide } from "./components/OnboardingGuide";
 import type { TranslationRuntimeConfig } from "./hooks/useLiveTranslation";
 import { addSourceToBlacklist, normalizeSourceName, parseSourceBlacklist, toNormalizedSourceSet } from "./utils/sourceBlacklist";
+import { feedService, newsService, settingsService, llmService } from "./services";
+import { useFeedStore, useNewsStore, useUIStore } from "./stores";
 import "./App.css";
 
 type StageKey = "scrape" | "extract" | "enrich" | "persist";
@@ -94,32 +95,117 @@ function createDefaultSettings(): UserSettings {
 }
 
 function App(): React.JSX.Element {
+  // UI Store state
+  const isDarkMode = useUIStore((state) => state.isDarkMode);
+  const showCalendar = useUIStore((state) => state.showCalendar);
+  const showSettings = useUIStore((state) => state.showSettings);
+  const showCategoryManager = useUIStore((state) => state.showCategoryManager);
+  const showCategoryLimitsManager = useUIStore((state) => state.showCategoryLimitsManager);
+  const showCustomRssFeedSettings = useUIStore((state) => state.showCustomRssFeedSettings);
+  const showLogPanel = useUIStore((state) => state.showLogPanel);
+  const showLayoutSwitcher = useUIStore((state) => state.showLayoutSwitcher);
+  const showConfigPopup = useUIStore((state) => state.showConfigPopup);
+  const showOnboardingGuide = useUIStore((state) => state.showOnboardingGuide);
+  const configPopupMessage = useUIStore((state) => state.configPopupMessage);
+  const contextMenu = useUIStore((state) => state.contextMenu);
+  const pendingFeedDeletion = useUIStore((state) => state.pendingFeedDeletion);
+  const isFilterTransitioning = useUIStore((state) => state.isFilterTransitioning);
+  const settingsScrollToEmbedding = useUIStore((state) => state.settingsScrollToEmbedding);
+  const showSettingsHints = useUIStore((state) => state.showSettingsHints);
+
+  // UI Store actions
+  const setIsDarkMode = useUIStore((state) => state.setIsDarkMode);
+  const setShowCalendar = useUIStore((state) => state.setShowCalendar);
+  const setShowSettings = useUIStore((state) => state.setShowSettings);
+  const setShowCategoryManager = useUIStore((state) => state.setShowCategoryManager);
+  const setShowCategoryLimitsManager = useUIStore((state) => state.setShowCategoryLimitsManager);
+  const setShowCustomRssFeedSettings = useUIStore((state) => state.setShowCustomRssFeedSettings);
+  const setShowLogPanel = useUIStore((state) => state.setShowLogPanel);
+  const setShowLayoutSwitcher = useUIStore((state) => state.setShowLayoutSwitcher);
+  const setConfigPopupMessage = useUIStore((state) => state.setConfigPopupMessage);
+  const setContextMenu = useUIStore((state) => state.setContextMenu);
+  const setPendingFeedDeletion = useUIStore((state) => state.setPendingFeedDeletion);
+  const setIsFilterTransitioning = useUIStore((state) => state.setIsFilterTransitioning);
+  const setSettingsScrollToEmbedding = useUIStore((state) => state.setSettingsScrollToEmbedding);
+  const setShowSettingsHints = useUIStore((state) => state.setShowSettingsHints);
+  const setShowOnboardingGuide = useUIStore((state) => state.setShowOnboardingGuide);
+  const setShowConfigPopup = useUIStore((state) => state.setShowConfigPopup);
+
+  // Feed Store state (use local callback functions for API calls, store for state read)
+  const feeds = useFeedStore((state) => state.feeds);
+  const feedSources = useFeedStore((state) => state.feedSources);
+  const selectedFeedId = useFeedStore((state) => state.selectedFeedId);
+  const setSelectedFeedId = useFeedStore((state) => state.setSelectedFeedId);
+  const setFeeds = useFeedStore((state) => state.setFeeds);
+  const setFeedSources = useFeedStore((state) => state.setFeedSources);
+
+  // News Store state (for enrichment progress and logs - not news list which comes from useEnrichedNews)
+  const enrichmentError = useNewsStore((state) => state.enrichmentError);
+  const relevanceWarning = useNewsStore((state) => state.relevanceWarning);
+  const selectedArticle = useNewsStore((state) => state.selectedArticle);
+  const reprocessingArticleId = useNewsStore((state) => state.reprocessingArticleId);
+  const stageStatus = useNewsStore((state) => state.stageStatus);
+  const processLogs = useNewsStore((state) => state.processLogs);
+  const setEnrichmentProgress = useNewsStore((state) => state.setEnrichmentProgress);
+  const setEnrichmentError = useNewsStore((state) => state.setEnrichmentError);
+  const setRelevanceWarning = useNewsStore((state) => state.setRelevanceWarning);
+  const setSelectedArticle = useNewsStore((state) => state.setSelectedArticle);
+  const setReprocessingArticleId = useNewsStore((state) => state.setReprocessingArticleId);
+  const setStageStatus = useNewsStore((state) => state.setStageStatus);
+  const setProcessLogs = useNewsStore((state) => state.setProcessLogs);
+
+  // Local component state (not in stores - transient UI state or complex async state)
   const [loading, setLoading] = useState(false);
   const [stopping, setStopping] = useState(false);
-  const [selectedFeedId, setSelectedFeedId] = useState("feed-all");
   const [layout, setLayout] = useState<LayoutMode>("grid");
   const [selectedDate, setSelectedDate] = useState(() => formatDateLocal(new Date()));
-  const [isDarkMode, setIsDarkMode] = useState(true);
-  const [showCalendar, setShowCalendar] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const [showTranslatePanel, setShowTranslatePanel] = useState(false);
-  const [showCategoryManager, setShowCategoryManager] = useState(false);
-  const [selectedArticle, setSelectedArticle] = useState<NewsArticle | null>(null);
+  const [contextMenuSnapshot, setContextMenuSnapshot] = useState<CardContextMenuState | null>(null);
+  const [pendingFeedDeletionSnapshot, setPendingFeedDeletionSnapshot] = useState<FeedDefinition | null>(null);
+  const [dontAskFeedDeleteAgain, setDontAskFeedDeleteAgain] = useState(false);
+  const [purgeConfirmStep, setPurgeConfirmStep] = useState<0 | 1 | 2>(0);
+  const [isPurging, setIsPurging] = useState(false);
+  
   const translatePanelRef = useRef<HTMLDivElement | null>(null);
   const refreshTimeoutRef = useRef<number | null>(null);
-  const [, setEnrichmentProgress] = useState<{ current: number; total: number; enriched: number } | null>(null);
-  const [enrichmentError, setEnrichmentError] = useState<string | null>(null);
-  const [processLogs, setProcessLogs] = useState<ProcessLogEntry[]>([]);
-  const [showLogPanel, setShowLogPanel] = useState(false);
-  const [stageStatus, setStageStatus] = useState<Record<StageKey, { state: StageState; current?: number; total?: number; message?: string }>>(makeInitialStageStatus);
-  const [contextMenu, setContextMenu] = useState<CardContextMenuState | null>(null);
-  const [contextMenuSnapshot, setContextMenuSnapshot] = useState<CardContextMenuState | null>(null);
-  const [reprocessingArticleId, setReprocessingArticleId] = useState<string | null>(null);
   const seenLogKeysRef = useRef<Map<string, number>>(new Map());
   const todayString = formatDateLocal(new Date());
   const canGoToNextDay = selectedDate < todayString;
 
-  const [settings, setSettings] = useState<UserSettings>(createDefaultSettings);
+  // Settings state (still using local state - complex migration)
+  const [settings, setSettings] = useState<UserSettings>(() => {
+    const defaults = {
+      aiModeEnabled: false,
+      newsLimit: 5,
+      perCategoryNewsLimits: {},
+      scrapeCooldownHours: 2,
+      llmBatchSize: 3,
+      llmProvider: "ollama",
+      ollamaAddress: "http://127.0.0.1:11434",
+      ollamaModel: "qwen2.5:3b",
+      localEmbeddingModel: "",
+      embeddingInitialized: false,
+      embeddingModelLocked: false,
+      openaiApiKey: "",
+      openaiModel: "gpt-5.4-mini",
+      claudeApiKey: "",
+      claudeModel: "claude-sonnet-4-6",
+      geminiApiKey: "",
+      geminiModel: "gemini-2.5-flash",
+      selectedRegions: [],
+      sourceBlacklist: [],
+      showFeedDeletionConfirmation: true,
+      likedConcepts: "",
+      dislikedConcepts: "",
+      sortMode: "date",
+      layout: "grid" as LayoutMode,
+      minSummaryPoints: 1,
+      maxSummaryPoints: 8,
+      liveTranslationEnabled: false,
+      translationTargetLanguage: "en" as const,
+    };
+    return defaults;
+  });
   const isRelevanceMode = settings.sortMode === "score";
   const [ollamaConnectionState, setOllamaConnectionState] = useState<OllamaConnectionState>("unknown");
   const [isTestingOllama, setIsTestingOllama] = useState(false);
@@ -128,37 +214,19 @@ function App(): React.JSX.Element {
   const [localEmbeddingModels, setLocalEmbeddingModels] = useState<string[]>(LOCAL_EMBEDDING_MODELS as unknown as string[]);
   const [localEmbeddingStatus, setLocalEmbeddingStatus] = useState<LocalEmbeddingStatus | null>(null);
   const [isPreparingLocalEmbeddingModel, setIsPreparingLocalEmbeddingModel] = useState(false);
-  const [purgeConfirmStep, setPurgeConfirmStep] = useState<0 | 1 | 2>(0);
-  const [isPurging, setIsPurging] = useState(false);
-  const [showLayoutSwitcher, setShowLayoutSwitcher] = useState(true);
-  const [showConfigPopup, setShowConfigPopup] = useState(false);
-  const [showCategoryLimitsManager, setShowCategoryLimitsManager] = useState(false);
-  const [showCustomRssFeedSettings, setShowCustomRssFeedSettings] = useState(false);
-  const [feeds, setFeeds] = useState<FeedDefinition[]>([]);
-  const [feedSources, setFeedSources] = useState<FeedSource[]>([]);
-  const [pendingFeedDeletion, setPendingFeedDeletion] = useState<FeedDefinition | null>(null);
-  const [pendingFeedDeletionSnapshot, setPendingFeedDeletionSnapshot] = useState<FeedDefinition | null>(null);
-  const [dontAskFeedDeleteAgain, setDontAskFeedDeleteAgain] = useState(false);
-  const [configPopupMessage, setConfigPopupMessage] = useState("");
-  const [relevanceWarning, setRelevanceWarning] = useState<string | null>(null);
-  const { saveSetting, cancelPendingSave } = useDebouncedSettingSaverController(500);
   const [isEmbeddingReady, setIsEmbeddingReady] = useState(false);
   const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState(DEFAULT_EMBEDDING_MODEL);
   const [startupPhase, setStartupPhase] = useState<StartupPhase>("loading-settings");
   const [startupErrorMessage, setStartupErrorMessage] = useState("");
   const isEmbeddingConfigured = settings.localEmbeddingModel.trim().length > 0;
 
-  // Onboarding guide state
-  const [showOnboardingGuide, setShowOnboardingGuide] = useState(false);
-  const [settingsScrollToEmbedding, setSettingsScrollToEmbedding] = useState(false);
-  const [showSettingsHints, setShowSettingsHints] = useState(false);
+  const { saveSetting, cancelPendingSave } = useDebouncedSettingSaverController(500);
 
   const translatePanelTransition = usePanelTransition(showTranslatePanel, 140);
   const categoryManagerTransition = usePanelTransition(showCategoryManager, 170);
   const configPopupTransition = usePanelTransition(showConfigPopup, 170);
   const pendingFeedDeletionTransition = usePanelTransition(!!pendingFeedDeletion, 170);
   const contextMenuTransition = usePanelTransition(!!contextMenu, 140);
-  const [isFilterTransitioning, setIsFilterTransitioning] = useState(false);
 
   // Show onboarding guide on first run (when embedding is not yet configured)
   useEffect(() => {
@@ -206,7 +274,7 @@ function App(): React.JSX.Element {
     setStartupErrorMessage("");
 
     try {
-      const status = await invoke<LocalEmbeddingStatus>("prepare_local_embedding_model", { model });
+      const status = await llmService.prepareLocalEmbeddingModel(model);
       setLocalEmbeddingStatus(status);
 
       const ready =
@@ -234,7 +302,7 @@ function App(): React.JSX.Element {
 
   // Load persisted settings on mount
   useEffect(() => {
-    invoke<Record<string, string>>("load_settings")
+    settingsService.load()
       .then((saved) => {
         const defaults = createDefaultSettings();
         const savedLocalEmbeddingModel = saved.localEmbeddingModel?.trim() ? saved.localEmbeddingModel : "";
@@ -290,7 +358,7 @@ function App(): React.JSX.Element {
         }
 
         if (persistedSortMode !== nextSortMode) {
-          void invoke("save_setting", { key: "sortMode", value: nextSortMode });
+          void settingsService.save("sortMode", nextSortMode);
         }
 
         if (savedLocalEmbeddingModel.length > 0) {
@@ -323,7 +391,7 @@ function App(): React.JSX.Element {
   const testOllamaConnection = useCallback(async (address: string) => {
     setIsTestingOllama(true);
     try {
-      await invoke<boolean>("test_ollama_connection", { address });
+      await llmService.testOllamaConnection(address);
       setOllamaConnectionState("ok");
     } catch {
       setOllamaConnectionState("fail");
@@ -336,7 +404,7 @@ function App(): React.JSX.Element {
   const refreshOllamaModels = useCallback(async (address: string, preferredModel?: string) => {
     setIsRefreshingModels(true);
     try {
-      const models = await invoke<string[]>("list_ollama_models", { address });
+      const models = await llmService.listOllamaModels(address);
       setOllamaModels(models);
       setOllamaConnectionState("ok");
       if (models.length === 0) {
@@ -363,7 +431,7 @@ function App(): React.JSX.Element {
 
   const refreshLocalEmbeddingStatus = useCallback(async (): Promise<LocalEmbeddingStatus | null> => {
     try {
-      const status = await invoke<LocalEmbeddingStatus>("get_local_embedding_status");
+      const status = await llmService.getLocalEmbeddingStatus();
       setLocalEmbeddingStatus(status);
       const configuredModel = settings.localEmbeddingModel.trim().toLowerCase();
       setIsEmbeddingReady(
@@ -380,7 +448,7 @@ function App(): React.JSX.Element {
   const prepareLocalEmbeddingModel = useCallback(async (model: string) => {
     setIsPreparingLocalEmbeddingModel(true);
     try {
-      const status = await invoke<LocalEmbeddingStatus>("prepare_local_embedding_model", { model });
+      const status = await llmService.prepareLocalEmbeddingModel(model);
       setLocalEmbeddingStatus(status);
       const ready =
         status.state === "ready"
@@ -396,7 +464,7 @@ function App(): React.JSX.Element {
           embeddingModelLocked: true,
         }));
         setSelectedEmbeddingModel(model);
-        await invoke("save_setting", { key: "localEmbeddingModel", value: model });
+        await settingsService.save("localEmbeddingModel", model);
       } else {
         throw new Error(status.message || `Failed to prepare embedding model '${model}'.`);
       }
@@ -423,7 +491,7 @@ function App(): React.JSX.Element {
 
   const loadFeeds = useCallback(async () => {
     try {
-      const rows = await invoke<FeedDefinition[]>("list_feeds");
+      const rows = await feedService.list();
       setFeeds(rows);
     } catch (error) {
       console.warn("Failed to load feeds", error);
@@ -432,7 +500,7 @@ function App(): React.JSX.Element {
 
   const loadRssSources = useCallback(async () => {
     try {
-      const sources = await invoke<FeedSource[]>("list_feed_sources_action");
+      const sources = await feedService.listSources();
       setFeedSources(sources);
     } catch (error) {
       console.warn("Failed to load RSS sources", error);
@@ -440,18 +508,18 @@ function App(): React.JSX.Element {
   }, []);
 
   const createFeed = useCallback(async (name: string, newsCategories: string[], rssCategories: string[]) => {
-    const created = await invoke<FeedDefinition>("create_feed_action", { request: { name, news_categories: newsCategories, rss_categories: rssCategories } });
+    const created = await feedService.create({ name, news_categories: newsCategories, rss_categories: rssCategories });
     await loadFeeds();
     return created;
   }, [loadFeeds]);
 
   const renameFeed = useCallback(async (feedId: string, name: string) => {
-    await invoke("rename_feed_action", { request: { feed_id: feedId, name } });
+    await feedService.rename({ feed_id: feedId, name });
     await loadFeeds();
   }, [loadFeeds]);
 
   const deleteFeed = useCallback(async (feedId: string) => {
-    await invoke("delete_feed_action", { request: { feed_id: feedId } });
+    await feedService.delete({ feed_id: feedId });
     await loadFeeds();
   }, [loadFeeds]);
 
@@ -471,12 +539,12 @@ function App(): React.JSX.Element {
   }, [deleteFeed, feeds, settings.showFeedDeletionConfirmation]);
 
   const toggleFeedVisibility = useCallback(async (feedId: string, isVisible: boolean) => {
-    await invoke("set_feed_visibility_action", { request: { feed_id: feedId, is_visible: isVisible } });
+    await feedService.setVisibility({ feed_id: feedId, is_visible: isVisible });
     await loadFeeds();
   }, [loadFeeds]);
 
   const updateFeedCategories = useCallback(async (feedId: string, newsCategories: string[], rssCategories: string[]) => {
-    await invoke("set_feed_categories_action", { request: { feed_id: feedId, news_categories: newsCategories, rss_categories: rssCategories } });
+    await feedService.setCategories({ feed_id: feedId, news_categories: newsCategories, rss_categories: rssCategories });
     await loadFeeds();
   }, [loadFeeds]);
 
@@ -493,9 +561,7 @@ function App(): React.JSX.Element {
 
     const next = [...ordered];
     [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
-    await invoke("reorder_feeds_action", {
-      request: { feed_ids: next.map((feed) => feed.id) },
-    });
+    await feedService.reorder({ feed_ids: next.map((feed) => feed.id) });
     await loadFeeds();
   }, [feeds, loadFeeds]);
 
@@ -503,17 +569,39 @@ function App(): React.JSX.Element {
     if (orderedFeedIds.length === 0) {
       return;
     }
-    await invoke("reorder_feeds_action", {
-      request: { feed_ids: orderedFeedIds },
-    });
+    await feedService.reorder({ feed_ids: orderedFeedIds });
     await loadFeeds();
   }, [loadFeeds]);
 
   const fetchEnrichedNewsRef = useRef(fetchEnrichedNews);
+  const setNewsRef = useRef(setNews);
+  const selectedDateRef = useRef(selectedDate);
 
   useEffect(() => {
     fetchEnrichedNewsRef.current = fetchEnrichedNews;
   }, [fetchEnrichedNews]);
+
+  useEffect(() => {
+    setNewsRef.current = setNews;
+  }, [setNews]);
+
+  useEffect(() => {
+    selectedDateRef.current = selectedDate;
+  }, [selectedDate]);
+
+  const selectedFeedIdRef = useRef(selectedFeedId);
+  useEffect(() => {
+    selectedFeedIdRef.current = selectedFeedId;
+  }, [selectedFeedId]);
+
+  const scheduleRefresh = useCallback((filterByDate: boolean) => {
+    if (refreshTimeoutRef.current !== null) {
+      window.clearTimeout(refreshTimeoutRef.current);
+    }
+    refreshTimeoutRef.current = window.setTimeout(() => {
+      void fetchEnrichedNewsRef.current(filterByDate, true);
+    }, 300);
+  }, []);
 
   useEffect(() => {
     void loadFeeds();
@@ -522,7 +610,7 @@ function App(): React.JSX.Element {
 
   const handleCleanReset = useCallback(async () => {
     cancelPendingSave();
-    await invoke("purge_database");
+    await newsService.purgeDatabase();
 
     const defaults = createDefaultSettings();
     setNews([]);
@@ -546,17 +634,6 @@ function App(): React.JSX.Element {
     setFeedSources([]);
     await Promise.all([loadFeeds(), loadRssSources()]);
   }, [cancelPendingSave, loadFeeds, loadRssSources, setNews]);
-
-  const scheduleRefresh = useCallback((filterByDate: boolean) => {
-    if (refreshTimeoutRef.current !== null) {
-      window.clearTimeout(refreshTimeoutRef.current);
-    }
-
-    refreshTimeoutRef.current = window.setTimeout(() => {
-      // During incremental enrichment updates, avoid flashing the list empty on transient empty responses.
-      void fetchEnrichedNewsRef.current(filterByDate, true);
-    }, 300);
-  }, []);
 
   const appendUniqueProcessLog = useCallback((entry: ProcessLogEntry) => {
     const key = `${entry.timestamp_utc}|${entry.level}|${entry.category}|${entry.message}`;
@@ -631,7 +708,7 @@ function App(): React.JSX.Element {
       }
 
       try {
-        await invoke<boolean>("test_provider_connection", {
+        await llmService.testProviderConnection({
           provider: settings.llmProvider,
           apiKey: selectedApiKey || null,
           endpoint: selectedEndpoint || null,
@@ -650,7 +727,7 @@ function App(): React.JSX.Element {
     setEnrichmentProgress({ current: 0, total: 0, enriched: 0 });
     console.log("🚀 Starting enrichment pipeline...");
     try {
-      await invoke("start_all_action", {
+      await newsService.startAll({
         limit: settings.newsLimit,
         perCategoryLimitsJson: JSON.stringify(settings.perCategoryNewsLimits),
         cooldownHours: settings.scrapeCooldownHours,
@@ -671,7 +748,7 @@ function App(): React.JSX.Element {
     if (stopping) return;
     setStopping(true);
     try {
-      await invoke("request_stop_action");
+      await newsService.requestStop();
     } finally {
       setStopping(false);
     }
@@ -687,7 +764,7 @@ function App(): React.JSX.Element {
     const llmArgs = buildLLMArgs(settings);
 
     try {
-      const updatedItem = await invoke<BackendNewsItem>("reprocess_article", {
+      const updatedItem = await newsService.reprocessArticle({
         articleId: article.id,
         ...llmArgs,
       });
@@ -755,7 +832,7 @@ function App(): React.JSX.Element {
 
     const initListeners = async () => {
       try {
-        const persisted = await invoke<ProcessLogEntry[]>("load_process_logs", { limit: 300 });
+        const persisted = await newsService.loadProcessLogs(300);
         if (!disposed) {
           seenLogKeysRef.current.clear();
           for (const entry of persisted) {
@@ -769,14 +846,27 @@ function App(): React.JSX.Element {
       }
 
       try {
-        const off = await listen<{current: number; total: number; enriched_count: number; date?: string}>("enriched-news-updated", (event) => {
-          console.log("📬 enriched-news-updated event received:", event.payload);
+        const off = await listen<EnrichedNewsUpdatedEvent>("enriched-news-updated", (event) => {
+          console.log("📬 enriched-news-updated event received:", event.payload.id);
           setEnrichmentProgress({
             current: event.payload.current,
             total: event.payload.total,
             enriched: event.payload.enriched_count,
           });
-          scheduleRefresh(true);
+          if (selectedFeedIdRef.current === "feed-all" && selectedDateRef.current === event.payload.date) {
+            const article = mapBackendNewsItem(event.payload);
+            setNewsRef.current((prev) => {
+              const idx = prev.findIndex((a) => a.id === article.id);
+              if (idx >= 0) {
+                const updated = [...prev];
+                updated[idx] = article;
+                return updated;
+              }
+              return [article, ...prev];
+            });
+          } else {
+            scheduleRefresh(true);
+          }
         });
         if (disposed) {
           off();
@@ -884,7 +974,7 @@ function App(): React.JSX.Element {
       void refreshOllamaModels(address, model);
     }
 
-    void invoke<string[]>("list_local_embedding_models")
+    void llmService.listLocalEmbeddingModels()
       .then((models) => {
         if (models.length > 0) {
           setLocalEmbeddingModels(models);
@@ -1598,7 +1688,7 @@ function App(): React.JSX.Element {
         translationRuntime={translationRuntime}
         onClose={() => setSelectedArticle(null)}
         onOpenUrl={(url) => {
-          void invoke("open_url", { url });
+          void newsService.openUrl(url);
         }}
         onReprocessArticle={(article) => {
           void reprocessArticle(article);

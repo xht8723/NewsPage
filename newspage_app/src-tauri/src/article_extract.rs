@@ -261,23 +261,6 @@ fn build_client() -> reqwest::Client {
         .unwrap_or_default()
 }
 
-/// Fetches the raw HTML at `url` and extracts the main article text.
-pub async fn fetch_article_text(url: &str) -> Result<String, String> {
-    let html = build_client()
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch URL '{}': {}", url, e))?
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response body: {}", e))?;
-
-    let result = extract(&html, &Options::default())
-        .map_err(|e| format!("trafilatura failed to extract text from '{}': {}", url, e))?;
-
-    Ok(result.content_text)
-}
-
 /// Fetches the raw HTML at `url` and extracts both the main article text and
 /// a thumbnail URL (og:image or first body `<img>`).
 ///

@@ -36,10 +36,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 
 pub mod article_extract;
+// pub mod commands; // Created for incremental refactoring - currently uses existing lib.rs implementations
 pub mod db;
 pub mod id_generator;
 pub mod image_search;
 pub mod news_item;
+pub mod repositories;
 pub mod scrapers;
 pub mod platform_llm;
 pub mod local_embedding;
@@ -345,17 +347,15 @@ fn emit_enriched_news_updated(
     enriched_count: usize,
 ) -> Result<(), String> {
     let event = EnrichedNewsUpdatedEvent {
-        id: enriched.id.clone(),
-        category: enriched.category.clone(),
-        date: enriched.date.clone(),
         current,
         total,
         enriched_count,
         emitted_at_utc: Utc::now().to_rfc3339(),
+        item: enriched.clone(),
     };
     println!(
-        "[Event] enriched-news-updated: current={}, total={}, enriched={}",
-        event.current, event.total, event.enriched_count
+        "[Event] enriched-news-updated: current={}, total={}, enriched={}, id={}",
+        event.current, event.total, event.enriched_count, event.item.id
     );
     logging::info(
         "Enrichment",
@@ -1389,13 +1389,12 @@ fn emit_enriched_news_sync_complete(
 
 #[derive(serde::Serialize, Clone)]
 struct EnrichedNewsUpdatedEvent {
-    id: String,
-    category: String,
-    date: String,
     current: usize,
     total: usize,
     enriched_count: usize,
     emitted_at_utc: String,
+    #[serde(flatten)]
+    item: NewsItem,
 }
 
 #[derive(serde::Serialize, Clone)]

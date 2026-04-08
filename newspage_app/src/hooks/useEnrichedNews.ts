@@ -1,21 +1,8 @@
 import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { RELEVANCE_UNAVAILABLE_TOKEN } from "../constants/news";
-import type { BackendNewsItem, NewsArticle, UserSettings } from "../types/news";
+import type { NewsArticle, UserSettings } from "../types/news";
 import { mapBackendNewsItem } from "../utils/newsMapper";
-
-export interface EnrichedNewsRequestArgs {
-  [key: string]: unknown;
-  feedId: string | null;
-  category: string | null;
-  date: string | null;
-  limit: number;
-  offset: number;
-  sortBy: string;
-  likedConcepts: string[];
-  dislikedConcepts: string[];
-  localEmbeddingModel: string;
-}
+import { newsService, type EnrichedNewsRequest } from "../services";
 
 export function parseConceptList(value: string): string[] {
   return value
@@ -29,7 +16,7 @@ export function buildEnrichedNewsRequestArgs(
   selectedDate: string,
   settings: UserSettings,
   filterByDate: boolean,
-): EnrichedNewsRequestArgs {
+): EnrichedNewsRequest {
   return {
     feedId: selectedFeedId.trim() || null,
     category: null,
@@ -67,8 +54,7 @@ export function useEnrichedNews(params: UseEnrichedNewsParams): {
     const thisFetch = ++fetchCounterRef.current;
 
     try {
-      const rows = await invoke<BackendNewsItem[]>(
-        "get_enriched_news",
+      const rows = await newsService.getEnriched(
         buildEnrichedNewsRequestArgs(selectedFeedId, selectedDate, settings, filterByDate),
       );
 

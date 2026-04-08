@@ -111,6 +111,13 @@ export interface ProcessStageEvent {
   emitted_at_utc: string;
 }
 
+export interface EnrichedNewsUpdatedEvent extends BackendNewsItem {
+  current: number;
+  total: number;
+  enriched_count: number;
+  emitted_at_utc: string;
+}
+
 export interface CardContextMenuState {
   article: NewsArticle;
   x: number;

@@ -17,10 +17,6 @@ const ANN_SOURCE_ICON: &str = "src/assets/favicon.ico";
 
 pub type AnnNewsItem = NewsItem;
 
-pub async fn get_news_html() -> Result<String, String> {
-    get_news_html_for_url(ANN_NEWS_URL).await
-}
-
 pub async fn get_news_html_for_url(news_url: &str) -> Result<String, String> {
     let client = Client::new();
 
@@ -31,10 +27,6 @@ pub async fn get_news_html_for_url(news_url: &str) -> Result<String, String> {
         },
         Err(e) => Err(format!("Failed to fetch URL: {}", e)),
     }
-}
-
-pub async fn get_news_items() -> Result<Vec<String>, String> {
-    get_news_items_for_url(ANN_NEWS_URL).await
 }
 
 pub async fn get_news_items_for_url(news_url: &str) -> Result<Vec<String>, String> {
@@ -188,10 +180,6 @@ pub fn extract_news_item_fields(item_html: &str) -> Option<AnnNewsItem> {
         enrichment_mode: "pending".to_string(),
         is_enriched: false,
     })
-}
-
-pub async fn scrape_ann(limit: Option<usize>) -> Result<Vec<AnnNewsItem>, String> {
-    scrape_ann_for_url(limit, ANN_NEWS_URL).await
 }
 
 pub async fn scrape_ann_for_url(limit: Option<usize>, news_url: &str) -> Result<Vec<AnnNewsItem>, String> {

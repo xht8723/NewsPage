@@ -483,13 +483,3 @@ pub async fn prepare_model(model: Option<&str>) -> Result<LocalEmbeddingStatus, 
         .map_err(|e| format!("Local embedding prepare task failed: {}", e))??;
     Ok(get_status())
 }
-
-pub fn cache_dir_path() -> Result<String, String> {
-    configured_cache_dir().map(|p| p.to_string_lossy().to_string())
-}
-
-pub fn cache_dir_exists() -> bool {
-    configured_cache_dir()
-        .map(|p| std::path::Path::new(&p).exists())
-        .unwrap_or(false)
-}

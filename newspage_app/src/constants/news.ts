@@ -11,7 +11,6 @@ export const TOPIC_CATEGORIES = [
   "Gaming",
 ] as const;
 
-export type TopicCategory = (typeof TOPIC_CATEGORIES)[number];
 export type LayoutMode = "grid" | "list" | "compact_list";
 export type OllamaConnectionState = "unknown" | "ok" | "fail";
 
