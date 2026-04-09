@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { LocalEmbeddingStatus } from "../types/news";
+import type { LocalEmbeddingStatus } from "../types/article";
 
 export interface TestProviderConnectionRequest {
   provider: string;

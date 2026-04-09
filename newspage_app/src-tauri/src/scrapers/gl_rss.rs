@@ -4,7 +4,7 @@ use reqwest::Client;
 use std::collections::HashSet;
 
 use crate::logging;
-use crate::news_item::NewsItem;
+use crate::article::Article;
 
 use super::{ScrapeContext, ScraperStage};
 pub use super::rss_common::{
@@ -13,7 +13,7 @@ pub use super::rss_common::{
     fetch_rss_feed,
     parse_pub_date,
     parse_rss_items,
-    rss_item_to_news_item,
+    rss_item_to_article,
     strip_cdata,
     RssItem,
 };
@@ -146,7 +146,7 @@ async fn scrape_region(
     region: &RegionConfig,
     subscribed_news_categories: &HashSet<String>,
     seen_ids: &mut HashSet<String>,
-    out: &mut Vec<NewsItem>,
+    out: &mut Vec<Article>,
 ) {
     let active_topics: Vec<&TopicDef> = region
         .topics
@@ -186,9 +186,9 @@ async fn scrape_region(
                             continue;
                         }
                     }
-                    let news = rss_item_to_news_item(rss_item, topic.category, region_language(region), "news");
-                    if seen_ids.insert(news.id.clone()) {
-                        out.push(news);
+                    let article = rss_item_to_article(rss_item, topic.category, region_language(region), "news");
+                    if seen_ids.insert(article.id.clone()) {
+                        out.push(article);
                         added += 1;
                     }
                 }
@@ -220,9 +220,9 @@ async fn scrape_region(
     }
 }
 
-pub async fn scrape_rss_regions(region_ids: &[String], subscribed_news_categories: &HashSet<String>) -> Result<Vec<NewsItem>, String> {
+pub async fn scrape_rss_regions(region_ids: &[String], subscribed_news_categories: &HashSet<String>) -> Result<Vec<Article>, String> {
     let client = Client::new();
-    let mut all_items: Vec<NewsItem> = Vec::new();
+    let mut all_items: Vec<Article> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
 
     for region_id in region_ids {
@@ -270,7 +270,7 @@ impl ScraperStage for GlRssScraperStage {
         !ctx.selected_regions.is_empty() && !ctx.subscribed_news_categories.is_empty()
     }
 
-    async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<NewsItem>, String> {
+    async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<Article>, String> {
         let items = scrape_rss_regions(&ctx.selected_regions, &ctx.subscribed_news_categories).await?;
         Ok(items)
     }

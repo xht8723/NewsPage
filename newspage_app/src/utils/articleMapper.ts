@@ -1,8 +1,8 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import annFavicon from "../assets/favicon.ico";
-import { ARTICLE_THUMBNAIL_FALLBACK_URL } from "../constants/news";
-import type { BackendNewsItem, NewsArticle } from "../types/news";
-import { getUtcDateKey, toTopicCategory } from "./newsMeta";
+import { ARTICLE_THUMBNAIL_FALLBACK_URL } from "../constants/article";
+import type { BackendArticle, NewsArticle } from "../types/article";
+import { getUtcDateKey, toTopicCategory } from "./articleMeta";
 
 export function resolveThumbnailSrc(thumbnail: string): string {
   const value = thumbnail.trim();
@@ -49,7 +49,7 @@ export function resolveSourceIcon(sourceName: string, sourceIcon: string): strin
   }
 }
 
-export function mapBackendNewsItem(item: BackendNewsItem): NewsArticle {
+export function mapBackendArticle(item: BackendArticle): NewsArticle {
   const parsedTimestamp = Date.parse(item.date);
   return {
     id: item.id,

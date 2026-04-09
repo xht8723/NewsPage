@@ -2,7 +2,7 @@
 use reqwest::Client;
 
 use crate::id_generator::generate_article_id;
-use crate::news_item::NewsItem;
+use crate::article::Article;
 
 /// Shared RSS item model for scraper stages.
 pub struct RssItem {
@@ -228,8 +228,8 @@ pub fn parse_rss_items(xml: &str) -> Vec<RssItem> {
     items
 }
 
-pub fn rss_item_to_news_item(rss: &RssItem, category: &str, language: &str, article_type: &str) -> NewsItem {
-    NewsItem {
+pub fn rss_item_to_article(rss: &RssItem, category: &str, language: &str, article_type: &str) -> Article {
+    Article {
         id: generate_article_id(&rss.link, &rss.title),
         title: rss.title.clone(),
         url: rss.link.clone(),
@@ -245,7 +245,6 @@ pub fn rss_item_to_news_item(rss: &RssItem, category: &str, language: &str, arti
         og_content: String::new(),
         snippet: String::new(),
         enrichment_mode: "pending".to_string(),
-        is_enriched: false,
     }
 }
 

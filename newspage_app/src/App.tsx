@@ -17,12 +17,12 @@ import {
   LOCAL_EMBEDDING_MODELS,
   type LayoutMode,
   type OllamaConnectionState,
-} from "./constants/news";
-import type { NewsArticle, UserSettings, CardContextMenuState, LocalEmbeddingStatus, ProcessLogEntry, ProcessStageEvent, FeedDefinition, EnrichedNewsUpdatedEvent } from "./types/news";
-import { mapBackendNewsItem } from "./utils/newsMapper";
-import { formatDateLocal, offsetDateString, getProviderLabel } from "./utils/newsMeta";
+} from "./constants/article";
+import type { NewsArticle, UserSettings, CardContextMenuState, LocalEmbeddingStatus, ProcessLogEntry, ProcessStageEvent, FeedDefinition, EnrichedArticlesUpdatedEvent } from "./types/article";
+import { mapBackendArticle } from "./utils/articleMapper";
+import { formatDateLocal, offsetDateString, getProviderLabel } from "./utils/articleMeta";
 import { buildLLMArgs, getSelectedApiKey, getSelectedModel, getSelectedEndpoint } from "./utils/llmConfig";
-import { useEnrichedNews } from "./hooks/useEnrichedNews";
+import { useEnrichedArticles } from "./hooks/useEnrichedArticles";
 import { useDebouncedSettingSaverController } from "./hooks/useDebouncedSettingSaver";
 import { usePanelTransition } from "./hooks/usePanelTransition";
 import { PreferencePanel } from "./components/PreferencePanel";
@@ -42,7 +42,7 @@ import { VirtualizedArticleList } from "./components/VirtualizedArticleList";
 import { OnboardingGuide } from "./components/OnboardingGuide";
 import type { TranslationRuntimeConfig } from "./hooks/useLiveTranslation";
 import { addSourceToBlacklist, normalizeSourceName, parseSourceBlacklist, toNormalizedSourceSet } from "./utils/sourceBlacklist";
-import { feedService, newsService, settingsService, llmService } from "./services";
+import { feedService, articleService, settingsService, llmService } from "./services";
 import { useFeedStore, useNewsStore, useUIStore } from "./stores";
 import "./App.css";
 
@@ -482,7 +482,7 @@ function App(): React.JSX.Element {
     }
   }, [saveSetting]);
 
-  const { news, setNews, fetchEnrichedNews } = useEnrichedNews({
+  const { news, setNews, fetchEnrichedNews } = useEnrichedArticles({
     selectedFeedId,
     selectedDate,
     settings,
@@ -610,7 +610,7 @@ function App(): React.JSX.Element {
 
   const handleCleanReset = useCallback(async () => {
     cancelPendingSave();
-    await newsService.purgeDatabase();
+    await articleService.purgeDatabase();
 
     const defaults = createDefaultSettings();
     setNews([]);
@@ -727,14 +727,13 @@ function App(): React.JSX.Element {
     setEnrichmentProgress({ current: 0, total: 0, enriched: 0 });
     console.log("🚀 Starting enrichment pipeline...");
     try {
-      await newsService.startAll({
+      await articleService.startAll({
         limit: settings.newsLimit,
         perCategoryLimitsJson: JSON.stringify(settings.perCategoryNewsLimits),
         cooldownHours: settings.scrapeCooldownHours,
         aiModeEnabled: settings.aiModeEnabled,
         ...llmArgs,
       });
-      console.log("✅ Enrichment pipeline completed!");
     } catch (error) {
       console.error("❌ Enrichment pipeline failed:", error);
       const message = error instanceof Error ? error.message : String(error);
@@ -742,16 +741,14 @@ function App(): React.JSX.Element {
       setEnrichmentProgress(null);
       setLoading(false);
     }
+    setLoading(false);
+    setStopping(false);
   };
 
   const stopGenerate = async () => {
     if (stopping) return;
     setStopping(true);
-    try {
-      await newsService.requestStop();
-    } finally {
-      setStopping(false);
-    }
+    await articleService.requestStop();
   };
 
   const reprocessArticle = useCallback(async (article: NewsArticle) => {
@@ -764,12 +761,12 @@ function App(): React.JSX.Element {
     const llmArgs = buildLLMArgs(settings);
 
     try {
-      const updatedItem = await newsService.reprocessArticle({
+      const updatedItem = await articleService.reprocessArticle({
         articleId: article.id,
         ...llmArgs,
       });
 
-      const mapped = mapBackendNewsItem(updatedItem);
+      const mapped = mapBackendArticle(updatedItem);
       setNews((current) => current.map((item) => (item.id === mapped.id ? mapped : item)));
       setSelectedArticle((current) => (current && current.id === mapped.id ? mapped : current));
       await fetchEnrichedNewsRef.current(true, true);
@@ -832,7 +829,7 @@ function App(): React.JSX.Element {
 
     const initListeners = async () => {
       try {
-        const persisted = await newsService.loadProcessLogs(300);
+        const persisted = await articleService.loadProcessLogs(300);
         if (!disposed) {
           seenLogKeysRef.current.clear();
           for (const entry of persisted) {
@@ -846,15 +843,15 @@ function App(): React.JSX.Element {
       }
 
       try {
-        const off = await listen<EnrichedNewsUpdatedEvent>("enriched-news-updated", (event) => {
-          console.log("📬 enriched-news-updated event received:", event.payload.id);
+        const off = await listen<EnrichedArticlesUpdatedEvent>("enriched-articles-updated", (event) => {
+          console.log("📬 enriched-articles-updated event received:", event.payload.id);
           setEnrichmentProgress({
             current: event.payload.current,
             total: event.payload.total,
             enriched: event.payload.enriched_count,
           });
           if (selectedFeedIdRef.current === "feed-all" && selectedDateRef.current === event.payload.date) {
-            const article = mapBackendNewsItem(event.payload);
+            const article = mapBackendArticle(event.payload);
             setNewsRef.current((prev) => {
               const idx = prev.findIndex((a) => a.id === article.id);
               if (idx >= 0) {
@@ -873,30 +870,29 @@ function App(): React.JSX.Element {
         } else {
           unlisteners.push(off);
         }
-        console.log("✅ Listener registered: enriched-news-updated");
+        console.log("✅ Listener registered: enriched-articles-updated");
       } catch (error) {
-        console.error("❌ Failed to register enriched-news-updated listener:", error);
+        console.error("❌ Failed to register enriched-articles-updated listener:", error);
       }
 
       try {
-        const off = await listen<{total: number; enriched_count: number; failed_count: number; error_sample?: string}>("enriched-news-sync-complete", (event) => {
-          console.log("📬 enriched-news-sync-complete event received:", event.payload);
+        const off = await listen<{total: number; enriched_count: number; failed_count: number; error_sample?: string; stopped: boolean}>("enriched-news-sync-complete", (event) => {
           setEnrichmentProgress(null);
-          setLoading(false);
-          setStopping(false);
-          setStageStatus((current) => ({
-            ...current,
-            scrape: { ...current.scrape, state: current.scrape.state === "idle" ? "done" : current.scrape.state },
-            extract: { ...current.extract, state: current.extract.state === "idle" ? "done" : current.extract.state },
-            enrich: { ...current.enrich, state: event.payload.failed_count > 0 && event.payload.enriched_count === 0 ? "error" : "done" },
-            persist: { ...current.persist, state: event.payload.failed_count > 0 && event.payload.enriched_count === 0 ? "error" : "done" },
-          }));
+          setStageStatus((current) => {
+            const completionState = event.payload.stopped ? "stopped" : "done";
+            return {
+              ...current,
+              scrape: { ...current.scrape, state: current.scrape.state === "idle" ? completionState : current.scrape.state },
+              extract: { ...current.extract, state: current.extract.state === "idle" ? completionState : current.extract.state },
+              enrich: { ...current.enrich, state: event.payload.failed_count > 0 && event.payload.enriched_count === 0 ? "error" : completionState },
+              persist: { ...current.persist, state: event.payload.failed_count > 0 && event.payload.enriched_count === 0 ? "error" : completionState },
+            };
+          });
           if (event.payload.error_sample && event.payload.enriched_count === 0 && event.payload.failed_count > 0) {
             setEnrichmentError(event.payload.error_sample);
           } else {
             setEnrichmentError(null);
           }
-          // Fetch with current date/category filter now that enrichment is done
           void fetchEnrichedNewsRef.current(true, true);
         });
         if (disposed) {
@@ -1469,7 +1465,7 @@ function App(): React.JSX.Element {
                   }`}
                 >
                   <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-500" />
-                  Stop
+                  {stopping ? "Stopping..." : "Stop"}
                 </button>
               ) : null}
             </div>
@@ -1688,7 +1684,7 @@ function App(): React.JSX.Element {
         translationRuntime={translationRuntime}
         onClose={() => setSelectedArticle(null)}
         onOpenUrl={(url) => {
-          void newsService.openUrl(url);
+          void articleService.openUrl(url);
         }}
         onReprocessArticle={(article) => {
           void reprocessArticle(article);

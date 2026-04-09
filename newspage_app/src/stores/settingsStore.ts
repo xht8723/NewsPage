@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { UserSettings } from "../types/news";
+import type { UserSettings } from "../types/article";
 import { settingsService } from "../services";
 
 function createDefaultSettings(): UserSettings {

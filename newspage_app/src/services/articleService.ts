@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { BackendNewsItem, ProcessLogEntry } from "../types/news";
+import type { BackendArticle, ProcessLogEntry } from "../types/article";
 
-export interface EnrichedNewsRequest {
+export interface EnrichedArticlesRequest {
   feedId: string | null;
   category: string | null;
   date: string | null;
@@ -45,11 +45,11 @@ export interface ReprocessArticleRequest {
   [key: string]: unknown;
 }
 
-export const newsService = {
-  getEnriched: (request: EnrichedNewsRequest): Promise<BackendNewsItem[]> =>
-    invoke("get_enriched_news", request),
+export const articleService = {
+  getEnriched: (request: EnrichedArticlesRequest): Promise<BackendArticle[]> =>
+    invoke("get_enriched_articles", request),
 
-  reprocessArticle: (request: ReprocessArticleRequest): Promise<BackendNewsItem> =>
+  reprocessArticle: (request: ReprocessArticleRequest): Promise<BackendArticle> =>
     invoke("reprocess_article", request),
 
   startAll: (request: StartAllRequest): Promise<void> =>

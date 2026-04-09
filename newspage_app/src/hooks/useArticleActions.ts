@@ -1,9 +1,9 @@
 import { useCallback, useRef } from "react";
 import { useNewsStore } from "../stores";
-import type { NewsArticle } from "../types/news";
-import { newsService } from "../services";
+import type { NewsArticle } from "../types/article";
+import { articleService } from "../services";
 
-export function useNewsActions() {
+export function useArticleActions() {
   const {
     setNews,
     setEnrichmentProgress,
@@ -30,7 +30,7 @@ export function useNewsActions() {
   const seenLogKeysRef = useRef<Map<string, number>>(new Map());
 
   const purgeDatabase = useCallback(async () => {
-    await newsService.purgeDatabase();
+    await articleService.purgeDatabase();
   }, []);
 
   const startEnrichment = useCallback(async (params: {
@@ -48,11 +48,11 @@ export function useNewsActions() {
     geminiApiKey?: string;
     geminiModel?: string;
   }) => {
-    await newsService.startAll(params);
+    await articleService.startAll(params);
   }, []);
 
   const requestStop = useCallback(async () => {
-    await newsService.requestStop();
+    await articleService.requestStop();
   }, []);
 
   const reprocessArticle = useCallback(async (
@@ -70,7 +70,7 @@ export function useNewsActions() {
     },
     onArticleUpdate: (article: NewsArticle) => void,
   ) => {
-    const updatedItem = await newsService.reprocessArticle({
+    const updatedItem = await articleService.reprocessArticle({
       articleId: article.id,
       ...settings,
     });

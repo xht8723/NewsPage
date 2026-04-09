@@ -1,7 +1,7 @@
 import { LayoutGrid, LayoutList, Rows3 } from "lucide-react";
 import type React from "react";
 import { memo } from "react";
-import type { LayoutMode } from "../constants/news";
+import type { LayoutMode } from "../constants/article";
 
 interface LayoutSwitcherProps {
   show: boolean;

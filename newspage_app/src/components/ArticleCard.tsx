@@ -1,10 +1,10 @@
 import { ChevronRight } from "lucide-react";
 import { memo } from "react";
-import { ARTICLE_THUMBNAIL_FALLBACK_URL, type LayoutMode } from "../constants/news";
+import { ARTICLE_THUMBNAIL_FALLBACK_URL, type LayoutMode } from "../constants/article";
 import { useImageFallback } from "../hooks/useImageFallback";
 import { useLiveTranslation, type TranslationRuntimeConfig } from "../hooks/useLiveTranslation";
-import type { FeedSource, NewsArticle } from "../types/news";
-import { resolveTagColor } from "../utils/newsMeta";
+import type { FeedSource, NewsArticle } from "../types/article";
+import { resolveTagColor } from "../utils/articleMeta";
 
 interface ArticleCardProps {
   item: NewsArticle;

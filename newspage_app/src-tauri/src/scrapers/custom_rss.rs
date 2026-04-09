@@ -5,16 +5,16 @@ use std::collections::HashSet;
 
 use crate::db::FeedSource;
 use crate::logging;
-use crate::news_item::NewsItem;
+use crate::article::Article;
 
-use super::rss_common::{fetch_rss_feed, parse_rss_items, rss_item_to_news_item};
+use super::rss_common::{fetch_rss_feed, parse_rss_items, rss_item_to_article};
 use super::{ScrapeContext, ScraperStage};
 
 pub struct CustomRssScraperStage;
 
-async fn scrape_custom_rss_sources(sources: &[&FeedSource]) -> Result<Vec<NewsItem>, String> {
+async fn scrape_custom_rss_sources(sources: &[&FeedSource]) -> Result<Vec<Article>, String> {
     let client = Client::new();
-    let mut out: Vec<NewsItem> = Vec::new();
+    let mut out: Vec<Article> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
 
     logging::info(
@@ -46,9 +46,9 @@ async fn scrape_custom_rss_sources(sources: &[&FeedSource]) -> Result<Vec<NewsIt
                             continue;
                         }
                     }
-                    let news = rss_item_to_news_item(rss_item, &category, "", "rss");
-                    if seen_ids.insert(news.id.clone()) {
-                        out.push(news);
+                    let article = rss_item_to_article(rss_item, &category, "", "rss");
+                    if seen_ids.insert(article.id.clone()) {
+                        out.push(article);
                         added += 1;
                     }
                 }
@@ -88,7 +88,7 @@ impl ScraperStage for CustomRssScraperStage {
             .any(|s| s.source_type == "custom_rss" && ctx.subscribed_rss_names.contains(&s.display_name.to_ascii_lowercase()))
     }
 
-    async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<NewsItem>, String> {
+    async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<Article>, String> {
         let active_sources: Vec<&FeedSource> = ctx
             .rss_sources
             .iter()

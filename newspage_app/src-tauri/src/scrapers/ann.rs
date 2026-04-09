@@ -5,7 +5,7 @@ use scraper::{ElementRef, Html, Selector};
 use std::collections::HashSet;
 
 use crate::id_generator::generate_article_id;
-use crate::news_item::NewsItem;
+use crate::article::Article;
 
 use super::{ScrapeContext, ScraperStage};
 
@@ -15,7 +15,7 @@ const DEFAULT_ANN_ITEM_LIMIT: usize = 100;
 const ANN_SOURCE_NAME: &str = "ANN";
 const ANN_SOURCE_ICON: &str = "src/assets/favicon.ico";
 
-pub type AnnNewsItem = NewsItem;
+pub type AnnArticle = Article;
 
 pub async fn get_news_html_for_url(news_url: &str) -> Result<String, String> {
     let client = Client::new();
@@ -93,7 +93,7 @@ fn article_date_from_url(url: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(date_segment, "%Y-%m-%d").ok()
 }
 
-fn ann_sort_key(item: &AnnNewsItem) -> (Option<i64>, String) {
+fn ann_sort_key(item: &AnnArticle) -> (Option<i64>, String) {
     let timestamp = DateTime::parse_from_rfc3339(&item.date)
         .ok()
         .map(|datetime| datetime.timestamp())
@@ -106,16 +106,16 @@ fn ann_sort_key(item: &AnnNewsItem) -> (Option<i64>, String) {
     (timestamp, item.date.clone())
 }
 
-fn sort_ann_news_items_by_date_desc(items: &mut [AnnNewsItem]) {
+fn sort_ann_news_items_by_date_desc(items: &mut [AnnArticle]) {
     items.sort_by(|left, right| ann_sort_key(right).cmp(&ann_sort_key(left)));
 }
 
-fn truncate_ann_news_items(items: &mut Vec<AnnNewsItem>, limit: Option<usize>) {
+fn truncate_ann_news_items(items: &mut Vec<AnnArticle>, limit: Option<usize>) {
     let limit = limit.unwrap_or(DEFAULT_ANN_ITEM_LIMIT);
     items.truncate(limit);
 }
 
-pub fn extract_news_item_fields(item_html: &str) -> Option<AnnNewsItem> {
+pub fn extract_news_item_fields(item_html: &str) -> Option<AnnArticle> {
     let fragment = Html::parse_fragment(item_html);
 
     let root_selector = Selector::parse("div.herald.box.news.t-news, div.wrap, div.thumbnail").ok()?;
@@ -162,7 +162,7 @@ pub fn extract_news_item_fields(item_html: &str) -> Option<AnnNewsItem> {
     };
     let id = generate_article_id(&url, &title);
 
-    Some(AnnNewsItem {
+    Some(AnnArticle {
         id,
         title,
         url,
@@ -178,11 +178,10 @@ pub fn extract_news_item_fields(item_html: &str) -> Option<AnnNewsItem> {
         og_content: String::new(),
         snippet: String::new(),
         enrichment_mode: "pending".to_string(),
-        is_enriched: false,
     })
 }
 
-pub async fn scrape_ann_for_url(limit: Option<usize>, news_url: &str) -> Result<Vec<AnnNewsItem>, String> {
+pub async fn scrape_ann_for_url(limit: Option<usize>, news_url: &str) -> Result<Vec<AnnArticle>, String> {
     let news_items_html = get_news_items_for_url(news_url).await?;
     let mut items: Vec<_> = news_items_html
         .iter()
@@ -209,7 +208,7 @@ impl ScraperStage for AnnScraperStage {
             .any(|s| s.source_type == "ann" && ctx.subscribed_rss_names.contains(&s.display_name.to_ascii_lowercase()))
     }
 
-    async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<NewsItem>, String> {
+    async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<Article>, String> {
         let active_sources: Vec<_> = ctx
             .rss_sources
             .iter()
@@ -220,7 +219,7 @@ impl ScraperStage for AnnScraperStage {
             return Ok(Vec::new());
         }
 
-        let mut out: Vec<NewsItem> = Vec::new();
+        let mut out: Vec<Article> = Vec::new();
         let mut seen_ids: HashSet<String> = HashSet::new();
 
         for source in active_sources {

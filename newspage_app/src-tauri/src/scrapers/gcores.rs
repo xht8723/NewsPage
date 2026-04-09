@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use crate::db::FeedSource;
 use crate::id_generator::generate_article_id;
 use crate::logging;
-use crate::news_item::NewsItem;
+use crate::article::Article;
 
 use super::rss_common::{decode_entities, fetch_rss_feed, parse_pub_date, strip_cdata};
 use super::{ScrapeContext, ScraperStage};
@@ -55,7 +55,7 @@ fn parse_gcores_item(
     category: &str,
     source_name: &str,
     source_icon: &str,
-) -> Option<NewsItem> {
+) -> Option<Article> {
     let title = xml_inner(item_xml, "title")
         .map(|s| decode_entities(&strip_cdata(s)))
         .filter(|s| !s.is_empty())?;
@@ -98,7 +98,7 @@ fn parse_gcores_item(
 
     let id = generate_article_id(&link, &title);
 
-    Some(NewsItem {
+    Some(Article {
         id,
         title,
         url: link,
@@ -114,7 +114,6 @@ fn parse_gcores_item(
         og_content: String::new(),
         snippet: String::new(),
         enrichment_mode: "pending".to_string(),
-        is_enriched: false,
     })
 }
 
@@ -123,7 +122,7 @@ fn parse_gcores_feed(
     category: &str,
     source_name: &str,
     source_icon: &str,
-) -> Vec<NewsItem> {
+) -> Vec<Article> {
     let mut items = Vec::new();
     let mut search_from = 0usize;
 
@@ -150,9 +149,9 @@ fn parse_gcores_feed(
 // Scraper
 // ---------------------------------------------------------------------------
 
-async fn scrape_gcores_sources(sources: &[&FeedSource]) -> Result<Vec<NewsItem>, String> {
+async fn scrape_gcores_sources(sources: &[&FeedSource]) -> Result<Vec<Article>, String> {
     let client = Client::new();
-    let mut out: Vec<NewsItem> = Vec::new();
+    let mut out: Vec<Article> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
 
     logging::info(
@@ -217,7 +216,7 @@ impl ScraperStage for GcoresScraperStage {
             .any(|s| s.source_type == "gcores" && ctx.subscribed_rss_names.contains(&s.display_name.to_ascii_lowercase()))
     }
 
-    async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<NewsItem>, String> {
+    async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<Article>, String> {
         let active_sources: Vec<&FeedSource> = ctx
             .rss_sources
             .iter()

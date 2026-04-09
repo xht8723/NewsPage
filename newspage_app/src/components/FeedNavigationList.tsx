@@ -15,7 +15,7 @@ import {
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ChevronRight, EyeOff, GripVertical, Pencil } from "lucide-react";
-import type { FeedDefinition } from "../types/news";
+import type { FeedDefinition } from "../types/article";
 import { usePanelTransition } from "../hooks/usePanelTransition";
 
 interface FeedNavigationListProps {

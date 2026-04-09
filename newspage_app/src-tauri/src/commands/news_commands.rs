@@ -5,7 +5,7 @@ use tauri::{AppHandle, State};
 use super::feed_commands::AppState;
 
 #[derive(Deserialize)]
-pub struct EnrichedNewsRequest {
+pub struct EnrichedArticlesRequest {
     pub feed_id: Option<String>,
     pub category: Option<String>,
     pub date: Option<String>,
@@ -18,12 +18,12 @@ pub struct EnrichedNewsRequest {
 }
 
 #[tauri::command]
-pub async fn get_enriched_news(
+pub async fn get_enriched_articles(
     app: AppHandle,
     state: State<'_, AppState>,
-    request: EnrichedNewsRequest,
-) -> Result<Vec<crate::news_item::RankedNewsItem>, String> {
-    crate::get_enriched_news_impl(
+    request: EnrichedArticlesRequest,
+) -> Result<Vec<crate::article::RankedArticle>, String> {
+    crate::get_enriched_articles_impl(
         app,
         state,
         request.feed_id,

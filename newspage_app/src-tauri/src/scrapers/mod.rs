@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::db::FeedSource;
-use crate::news_item::NewsItem;
+use crate::article::Article;
 
 pub mod ann;
 pub mod automaton;
@@ -33,7 +33,7 @@ pub struct ScrapeContext {
 
 pub struct StageRunResult {
     pub stage_name: &'static str,
-    pub items: Vec<NewsItem>,
+    pub items: Vec<Article>,
 }
 
 #[async_trait]
@@ -44,7 +44,7 @@ pub trait ScraperStage: Send + Sync {
         true
     }
 
-    async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<NewsItem>, String>;
+    async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<Article>, String>;
 }
 
 fn default_scraper_stages() -> Vec<Box<dyn ScraperStage>> {

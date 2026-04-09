@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NewsItem {
+pub struct Article {
     pub id: String,
     pub title: String,
     pub url: String,
@@ -17,15 +17,14 @@ pub struct NewsItem {
     pub og_content: String,
     pub snippet: String,
     pub enrichment_mode: String,
-    pub is_enriched: bool,
 }
 
-/// A `NewsItem` annotated with a preference relevance score in the range [-1.0, 1.0].
+/// An `Article` annotated with a preference relevance score in the range [-1.0, 1.0].
 /// Score 0.0 means no preference has been configured or the article has no embedding.
-/// The struct serializes flat (all `NewsItem` fields + `preference_score`) for the frontend.
+/// The struct serializes flat (all `Article` fields + `preference_score`) for the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RankedNewsItem {
+pub struct RankedArticle {
     #[serde(flatten)]
-    pub item: NewsItem,
+    pub item: Article,
     pub preference_score: f32,
 }

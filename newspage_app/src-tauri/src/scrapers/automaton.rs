@@ -5,7 +5,7 @@ use scraper::{Html, Selector};
 use std::collections::HashSet;
 
 use crate::id_generator::generate_article_id;
-use crate::news_item::NewsItem;
+use crate::article::Article;
 
 use super::{ScrapeContext, ScraperStage};
 
@@ -23,7 +23,7 @@ const SOURCE_NAME: &str = "AUTOMATON";
 const SOURCE_ICON: &str = "";
 const CATEGORY: &str = "gaming";
 
-pub type AutomatonNewsItem = NewsItem;
+pub type AutomatonArticle = Article;
 
 // ---------------------------------------------------------------------------
 // RSS strategy — primary
@@ -132,7 +132,7 @@ fn first_img_src(html: &str) -> Option<String> {
     }
 }
 
-fn parse_rss_items(xml: &str) -> Vec<AutomatonNewsItem> {
+fn parse_rss_items(xml: &str) -> Vec<AutomatonArticle> {
     let mut items = Vec::new();
     let mut remaining = xml;
 
@@ -182,7 +182,7 @@ fn parse_rss_items(xml: &str) -> Vec<AutomatonNewsItem> {
 
         let id = generate_article_id(&url, &title);
 
-        items.push(AutomatonNewsItem {
+        items.push(AutomatonArticle {
             id,
             title,
             url,
@@ -198,7 +198,6 @@ fn parse_rss_items(xml: &str) -> Vec<AutomatonNewsItem> {
             og_content: String::new(),
             snippet: String::new(),
             enrichment_mode: "pending".to_string(),
-            is_enriched: false,
         });
     }
 
@@ -212,7 +211,7 @@ fn normalize_rss_date(date_str: &str) -> String {
         .unwrap_or_else(|_| date_str.to_string())
 }
 
-async fn scrape_via_rss_from_url(rss_url: &str) -> Result<Vec<AutomatonNewsItem>, String> {
+async fn scrape_via_rss_from_url(rss_url: &str) -> Result<Vec<AutomatonArticle>, String> {
     let xml = fetch_rss_from_url(rss_url).await?;
     let items = parse_rss_items(&xml);
     if items.is_empty() {
@@ -238,7 +237,7 @@ async fn fetch_html_from_url(html_url: &str) -> Result<String, String> {
         .map_err(|e| format!("Automaton HTML body read failed for {}: {}", html_url, e))
 }
 
-fn parse_html_items(html: &str) -> Vec<AutomatonNewsItem> {
+fn parse_html_items(html: &str) -> Vec<AutomatonArticle> {
     let document = Html::parse_document(html);
 
     // Each article card on the listing page is an <article> element
@@ -320,7 +319,7 @@ fn parse_html_items(html: &str) -> Vec<AutomatonNewsItem> {
 
         let id = generate_article_id(&url, &title);
 
-        items.push(AutomatonNewsItem {
+        items.push(AutomatonArticle {
             id,
             title,
             url,
@@ -336,14 +335,13 @@ fn parse_html_items(html: &str) -> Vec<AutomatonNewsItem> {
             og_content: String::new(),
             snippet: String::new(),
             enrichment_mode: "pending".to_string(),
-            is_enriched: false,
         });
     }
 
     items
 }
 
-async fn scrape_via_html_from_url(html_url: &str) -> Result<Vec<AutomatonNewsItem>, String> {
+async fn scrape_via_html_from_url(html_url: &str) -> Result<Vec<AutomatonArticle>, String> {
     let html = fetch_html_from_url(html_url).await?;
     let items = parse_html_items(&html);
     if items.is_empty() {
@@ -362,15 +360,15 @@ fn parse_automaton_timestamp(date: &str) -> Option<i64> {
         .map(|dt| dt.timestamp())
 }
 
-fn sort_key(item: &AutomatonNewsItem) -> (Option<i64>, String) {
+fn sort_key(item: &AutomatonArticle) -> (Option<i64>, String) {
     (parse_automaton_timestamp(&item.date), item.date.clone())
 }
 
-fn sort_by_date_desc(items: &mut [AutomatonNewsItem]) {
+fn sort_by_date_desc(items: &mut [AutomatonArticle]) {
     items.sort_by(|a, b| sort_key(b).cmp(&sort_key(a)));
 }
 
-fn dedup_by_id(items: Vec<AutomatonNewsItem>) -> Vec<AutomatonNewsItem> {
+fn dedup_by_id(items: Vec<AutomatonArticle>) -> Vec<AutomatonArticle> {
     let mut seen = HashSet::new();
     items
         .into_iter()
@@ -378,7 +376,7 @@ fn dedup_by_id(items: Vec<AutomatonNewsItem>) -> Vec<AutomatonNewsItem> {
         .collect()
 }
 
-pub async fn scrape_automaton(limit: Option<usize>) -> Result<Vec<AutomatonNewsItem>, String> {
+pub async fn scrape_automaton(limit: Option<usize>) -> Result<Vec<AutomatonArticle>, String> {
     scrape_automaton_for_urls(limit, RSS_FEED_URL, HTML_NEWS_URL).await
 }
 
@@ -386,11 +384,11 @@ pub async fn scrape_automaton_for_urls(
     limit: Option<usize>,
     rss_url: &str,
     html_url: &str,
-) -> Result<Vec<AutomatonNewsItem>, String> {
+) -> Result<Vec<AutomatonArticle>, String> {
     // Strategy order: RSS first, HTML fallback.
     // Each strategy is only attempted if the previous one fails, so the HTML
     // request is never made when RSS succeeds.
-    let finalize = |items: Vec<AutomatonNewsItem>| {
+    let finalize = |items: Vec<AutomatonArticle>| {
         let mut items = dedup_by_id(items);
         sort_by_date_desc(&mut items);
         items.truncate(limit.unwrap_or(DEFAULT_ITEM_LIMIT));
@@ -450,7 +448,7 @@ impl ScraperStage for AutomatonScraperStage {
                 .any(|s| s.source_type == "automaton" && ctx.subscribed_rss_names.contains(&s.display_name.to_ascii_lowercase()))
     }
 
-    async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<NewsItem>, String> {
+    async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<Article>, String> {
         let active_sources: Vec<_> = ctx
             .rss_sources
             .iter()
@@ -461,7 +459,7 @@ impl ScraperStage for AutomatonScraperStage {
             return Ok(Vec::new());
         }
 
-        let mut out: Vec<NewsItem> = Vec::new();
+        let mut out: Vec<Article> = Vec::new();
         let mut seen_ids: HashSet<String> = HashSet::new();
 
         for source in active_sources {

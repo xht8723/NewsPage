@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { FeedDefinition, FeedSource } from "../types/news";
+import type { FeedDefinition, FeedSource } from "../types/article";
 import { feedService, settingsService } from "../services";
 
 interface FeedState {

@@ -1,4 +1,4 @@
-import type { UserSettings } from "../types/news";
+import type { UserSettings } from "../types/article";
 
 type LLMProvider = "ollama" | "openai" | "claude" | "gemini";
 

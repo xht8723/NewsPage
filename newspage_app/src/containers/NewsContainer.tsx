@@ -1,6 +1,6 @@
 import type React from "react";
 import { useUIStore } from "../stores";
-import { formatDateLocal } from "../utils/newsMeta";
+import { formatDateLocal } from "../utils/articleMeta";
 
 interface NewsContainerProps {
   children: (props: {

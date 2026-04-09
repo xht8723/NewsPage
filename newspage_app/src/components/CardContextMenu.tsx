@@ -1,6 +1,6 @@
 import { ChevronRight } from "lucide-react";
 import type React from "react";
-import type { CardContextMenuState } from "../types/news";
+import type { CardContextMenuState } from "../types/article";
 
 interface CardContextMenuProps {
   contextMenu: CardContextMenuState;

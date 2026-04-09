@@ -2,8 +2,8 @@ import { useMemo } from "react";
 import { List } from "react-window";
 import { ArticleCard } from "./ArticleCard";
 import { Search } from "lucide-react";
-import type { NewsArticle, FeedSource } from "../types/news";
-import type { LayoutMode } from "../constants/news";
+import type { NewsArticle, FeedSource } from "../types/article";
+import type { LayoutMode } from "../constants/article";
 import type { TranslationRuntimeConfig } from "../hooks/useLiveTranslation";
 
 interface VirtualizedArticleListProps {

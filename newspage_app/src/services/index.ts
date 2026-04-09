@@ -1,5 +1,5 @@
 export { feedService } from "./feedService";
-export { newsService } from "./newsService";
+export { articleService } from "./articleService";
 export { settingsService } from "./settingsService";
 export { llmService } from "./llmService";
 
@@ -13,9 +13,9 @@ export type {
 } from "./feedService";
 
 export type {
-  EnrichedNewsRequest,
+  EnrichedArticlesRequest,
   StartAllRequest,
   ReprocessArticleRequest,
-} from "./newsService";
+} from "./articleService";
 
 export type { TestProviderConnectionRequest } from "./llmService";

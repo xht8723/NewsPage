@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { CardContextMenuState, FeedDefinition } from "../types/news";
+import type { CardContextMenuState, FeedDefinition } from "../types/article";
 
 interface UIState {
   isDarkMode: boolean;

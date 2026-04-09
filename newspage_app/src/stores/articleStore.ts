@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { NewsArticle } from "../types/news";
+import type { NewsArticle } from "../types/article";
 
 interface StageStatus {
   state: string;

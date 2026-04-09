@@ -1,8 +1,8 @@
 import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { RELEVANCE_UNAVAILABLE_TOKEN } from "../constants/news";
-import type { NewsArticle, UserSettings } from "../types/news";
-import { mapBackendNewsItem } from "../utils/newsMapper";
-import { newsService, type EnrichedNewsRequest } from "../services";
+import { RELEVANCE_UNAVAILABLE_TOKEN } from "../constants/article";
+import type { NewsArticle, UserSettings } from "../types/article";
+import { mapBackendArticle } from "../utils/articleMapper";
+import { articleService, type EnrichedArticlesRequest } from "../services";
 
 export function parseConceptList(value: string): string[] {
   return value
@@ -11,12 +11,12 @@ export function parseConceptList(value: string): string[] {
     .filter(Boolean);
 }
 
-export function buildEnrichedNewsRequestArgs(
+export function buildEnrichedArticlesRequestArgs(
   selectedFeedId: string,
   selectedDate: string,
   settings: UserSettings,
   filterByDate: boolean,
-): EnrichedNewsRequest {
+): EnrichedArticlesRequest {
   return {
     feedId: selectedFeedId.trim() || null,
     category: null,
@@ -34,14 +34,14 @@ export function shouldDisableRelevanceFromError(sortMode: string, error: unknown
   return sortMode === "score" && String(error).includes(RELEVANCE_UNAVAILABLE_TOKEN);
 }
 
-interface UseEnrichedNewsParams {
+interface UseEnrichedArticlesParams {
   selectedFeedId: string;
   selectedDate: string;
   settings: UserSettings;
   disableRelevanceSort: (reason: string) => void;
 }
 
-export function useEnrichedNews(params: UseEnrichedNewsParams): {
+export function useEnrichedArticles(params: UseEnrichedArticlesParams): {
   news: NewsArticle[];
   setNews: Dispatch<SetStateAction<NewsArticle[]>>;
   fetchEnrichedNews: (filterByDate?: boolean, preserveOnEmpty?: boolean) => Promise<void>;
@@ -54,11 +54,11 @@ export function useEnrichedNews(params: UseEnrichedNewsParams): {
     const thisFetch = ++fetchCounterRef.current;
 
     try {
-      const rows = await newsService.getEnriched(
-        buildEnrichedNewsRequestArgs(selectedFeedId, selectedDate, settings, filterByDate),
+      const rows = await articleService.getEnriched(
+        buildEnrichedArticlesRequestArgs(selectedFeedId, selectedDate, settings, filterByDate),
       );
 
-      const mapped = rows.map(mapBackendNewsItem);
+      const mapped = rows.map(mapBackendArticle);
       if (thisFetch !== fetchCounterRef.current) {
         // A newer fetch has been dispatched; discard these stale results.
         return;

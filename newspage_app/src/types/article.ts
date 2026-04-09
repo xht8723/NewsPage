@@ -1,4 +1,4 @@
-import type { LayoutMode } from "../constants/news";
+import type { LayoutMode } from "../constants/article";
 
 export interface FeedSource {
   source_type: string;
@@ -27,7 +27,7 @@ export interface NewsArticle {
   preferenceScore: number;
 }
 
-export interface BackendNewsItem {
+export interface BackendArticle {
   id: string;
   title: string;
   url: string;
@@ -111,7 +111,7 @@ export interface ProcessStageEvent {
   emitted_at_utc: string;
 }
 
-export interface EnrichedNewsUpdatedEvent extends BackendNewsItem {
+export interface EnrichedArticlesUpdatedEvent extends BackendArticle {
   current: number;
   total: number;
   enriched_count: number;

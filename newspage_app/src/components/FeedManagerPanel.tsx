@@ -15,8 +15,8 @@ import {
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ArrowDown, ArrowUp, ChevronRight, Eye, EyeOff, GripVertical, Pencil, Plus, Trash2 } from "lucide-react";
-import { TOPIC_CATEGORIES } from "../constants/news";
-import type { FeedDefinition, FeedSource } from "../types/news";
+import { TOPIC_CATEGORIES } from "../constants/article";
+import type { FeedDefinition, FeedSource } from "../types/article";
 
 function pillClass(active: boolean, isDarkMode: boolean): string {
   return `rounded-md border px-2 py-1 text-[10px] font-bold uppercase tracking-wide transition-all duration-200 hover:scale-[1.03] ${

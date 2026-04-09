@@ -3,10 +3,10 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, Pencil, Plus, Rss, Trash2, X } from "lucide-react";
 import { NeonCheckbox } from "./NeonCheckbox";
-import type { FeedSource } from "../types/news";
+import type { FeedSource } from "../types/article";
 import { normalizeRssFeedUrl } from "../utils/rssSettings";
 import { usePanelTransition } from "../hooks/usePanelTransition";
-import { TAG_COLOR_PRESETS } from "../utils/newsMeta";
+import { TAG_COLOR_PRESETS } from "../utils/articleMeta";
 
 interface CustomRssFeedModalProps {
   show: boolean;

@@ -1,5 +1,5 @@
-import { TOPIC_CATEGORIES } from "../constants/news";
-import type { FeedSource } from "../types/news";
+import { TOPIC_CATEGORIES } from "../constants/article";
+import type { FeedSource } from "../types/article";
 
 export function formatDateLocal(date: Date): string {
   const year = date.getFullYear();

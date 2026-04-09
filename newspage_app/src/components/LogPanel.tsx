@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { X } from "lucide-react";
-import type { ProcessLogEntry } from "../types/news";
+import type { ProcessLogEntry } from "../types/article";
 import { usePanelTransition } from "../hooks/usePanelTransition";
 
 interface LogPanelProps {

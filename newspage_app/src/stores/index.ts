@@ -1,4 +1,4 @@
 export { useSettingsStore, createDefaultSettings } from "./settingsStore";
 export { useFeedStore } from "./feedStore";
-export { useNewsStore } from "./newsStore";
+export { useNewsStore } from "./articleStore";
 export { useUIStore } from "./uiStore";

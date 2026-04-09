@@ -12,8 +12,8 @@ import {
   GEMINI_MODELS,
   OPENAI_MODELS,
   type OllamaConnectionState,
-} from "../constants/news";
-import type { FeedSource, LocalEmbeddingStatus, UserSettings } from "../types/news";
+} from "../constants/article";
+import type { FeedSource, LocalEmbeddingStatus, UserSettings } from "../types/article";
 import { usePanelTransition } from "../hooks/usePanelTransition";
 
 interface SettingsModalProps {

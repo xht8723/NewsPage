@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useSettingsStore } from "../stores";
-import type { UserSettings } from "../types/news";
-import type { OllamaConnectionState } from "../constants/news";
-import { LOCAL_EMBEDDING_MODELS, DEFAULT_EMBEDDING_MODEL } from "../constants/news";
+import type { UserSettings } from "../types/article";
+import type { OllamaConnectionState } from "../constants/article";
+import { LOCAL_EMBEDDING_MODELS, DEFAULT_EMBEDDING_MODEL } from "../constants/article";
 import { llmService, settingsService } from "../services";
 
 interface EmbeddingStatus {

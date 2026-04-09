@@ -10,7 +10,6 @@ use crate::db::{
     list_subscribed_rss_categories,
     list_unenriched_categories,
     list_unenriched_languages_by_category,
-    mark_enriched,
     remove_feed_source,
     remove_rss_category_from_all_feeds,
     rename_feed,
@@ -19,9 +18,10 @@ use crate::db::{
     set_feed_categories,
     set_feed_visibility,
     upsert_article,
+    upsert_enrichment,
     upsert_feed_source,
 };
-use crate::news_item::{NewsItem, RankedNewsItem};
+use crate::article::{Article, RankedArticle};
 use crate::article_extract::fetch_article_text_and_thumbnail;
 use crate::logging::ProcessLogEvent;
 use crate::scrapers::{run_default_scrapers, ScrapeContext};
@@ -40,7 +40,7 @@ pub mod article_extract;
 pub mod db;
 pub mod id_generator;
 pub mod image_search;
-pub mod news_item;
+pub mod article;
 pub mod repositories;
 pub mod scrapers;
 pub mod platform_llm;
@@ -220,7 +220,7 @@ async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str
 async fn enrich_media_and_embedding(
     db_pool: &SqlitePool,
     image_cache_dir: &Path,
-    enriched: &mut NewsItem,
+    enriched: &mut Article,
     local_embedding_model: &str,
 ) {
     // If thumbnail is missing or low quality, search DuckDuckGo for a replacement.
@@ -269,19 +269,26 @@ async fn enrich_media_and_embedding(
     }
 }
 
-async fn persist_enriched_article(db_pool: &SqlitePool, enriched: &NewsItem) -> Result<(), String> {
+async fn persist_enriched_article(db_pool: &SqlitePool, enriched: &Article) -> Result<(), String> {
     upsert_article(db_pool, enriched)
         .await
         .map_err(|e| format!("DB upsert error: {}", e))?;
-    mark_enriched(db_pool, &enriched.id)
-        .await
-        .map_err(|e| format!("mark_enriched error: {}", e))?;
+    upsert_enrichment(
+        db_pool,
+        &enriched.id,
+        &enriched.ai_summary,
+        &enriched.og_content,
+        &enriched.snippet,
+        &enriched.enrichment_mode,
+    )
+    .await
+    .map_err(|e| format!("upsert_enrichment error: {}", e))?;
     Ok(())
 }
 
 async fn fetch_and_enrich_article_with_timeouts(
     llm: &dyn platform_llm::LLMProviderImpl,
-    item: &NewsItem,
+    item: &Article,
     min_summary_points: u8,
     max_summary_points: u8,
 ) -> Result<(String, String, String, Option<String>), String> {
@@ -314,13 +321,13 @@ async fn fetch_and_enrich_article_with_timeouts(
 }
 
 fn apply_enrichment_payload(
-    mut item: NewsItem,
+    mut item: Article,
     text: String,
     snippet: String,
     ai_summary: String,
     thumbnail_url: Option<String>,
     overwrite_existing: bool,
-) -> NewsItem {
+) -> Article {
     if overwrite_existing || item.og_content.trim().is_empty() {
         item.og_content = text;
     }
@@ -339,9 +346,9 @@ fn apply_enrichment_payload(
     item
 }
 
-fn emit_enriched_news_updated(
+fn emit_enriched_articles_updated(
     app: &tauri::AppHandle,
-    enriched: &NewsItem,
+    enriched: &Article,
     current: usize,
     total: usize,
     enriched_count: usize,
@@ -354,7 +361,7 @@ fn emit_enriched_news_updated(
         item: enriched.clone(),
     };
     println!(
-        "[Event] enriched-news-updated: current={}, total={}, enriched={}, id={}",
+        "[Event] enriched-articles-updated: current={}, total={}, enriched={}, id={}",
         event.current, event.total, event.enriched_count, event.item.id
     );
     logging::info(
@@ -365,7 +372,7 @@ fn emit_enriched_news_updated(
         ),
         Some(event.enriched_count),
     );
-    app.emit("enriched-news-updated", &event)
+    app.emit("enriched-articles-updated", &event)
         .map_err(|e| format!("Event emit error: {}", e))
 }
 
@@ -825,12 +832,12 @@ async fn collect_items_to_enrich_by_language(
     per_category_limit: i64,
     per_category_limits: &HashMap<String, i64>,
     source_blacklist: &HashSet<String>,
-) -> Result<Vec<(String, Vec<NewsItem>)>, String> {
+) -> Result<Vec<(String, Vec<Article>)>, String> {
     let categories = list_unenriched_categories(&state.db)
         .await
         .map_err(|e| format!("DB category read error: {}", e))?;
 
-    let mut grouped_items: HashMap<String, Vec<NewsItem>> = HashMap::new();
+    let mut grouped_items: HashMap<String, Vec<Article>> = HashMap::new();
     for category in categories {
         let languages = list_unenriched_languages_by_category(&state.db, &category)
             .await
@@ -890,7 +897,7 @@ async fn collect_items_to_enrich_by_language(
         }
     }
 
-    let mut language_groups = grouped_items.into_iter().collect::<Vec<(String, Vec<NewsItem>)>>();
+    let mut language_groups = grouped_items.into_iter().collect::<Vec<(String, Vec<Article>)>>();
     language_groups.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(language_groups)
 }
@@ -907,7 +914,7 @@ async fn run_none_ai_stage(
     state: &AppState,
     image_cache_dir: &Path,
     settings: &ResolvedLlmSettings,
-    items_to_enrich_by_language: Vec<(String, Vec<NewsItem>)>,
+    items_to_enrich_by_language: Vec<(String, Vec<Article>)>,
 ) -> Result<EnrichmentStageResult, String> {
     let total: usize = items_to_enrich_by_language
         .iter()
@@ -982,11 +989,10 @@ async fn run_none_ai_stage(
             )
             .await;
 
-            enriched.is_enriched = true;
             persist_enriched_article(&state.db, &enriched).await?;
             enriched_count += 1;
 
-            emit_enriched_news_updated(app, &enriched, global_index, total, enriched_count)?;
+            emit_enriched_articles_updated(app, &enriched, global_index, total, enriched_count)?;
             emit_process_stage(
                 app,
                 "persist",
@@ -1024,7 +1030,7 @@ async fn run_enrichment_stage(
     image_cache_dir: &Path,
     settings: &ResolvedLlmSettings,
     per_category_limit: i64,
-    items_to_enrich_by_language: Vec<(String, Vec<NewsItem>)>,
+    items_to_enrich_by_language: Vec<(String, Vec<Article>)>,
 ) -> Result<EnrichmentStageResult, String> {
     let total: usize = items_to_enrich_by_language
         .iter()
@@ -1109,7 +1115,7 @@ async fn run_enrichment_stage(
                 )?;
                 break 'outer;
             }
-            let batch_items: Vec<NewsItem> = batch.to_vec();
+            let batch_items: Vec<Article> = batch.to_vec();
             let batch_len = batch_items.len();
 
         // Phase 1: Fetch article texts and thumbnails for the batch
@@ -1122,7 +1128,7 @@ async fn run_enrichment_stage(
                 ),
                 Some(batch_len),
             );
-            let mut fetched: Vec<(NewsItem, Result<(String, Option<String>), String>)> =
+            let mut fetched: Vec<(Article, Result<(String, Option<String>), String>)> =
                 Vec::with_capacity(batch_len);
 
             for item in &batch_items {
@@ -1271,7 +1277,6 @@ async fn run_enrichment_stage(
                         )
                         .await;
 
-                        enriched.is_enriched = true;
                         emit_process_stage(
                             app,
                             "persist",
@@ -1283,7 +1288,7 @@ async fn run_enrichment_stage(
                         persist_enriched_article(&state.db, &enriched).await?;
                         enriched_count += 1;
 
-                        emit_enriched_news_updated(app, &enriched, global_index, total, enriched_count)?;
+                        emit_enriched_articles_updated(app, &enriched, global_index, total, enriched_count)?;
                         println!("Enriched: {}", enriched.title);
                         logging::info(
                             "Enrichment",
@@ -1346,7 +1351,7 @@ async fn run_enrichment_stage(
     })
 }
 
-fn emit_enriched_news_sync_complete(
+fn emit_enriched_articles_sync_complete(
     app: &tauri::AppHandle,
     result: EnrichmentStageResult,
 ) -> Result<(), String> {
@@ -1362,11 +1367,12 @@ fn emit_enriched_news_sync_complete(
         enriched_count: result.enriched_count,
         failed_count,
         error_sample,
+        stopped: result.stopped,
         emitted_at_utc: Utc::now().to_rfc3339(),
     };
 
     println!(
-        "[Event] Emitting enriched-news-sync-complete: total={}, enriched={}, failed={}",
+        "[Event] Emitting enriched-articles-sync-complete: total={}, enriched={}, failed={}",
         sync_event.total, sync_event.enriched_count, sync_event.failed_count
     );
     logging::info(
@@ -1377,7 +1383,7 @@ fn emit_enriched_news_sync_complete(
         ),
         Some(sync_event.enriched_count),
     );
-    app.emit("enriched-news-sync-complete", &sync_event)
+    app.emit("enriched-articles-sync-complete", &sync_event)
         .map_err(|e| format!("Event emit error: {}", e))?;
 
     println!(
@@ -1394,7 +1400,7 @@ struct EnrichedNewsUpdatedEvent {
     enriched_count: usize,
     emitted_at_utc: String,
     #[serde(flatten)]
-    item: NewsItem,
+    item: Article,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -1403,6 +1409,7 @@ struct EnrichedNewsSyncCompleteEvent {
     enriched_count: usize,
     failed_count: usize,
     error_sample: Option<String>,
+    stopped: bool,
     emitted_at_utc: String,
 }
 
@@ -1425,7 +1432,7 @@ fn is_on_utc_day(date_value: &str, target_utc_day: &str) -> bool {
 }
 
 #[tauri::command]
-async fn get_enriched_news(
+async fn get_enriched_articles(
     state: tauri::State<'_, AppState>,
     feed_id: Option<String>,
     category: Option<String>,
@@ -1436,7 +1443,7 @@ async fn get_enriched_news(
     liked_concepts: Option<Vec<String>>,
     disliked_concepts: Option<Vec<String>>,
     local_embedding_model: Option<String>,
-) -> Result<Vec<RankedNewsItem>, String> {
+) -> Result<Vec<RankedArticle>, String> {
     let limit = limit.unwrap_or(300).clamp(1, 1000);
     let offset = offset.unwrap_or(0).max(0);
 
@@ -1574,7 +1581,7 @@ async fn get_enriched_news(
             ));
         }
 
-        let mut ranked: Vec<RankedNewsItem> = rows
+        let mut ranked: Vec<RankedArticle> = rows
             .into_iter()
             .filter(|(item, _)| {
                 if let Some((ref news_set, ref rss_set)) = feed_categories {
@@ -1596,7 +1603,7 @@ async fn get_enriched_news(
                     .as_deref()
                     .map(|v| article_preference_score(v, &liked_vecs, &disliked_vecs))
                     .unwrap_or(0.0);
-                RankedNewsItem { item, preference_score: score }
+                RankedArticle { item, preference_score: score }
             })
             .collect();
 
@@ -1660,7 +1667,7 @@ async fn get_enriched_news(
 
         Ok(items
             .into_iter()
-            .map(|item| RankedNewsItem { item, preference_score: 0.0 })
+            .map(|item| RankedArticle { item, preference_score: 0.0 })
             .collect())
     }
 }
@@ -1989,10 +1996,10 @@ async fn remove_feed_source_action(
 
 #[tauri::command]
 async fn purge_database(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    sqlx::query("DELETE FROM news")
+    sqlx::query("DELETE FROM articles")
         .execute(&state.db)
         .await
-        .map_err(|e| format!("Failed to purge news table: {}", e))?;
+        .map_err(|e| format!("Failed to purge articles table: {}", e))?;
 
     sqlx::query("DELETE FROM feed_topic_map")
         .execute(&state.db)
@@ -2156,7 +2163,7 @@ async fn start_all_action(
 
     let scrape_stopped = run_scrape_stage(&app, &state, &runtime.resolved, cooldown_hours, &runtime.settings_path).await?;
     if scrape_stopped {
-        return emit_enriched_news_sync_complete(&app, EnrichmentStageResult {
+        return emit_enriched_articles_sync_complete(&app, EnrichmentStageResult {
             total: 0,
             enriched_count: 0,
             first_error: None,
@@ -2211,7 +2218,7 @@ async fn start_all_action(
         )?;
     }
 
-    emit_enriched_news_sync_complete(&app, result)
+    emit_enriched_articles_sync_complete(&app, result)
 }
 
 #[tauri::command]
@@ -2229,7 +2236,7 @@ async fn reprocess_article(
     ollama_address: Option<String>,
     ollama_model: Option<String>,
     local_embedding_model: Option<String>,
-) -> Result<NewsItem, String> {
+) -> Result<Article, String> {
     let runtime = resolve_runtime_llm_context(
         &app,
         LlmOverrideArgs {
@@ -2270,10 +2277,9 @@ async fn reprocess_article(
     )
     .await;
 
-    enriched.is_enriched = true;
     persist_enriched_article(&state.db, &enriched).await?;
 
-    emit_enriched_news_updated(&app, &enriched, 1, 1, 1)?;
+    emit_enriched_articles_updated(&app, &enriched, 1, 1, 1)?;
 
     Ok(enriched)
 }
@@ -2478,7 +2484,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_available_regions,
-            get_enriched_news,
+            get_enriched_articles,
             list_feeds,
             create_feed_action,
             rename_feed_action,

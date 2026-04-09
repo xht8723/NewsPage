@@ -1,11 +1,11 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { ArrowLeft } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import { ARTICLE_HERO_FALLBACK_URL } from "../constants/news";
+import { ARTICLE_HERO_FALLBACK_URL } from "../constants/article";
 import { useImageFallback } from "../hooks/useImageFallback";
 import { useLiveTranslation, type TranslationRuntimeConfig } from "../hooks/useLiveTranslation";
-import type { FeedSource, NewsArticle } from "../types/news";
-import { resolveTagColor } from "../utils/newsMeta";
+import type { FeedSource, NewsArticle } from "../types/article";
+import { resolveTagColor } from "../utils/articleMeta";
 import { usePanelTransition } from "../hooks/usePanelTransition";
 
 interface ArticleDetailModalProps {

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { FeedDefinition, FeedSource } from "../types/news";
+import type { FeedDefinition, FeedSource } from "../types/article";
 
 export interface CreateFeedRequest {
   name: string;

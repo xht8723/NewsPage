@@ -1,8 +1,8 @@
 import type React from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { SlidersHorizontal, X } from "lucide-react";
-import type { UserSettings } from "../types/news";
-import { TOPIC_CATEGORIES } from "../constants/news";
+import type { UserSettings } from "../types/article";
+import { TOPIC_CATEGORIES } from "../constants/article";
 import { usePanelTransition } from "../hooks/usePanelTransition";
 
 interface CategoryLimitsModalProps {

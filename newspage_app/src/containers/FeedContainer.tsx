@@ -1,6 +1,6 @@
 import type React from "react";
 import { useFeedStore, useUIStore } from "../stores";
-import type { FeedDefinition, FeedSource } from "../types/news";
+import type { FeedDefinition, FeedSource } from "../types/article";
 
 interface FeedManagerPanelProps {
   feeds: FeedDefinition[];

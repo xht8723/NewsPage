@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::error::Error;
 
 use crate::db::{FeedDefinitionWithTopics, FeedSource};
-use crate::news_item::NewsItem;
+use crate::article::Article;
 
 pub mod feed_repository;
 pub mod article_repository;
@@ -27,9 +27,16 @@ pub trait FeedRepository: Send + Sync {
 
 #[async_trait]
 pub trait ArticleRepository: Send + Sync {
-    async fn get_by_id(&self, id: &str) -> Result<Option<NewsItem>, Box<dyn Error>>;
-    async fn upsert(&self, article: &NewsItem) -> Result<(), Box<dyn Error>>;
-    async fn mark_enriched(&self, id: &str) -> Result<(), Box<dyn Error>>;
+    async fn get_by_id(&self, id: &str) -> Result<Option<Article>, Box<dyn Error>>;
+    async fn upsert(&self, article: &Article) -> Result<(), Box<dyn Error>>;
+    async fn upsert_enrichment(
+        &self,
+        article_id: &str,
+        ai_summary: &str,
+        og_content: &str,
+        snippet: &str,
+        enrichment_mode: &str,
+    ) -> Result<(), Box<dyn Error>>;
 }
 
 #[async_trait]
