@@ -93,6 +93,7 @@ function createDefaultSettings(): UserSettings {
     maxSummaryPoints: 8,
     liveTranslationEnabled: false,
     translationTargetLanguage: "en",
+    concurrentLlmRequests: false,
   };
 }
 
@@ -207,6 +208,7 @@ function App(): React.JSX.Element {
       maxSummaryPoints: 8,
       liveTranslationEnabled: false,
       translationTargetLanguage: "en" as const,
+      concurrentLlmRequests: false,
     };
     return defaults;
   });
@@ -353,6 +355,7 @@ function App(): React.JSX.Element {
           maxSummaryPoints: saved.maxSummaryPoints ? Math.min(20, Math.max(1, Number(saved.maxSummaryPoints))) : defaults.maxSummaryPoints,
           liveTranslationEnabled: saved.liveTranslationEnabled === "true",
           translationTargetLanguage: saved.translationTargetLanguage === "zh-CN" ? "zh-CN" : "en",
+          concurrentLlmRequests: saved.concurrentLlmRequests === "true",
         }));
         setSelectedEmbeddingModel(savedLocalEmbeddingModel || DEFAULT_EMBEDDING_MODEL);
         if (nextLayout) {
@@ -844,6 +847,11 @@ function App(): React.JSX.Element {
     [feeds],
   );
 
+  const availableFeedsRef = useRef(availableFeeds);
+  useEffect(() => {
+    availableFeedsRef.current = availableFeeds;
+  }, [availableFeeds]);
+
   const selectedFeedName = useMemo(
     () => availableFeeds.find((feed) => feed.id === selectedFeedId)?.name ?? "All",
     [availableFeeds, selectedFeedId],
@@ -876,26 +884,50 @@ function App(): React.JSX.Element {
       }
 
       try {
-        const off = await listen<EnrichedArticlesUpdatedEvent>("enriched-articles-updated", (event) => {
-          console.log("📬 enriched-articles-updated event received:", event.payload.id);
+        const off = await listen<EnrichedArticlesUpdatedEvent>("enriched-articles-updated", async (event) => {
           setEnrichmentProgress({
             current: event.payload.current,
             total: event.payload.total,
             enriched: event.payload.enriched_count,
           });
-          if (selectedFeedIdRef.current === "feed-all" && selectedDateRef.current === event.payload.date) {
-            const article = mapBackendArticle(event.payload);
-            setNewsRef.current((prev) => {
-              const idx = prev.findIndex((a) => a.id === article.id);
-              if (idx >= 0) {
-                const updated = [...prev];
-                updated[idx] = article;
-                return updated;
+
+          try {
+            const backendArticle = await articleService.getEnrichedById(event.payload.id);
+            const article = mapBackendArticle(backendArticle);
+
+            const feedId = selectedFeedIdRef.current;
+            if (feedId === "feed-all") {
+              setNewsRef.current((prev) => {
+                const idx = prev.findIndex((a) => a.id === article.id);
+                if (idx >= 0) {
+                  const updated = [...prev];
+                  updated[idx] = article;
+                  return updated;
+                }
+                return [article, ...prev];
+              });
+            } else {
+              const feed = availableFeedsRef.current.find((f) => f.id === feedId);
+              if (feed) {
+                const categoryLower = article.category.toLowerCase();
+                const isMember = article.articleType === "rss"
+                  ? feed.rss_categories.some((c) => c.toLowerCase() === categoryLower)
+                  : feed.news_categories.some((c) => c.toLowerCase() === categoryLower);
+                if (isMember) {
+                  setNewsRef.current((prev) => {
+                    const idx = prev.findIndex((a) => a.id === article.id);
+                    if (idx >= 0) {
+                      const updated = [...prev];
+                      updated[idx] = article;
+                      return updated;
+                    }
+                    return [article, ...prev];
+                  });
+                }
               }
-              return [article, ...prev];
-            });
-          } else {
-            scheduleRefresh(true);
+            }
+          } catch (err) {
+            console.warn("Failed to fetch enriched article:", err);
           }
         });
         if (disposed) {

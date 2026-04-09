@@ -34,6 +34,7 @@ function createDefaultSettings(): UserSettings {
     maxSummaryPoints: 8,
     liveTranslationEnabled: false,
     translationTargetLanguage: "en",
+    concurrentLlmRequests: false,
   };
 }
 
@@ -104,6 +105,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
           maxSummaryPoints: saved.maxSummaryPoints ? Math.min(20, Math.max(1, Number(saved.maxSummaryPoints))) : defaults.maxSummaryPoints,
           liveTranslationEnabled: saved.liveTranslationEnabled === "true",
           translationTargetLanguage: saved.translationTargetLanguage === "zh-CN" ? "zh-CN" : "en",
+          concurrentLlmRequests: saved.concurrentLlmRequests === "true",
         },
         isLoaded: true,
       });

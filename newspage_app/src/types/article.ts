@@ -87,6 +87,7 @@ export interface UserSettings {
   maxSummaryPoints: number;
   liveTranslationEnabled: boolean;
   translationTargetLanguage: "en" | "zh-CN";
+  concurrentLlmRequests: boolean;
 }
 
 export interface LocalEmbeddingStatus {
@@ -113,7 +114,8 @@ export interface ProcessStageEvent {
   emitted_at_utc: string;
 }
 
-export interface EnrichedArticlesUpdatedEvent extends BackendArticle {
+export interface EnrichedArticlesUpdatedEvent {
+  id: string;
   current: number;
   total: number;
   enriched_count: number;

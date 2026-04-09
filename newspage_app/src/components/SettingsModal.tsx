@@ -392,6 +392,19 @@ export function SettingsModal({
                     >
                       Detailed
                     </button>
+                    <div className="ml-auto flex items-center gap-2">
+                      <span className="text-xs font-medium opacity-70">Concurrent LLM</span>
+                      <NeonCheckbox
+                        checked={settings.concurrentLlmRequests}
+                        onChange={(checked) => {
+                          setSettings((current) => ({ ...current, concurrentLlmRequests: checked }));
+                          saveSetting("concurrentLlmRequests", checked ? "true" : "false");
+                        }}
+                        isDarkMode={isDarkMode}
+                        size="sm"
+                        ariaLabel="Use concurrent LLM requests"
+                      />
+                    </div>
                   </div>
                 </div>
                 <div>

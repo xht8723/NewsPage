@@ -335,17 +335,17 @@ fn apply_enrichment_payload(
 
 fn emit_enriched_articles_updated(
     app: &tauri::AppHandle,
-    enriched: &Article,
+    article_id: &str,
     current: usize,
     total: usize,
     enriched_count: usize,
 ) -> Result<(), String> {
     let event = EnrichedNewsUpdatedEvent {
+        id: article_id.to_string(),
         current,
         total,
         enriched_count,
         emitted_at_utc: Utc::now().to_rfc3339(),
-        item: enriched.clone(),
     };
     logging::info(
         "Enrichment",
@@ -452,6 +452,7 @@ struct ResolvedLlmSettings {
     selected_regions: Vec<String>,
     source_blacklist: HashSet<String>,
     llm_batch_size: usize,
+    concurrent_llm_requests: bool,
     min_summary_points: u8,
     max_summary_points: u8,
 }
@@ -601,6 +602,10 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
             .and_then(|v| v.parse::<usize>().ok())
             .map(|n| n.clamp(1, 20))
             .unwrap_or(3),
+        concurrent_llm_requests: settings_map
+            .get("concurrentLlmRequests")
+            .map(|v| v == "true")
+            .unwrap_or(false),
         max_summary_points: overrides
             .max_summary_points
             .or_else(|| {
@@ -988,7 +993,7 @@ async fn run_none_ai_stage(
             persist_enriched_article(&state.db, &enriched).await?;
             enriched_count += 1;
 
-            emit_enriched_articles_updated(app, &enriched, global_index, total, enriched_count)?;
+            emit_enriched_articles_updated(app, &enriched.id, global_index, total, enriched_count)?;
             emit_process_stage(
                 app,
                 "persist",
@@ -1162,23 +1167,24 @@ async fn run_enrichment_stage(
     }
 
     let is_local_llm = llm_config.provider.is_local();
+    let use_concurrent = !is_local_llm || settings.concurrent_llm_requests;
 
     logging::info(
         "Enrichment",
         format!(
             "LLM provider '{}' - {} concurrency",
             llm_config.provider.as_str(),
-            if is_local_llm { "sequential" } else { "concurrent" }
+            if use_concurrent { "concurrent" } else { "sequential" }
         ),
         None,
     );
 
-    if is_local_llm {
-        run_enrichment_stage_sequential(
+    if use_concurrent {
+        run_enrichment_stage_concurrent(
             app, state, llm_config, image_cache_dir, settings, total, by_language
         ).await
     } else {
-        run_enrichment_stage_concurrent(
+        run_enrichment_stage_sequential(
             app, state, llm_config, image_cache_dir, settings, total, by_language
         ).await
     }
@@ -1320,7 +1326,7 @@ async fn run_enrichment_stage_sequential(
                         persist_enriched_article(&state.db, &enriched).await?;
                         enriched_count += 1;
 
-                        emit_enriched_articles_updated(app, &enriched, global_index, total, enriched_count)?;
+                        emit_enriched_articles_updated(app, &enriched.id, global_index, total, enriched_count)?;
                         logging::info(
                             "Enrichment",
                             format!("Enriched '{}' successfully", enriched.title),
@@ -1371,6 +1377,13 @@ async fn run_enrichment_stage_sequential(
     })
 }
 
+struct BatchLlmTask {
+    language: String,
+    batch_idx: usize,
+    results: Option<Vec<(usize, Result<(String, String), String>)>>,
+    error: Option<String>,
+}
+
 async fn run_enrichment_stage_concurrent(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -1382,14 +1395,47 @@ async fn run_enrichment_stage_concurrent(
 ) -> Result<EnrichmentStageResult, String> {
     const MAX_CONCURRENT_LLM_BATCHES: usize = 5;
 
+    let batch_size = settings.llm_batch_size;
+    let min_points = settings.min_summary_points;
+    let max_points = settings.max_summary_points;
+
     let language_groups: Vec<(String, Vec<(Article, Result<(String, Option<String>), String>)>)> =
         by_language.into_iter().collect();
+
+    let mut all_batch_tasks: Vec<(String, usize, Vec<(Article, Result<(String, Option<String>), String>)>, Vec<(usize, String, String)>)> = Vec::new();
+
+    for (language, items) in &language_groups {
+        for (batch_idx, batch) in items.chunks(batch_size).enumerate() {
+            let mut llm_inputs: Vec<(usize, String, String)> = Vec::new();
+            for (i, (item, result)) in batch.iter().enumerate() {
+                match result {
+                    Ok((text, _)) => {
+                        llm_inputs.push((i, item.title.clone(), text.clone()));
+                    }
+                    Err(_) => {
+                        if !item.og_content.trim().is_empty() {
+                            llm_inputs.push((i, item.title.clone(), item.og_content.clone()));
+                        }
+                    }
+                }
+            }
+            all_batch_tasks.push((
+                language.clone(),
+                batch_idx,
+                batch.to_vec(),
+                llm_inputs,
+            ));
+        }
+    }
+
+    let total_batches = all_batch_tasks.len();
+    let concurrency = MAX_CONCURRENT_LLM_BATCHES.min(total_batches);
 
     logging::info(
         "Enrichment",
         format!(
-            "Starting concurrent LLM enrichment for {} language group(s) with max {} concurrent",
-            language_groups.len(), MAX_CONCURRENT_LLM_BATCHES
+            "Starting concurrent LLM enrichment: {} batch(es) across {} language group(s), max {} concurrent",
+            total_batches, language_groups.len(), concurrency
         ),
         None,
     );
@@ -1403,90 +1449,78 @@ async fn run_enrichment_stage_concurrent(
         Some(total),
     )?;
 
-    // Phase 2a: Concurrent LLM calls for each language group
+    // Phase 2a: Concurrent LLM calls per batch, bounded by semaphore
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
     let mut join_set = tokio::task::JoinSet::new();
-    let batch_size = settings.llm_batch_size;
-    let min_points = settings.min_summary_points;
-    let max_points = settings.max_summary_points;
 
-    for (language, items) in language_groups {
+    for (language, batch_idx, _items, llm_inputs) in all_batch_tasks {
+        if llm_inputs.is_empty() {
+            join_set.spawn(async move {
+                BatchLlmTask {
+                    language,
+                    batch_idx,
+                    results: Some(vec![]),
+                    error: None,
+                }
+            });
+            continue;
+        }
+
         let llm_config_clone = llm_config.clone();
+        let sem = semaphore.clone();
 
         join_set.spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+
             let llm = match platform_llm::create_provider(&llm_config_clone) {
                 Ok(p) => p,
                 Err(e) => {
-                    return LanguageGroupResult {
+                    return BatchLlmTask {
                         language,
-                        items,
-                        batch_results: vec![],
+                        batch_idx,
+                        results: None,
                         error: Some(e),
                     };
                 }
             };
 
-            let mut batch_results: Vec<(usize, Vec<(usize, Result<(String, String), String>)>)> = Vec::new();
+            let articles_for_llm: Vec<(String, String)> = llm_inputs
+                .iter()
+                .map(|(_, title, text)| (title.clone(), text.clone()))
+                .collect();
 
-            for (batch_idx, batch) in items.chunks(batch_size).enumerate() {
-                let mut llm_inputs: Vec<(usize, String, String)> = Vec::new();
-                for (i, (item, result)) in batch.iter().enumerate() {
-                    match result {
-                        Ok((text, _)) => {
-                            llm_inputs.push((i, item.title.clone(), text.clone()));
-                        }
-                        Err(_) => {
-                            if !item.og_content.trim().is_empty() {
-                                llm_inputs.push((i, item.title.clone(), item.og_content.clone()));
-                            }
-                        }
-                    }
-                }
+            let results = llm
+                .enrich_batch(
+                    &articles_for_llm,
+                    Some(language.as_str()),
+                    min_points,
+                    max_points,
+                )
+                .await;
 
-                if llm_inputs.is_empty() {
-                    batch_results.push((batch_idx, vec![]));
-                    continue;
-                }
+            let mapped_results: Vec<(usize, Result<(String, String), String>)> = llm_inputs
+                .iter()
+                .zip(results.into_iter())
+                .map(|((idx, _, _), r)| (*idx, r))
+                .collect();
 
-                let articles_for_llm: Vec<(String, String)> = llm_inputs
-                    .iter()
-                    .map(|(_, title, text)| (title.clone(), text.clone()))
-                    .collect();
-
-                let results = llm
-                    .enrich_batch(
-                        &articles_for_llm,
-                        Some(language.as_str()),
-                        min_points,
-                        max_points,
-                    )
-                    .await;
-
-                let mapped_results: Vec<(usize, Result<(String, String), String>)> = llm_inputs
-                    .iter()
-                    .zip(results.into_iter())
-                    .map(|((idx, _, _), r)| (*idx, r))
-                    .collect();
-
-                batch_results.push((batch_idx, mapped_results));
-            }
-
-            LanguageGroupResult {
+            BatchLlmTask {
                 language,
-                items,
-                batch_results,
+                batch_idx,
+                results: Some(mapped_results),
                 error: None,
             }
         });
     }
 
-    let mut group_results: Vec<LanguageGroupResult> = Vec::new();
+    let mut batch_task_results: Vec<BatchLlmTask> = Vec::new();
     while let Some(task_result) = join_set.join_next().await {
         match task_result {
             Ok(result) => {
-                group_results.push(result);
+                batch_task_results.push(result);
             }
             Err(e) => {
-                logging::warn("Enrichment", format!("LLM task panicked: {}", e), None);
+                logging::warn("Enrichment", format!("LLM batch task panicked: {}", e), None);
             }
         }
     }
@@ -1500,38 +1534,51 @@ async fn run_enrichment_stage_concurrent(
         });
     }
 
-    // Phase 2b: Apply results sequentially (persistence must be sequential)
+    // Phase 2b: Persist results sequentially, grouped by language in original order
     let mut enriched_count = 0;
     let mut first_error: Option<String> = None;
     let mut global_index: usize = 0;
 
-    for group in group_results {
+    for (language, items) in language_groups {
         if state.stop_requested.load(Ordering::Relaxed) {
             break;
         }
 
-        if let Some(e) = group.error {
-            if first_error.is_none() {
-                first_error = Some(e);
-            }
-            continue;
+        let lang_batches: Vec<&BatchLlmTask> = batch_task_results
+            .iter()
+            .filter(|t| t.language == language)
+            .collect();
+        let mut batch_map: std::collections::HashMap<usize, &BatchLlmTask> = std::collections::HashMap::new();
+        for t in &lang_batches {
+            batch_map.insert(t.batch_idx, t);
         }
 
         logging::info(
             "Enrichment",
             format!(
-                "Persisting language group '{}' with {} item(s)",
-                group.language,
-                group.items.len()
+                "Persisting language group '{}' with {} item(s) in {} batch(es)",
+                language,
+                items.len(),
+                lang_batches.len()
             ),
-            Some(group.items.len()),
-);
+            Some(items.len()),
+        );
 
-        for (batch_idx, batch) in group.items.chunks(batch_size).enumerate() {
-            let llm_results_for_batch = group.batch_results.iter()
-                .find(|(idx, _)| *idx == batch_idx)
-                .map(|(_, r)| r.clone())
+        for (batch_idx, batch) in items.chunks(batch_size).enumerate() {
+            let batch_task = batch_map.get(&batch_idx);
+
+            let llm_results_for_batch: Vec<(usize, Result<(String, String), String>)> = batch_task
+                .and_then(|t| t.results.clone())
                 .unwrap_or_default();
+
+            if let Some(t) = batch_task {
+                if let Some(ref e) = t.error {
+                    if first_error.is_none() {
+                        first_error = Some(e.clone());
+                    }
+                    continue;
+                }
+            }
 
             let mut llm_result_iter = llm_results_for_batch.into_iter();
 
@@ -1573,7 +1620,7 @@ async fn run_enrichment_stage_concurrent(
                         persist_enriched_article(&state.db, &enriched).await?;
                         enriched_count += 1;
 
-                        emit_enriched_articles_updated(app, &enriched, global_index, total, enriched_count)?;
+                        emit_enriched_articles_updated(app, &enriched.id, global_index, total, enriched_count)?;
                         logging::info(
                             "Enrichment",
                             format!("Enriched '{}' successfully", enriched.title),
@@ -1626,13 +1673,6 @@ async fn run_enrichment_stage_concurrent(
     })
 }
 
-struct LanguageGroupResult {
-    language: String,
-    items: Vec<(Article, Result<(String, Option<String>), String>)>,
-    batch_results: Vec<(usize, Vec<(usize, Result<(String, String), String>)>)>,
-    error: Option<String>,
-}
-
 fn emit_enriched_articles_sync_complete(
     app: &tauri::AppHandle,
     result: EnrichmentStageResult,
@@ -1668,12 +1708,11 @@ fn emit_enriched_articles_sync_complete(
 
 #[derive(serde::Serialize, Clone)]
 struct EnrichedNewsUpdatedEvent {
+    id: String,
     current: usize,
     total: usize,
     enriched_count: usize,
     emitted_at_utc: String,
-    #[serde(flatten)]
-    item: Article,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -1943,6 +1982,22 @@ async fn get_enriched_articles(
             .map(|item| RankedArticle { item, preference_score: 0.0 })
             .collect())
     }
+}
+
+#[tauri::command]
+async fn get_enriched_article_by_id(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<RankedArticle, String> {
+    let article = db::get_article_by_id(&state.db, &id)
+        .await
+        .map_err(|e| format!("DB read error: {}", e))?
+        .ok_or_else(|| format!("Article '{}' not found", id))?;
+
+    Ok(RankedArticle {
+        item: article,
+        preference_score: 0.0,
+    })
 }
 
 #[derive(serde::Deserialize)]
@@ -2668,7 +2723,7 @@ async fn reprocess_article(
 
     persist_enriched_article(&state.db, &enriched).await?;
 
-    emit_enriched_articles_updated(&app, &enriched, 1, 1, 1)?;
+    emit_enriched_articles_updated(&app, &enriched.id, 1, 1, 1)?;
 
     Ok(enriched)
 }
@@ -2869,6 +2924,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_available_regions,
             get_enriched_articles,
+            get_enriched_article_by_id,
             list_feeds,
             create_feed_action,
             rename_feed_action,

@@ -53,6 +53,9 @@ export const articleService = {
   getEnriched: (request: EnrichedArticlesRequest): Promise<BackendArticle[]> =>
     invoke("get_enriched_articles", request),
 
+  getEnrichedById: (id: string): Promise<BackendArticle> =>
+    invoke("get_enriched_article_by_id", { id }),
+
   reprocessArticle: (request: ReprocessArticleRequest): Promise<BackendArticle> =>
     invoke("reprocess_article", request),
 
