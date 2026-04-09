@@ -165,10 +165,6 @@ async fn scrape_region(
     );
     for topic in active_topics {
         let url = build_feed_url(region, topic);
-        println!(
-            "[gl_rss] Fetching {} / {} → {}",
-            region.id, topic.category, url
-        );
         logging::info(
             "Scrape",
             format!("Fetching feed {}/{}", region.id, topic.category),
@@ -192,13 +188,6 @@ async fn scrape_region(
                         added += 1;
                     }
                 }
-                println!(
-                    "[gl_rss]   → {} new items (of {} parsed) for {}/{}",
-                    added,
-                    rss_items.len(),
-                    region.id,
-                    topic.category
-                );
                 logging::info(
                     "Scrape",
                     format!(
@@ -212,7 +201,6 @@ async fn scrape_region(
                 );
             }
             Err(e) => {
-                println!("[gl_rss] Warning: {}", e);
                 logging::warn("Scrape", format!("RSS fetch warning for {}/{}: {}", region.id, topic.category, e), None);
             }
         }
@@ -227,11 +215,6 @@ pub async fn scrape_rss_regions(region_ids: &[String], subscribed_news_categorie
 
     for region_id in region_ids {
         let Some(region) = find_region(region_id) else {
-            println!(
-                "[gl_rss] Unknown region '{}', skipping. Known: {:?}",
-                region_id,
-                list_region_ids()
-            );
             logging::warn(
                 "Scrape",
                 format!("Unknown region '{}' skipped", region_id),

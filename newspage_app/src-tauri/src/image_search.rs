@@ -49,7 +49,6 @@ pub fn is_low_quality_thumbnail(url: &Option<String>) -> bool {
     ];
     for pat in &bad_patterns {
         if lower.contains(pat) {
-            println!("[image-search] low quality thumbnail (contains '{}'): {}", pat, url);
             return true;
         }
     }
@@ -69,8 +68,6 @@ pub async fn fill_thumbnail_if_missing(thumbnail: &mut String, query: &str) {
 /// Search DuckDuckGo Images for a relevant image based on the article title.
 /// Returns the URL of the best image result, or None. No API key required.
 pub async fn search_image_by_title(title: &str) -> Option<String> {
-    println!("[image-search] searching DuckDuckGo for: {}", title);
-
     let client = reqwest::Client::new();
     let encoded_query = urlencoding::encode(title);
 
@@ -90,7 +87,6 @@ pub async fn search_image_by_title(title: &str) -> Option<String> {
 
     // Extract vqd token: appears as vqd='...' or vqd="..." or vqd=4-...
     let vqd = extract_vqd(&page_text)?;
-    println!("[image-search] got vqd token: {}...", &vqd[..vqd.len().min(12)]);
 
     // Step 2: Query the image API
     let api_url = format!(
@@ -106,10 +102,6 @@ pub async fn search_image_by_title(title: &str) -> Option<String> {
         .ok()?;
 
     if !api_resp.status().is_success() {
-        println!(
-            "[image-search] DuckDuckGo API error: status {}",
-            api_resp.status()
-        );
         return None;
     }
 
@@ -126,17 +118,13 @@ pub async fn search_image_by_title(title: &str) -> Option<String> {
             .get("width")
             .and_then(|w| w.as_u64())
             .unwrap_or(0);
-        let height = result
+        let _height = result
             .get("height")
             .and_then(|h| h.as_u64())
             .unwrap_or(0);
 
         // Skip small images
         if width > 0 && width < 300 {
-            println!(
-                "[image-search] skipping small image ({}x{}): {}",
-                width, height, image_url
-            );
             continue;
         }
 
@@ -145,14 +133,8 @@ pub async fn search_image_by_title(title: &str) -> Option<String> {
             continue;
         }
 
-        println!(
-            "[image-search] selected image ({}x{}): {}",
-            width, height, image_url
-        );
         return Some(image_url.to_string());
     }
-
-    println!("[image-search] no suitable image found for: {}", title);
     None
 }
 
@@ -178,6 +160,5 @@ fn extract_vqd(html: &str) -> Option<String> {
             return Some(after[..end].to_string());
         }
     }
-    println!("[image-search] could not extract vqd token from DuckDuckGo page");
     None
 }

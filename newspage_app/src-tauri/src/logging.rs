@@ -33,8 +33,13 @@ fn logger_state() -> &'static Mutex<LoggerState> {
 
 pub fn init(app: &AppHandle, app_data_dir: &Path) -> Result<(), String> {
     let log_dir = app_data_dir.join("logs");
-    fs::create_dir_all(&log_dir)
-        .map_err(|e| format!("Failed to create log directory '{}': {}", log_dir.display(), e))?;
+    fs::create_dir_all(&log_dir).map_err(|e| {
+        format!(
+            "Failed to create log directory '{}': {}",
+            log_dir.display(),
+            e
+        )
+    })?;
 
     {
         let mut state = logger_state().lock().unwrap();
@@ -70,7 +75,9 @@ pub fn load_recent(limit: usize) -> Vec<ProcessLogEvent> {
             .filter(|path| {
                 path.file_name()
                     .and_then(|name| name.to_str())
-                    .map(|name| name.starts_with(LOG_FILE_PREFIX) && name.ends_with(LOG_FILE_SUFFIX))
+                    .map(|name| {
+                        name.starts_with(LOG_FILE_PREFIX) && name.ends_with(LOG_FILE_SUFFIX)
+                    })
                     .unwrap_or(false)
             })
             .collect(),
@@ -134,6 +141,14 @@ fn write_log(level: &str, category: &str, message: String, count: Option<usize>)
     if let Some(app) = app_handle {
         let _ = app.emit(PROCESS_LOG_EVENT, &event);
     }
+
+    // Print to stdout for terminal visibility
+    let timestamp = Utc::now().format("%H:%M:%S");
+    let count_str = event.count.map(|c| format!(" ({})", c)).unwrap_or_default();
+    println!(
+        "[{}] [{}] [{}] {}{}",
+        timestamp, event.level, event.category, event.message, count_str
+    );
 }
 
 fn cleanup_old_logs(keep_days: i64) {

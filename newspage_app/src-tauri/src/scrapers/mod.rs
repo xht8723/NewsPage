@@ -20,6 +20,7 @@ use gcores::GcoresScraperStage;
 use gl_rss::GlRssScraperStage;
 use yys::YysScraperStage;
 
+#[derive(Clone)]
 pub struct ScrapeContext {
     pub selected_regions: Vec<String>,
     pub rss_sources: Vec<FeedSource>,
@@ -60,21 +61,45 @@ fn default_scraper_stages() -> Vec<Box<dyn ScraperStage>> {
 }
 
 pub async fn run_default_scrapers(ctx: &ScrapeContext, stop: &AtomicBool) -> Result<(Vec<StageRunResult>, bool), String> {
-    let mut results: Vec<StageRunResult> = Vec::new();
+    use tokio::task::JoinSet;
 
-    for stage in default_scraper_stages() {
-        if stop.load(Ordering::Relaxed) {
-            return Ok((results, true));
-        }
-        if !stage.should_run(ctx) {
-            continue;
-        }
+    if stop.load(Ordering::Relaxed) {
+        return Ok((Vec::new(), true));
+    }
 
-        let items = stage.run(ctx).await?;
-        results.push(StageRunResult {
-            stage_name: stage.name(),
-            items,
+    let stages: Vec<_> = default_scraper_stages()
+        .into_iter()
+        .filter(|s| s.should_run(ctx))
+        .collect();
+
+    if stages.is_empty() {
+        return Ok((Vec::new(), false));
+    }
+
+    let ctx = ctx.clone();
+    let mut set = JoinSet::new();
+
+    for stage in stages {
+        let ctx = ctx.clone();
+        set.spawn(async move {
+            let name = stage.name();
+            (name, stage.run(&ctx).await)
         });
+    }
+
+    let mut results = Vec::new();
+    while let Some(res) = set.join_next().await {
+        match res {
+            Ok((name, Ok(items))) => {
+                results.push(StageRunResult { stage_name: name, items });
+            }
+            Ok((name, Err(e))) => {
+                eprintln!("[SCRAPER] Stage '{}' failed: {}", name, e);
+            }
+            Err(join_err) => {
+                eprintln!("[SCRAPER] Task panicked: {}", join_err);
+            }
+        }
     }
 
     Ok((results, false))

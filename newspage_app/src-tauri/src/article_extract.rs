@@ -74,13 +74,8 @@ fn decode_google_news_url_offline(article_id: &str) -> Option<String> {
     let url = std::str::from_utf8(url_bytes).ok()?;
 
     if url.starts_with("http://") || url.starts_with("https://") {
-        println!("[gnews-decode] Tier 1 offline decode succeeded: {}", url);
         Some(url.to_string())
     } else {
-        println!(
-            "[gnews-decode] Tier 1 decoded non-URL (likely new format): {}",
-            &url[..url.len().min(30)]
-        );
         None
     }
 }
@@ -96,14 +91,9 @@ async fn decode_google_news_url_api(article_id: &str) -> Option<String> {
         "https://news.google.com/rss/articles/{}",
         article_id
     );
-    println!("[gnews-decode] Tier 2: fetching params from {}", page_url);
 
     let resp = client.get(&page_url).send().await.ok()?;
     if !resp.status().is_success() {
-        println!(
-            "[gnews-decode] Tier 2: params fetch failed with status {}",
-            resp.status()
-        );
         return None;
     }
     let html = resp.text().await.ok()?;
@@ -120,18 +110,9 @@ async fn decode_google_news_url_api(article_id: &str) -> Option<String> {
                 let ts = el.value().attr("data-n-a-ts")?.to_string();
                 (sig, ts)
             }
-            None => {
-                println!("[gnews-decode] Tier 2: data-n-a-sg attribute not found in HTML");
-                return None;
-            }
+            None => return None,
         }
     };
-
-    println!(
-        "[gnews-decode] Tier 2: got signature={}, timestamp={}",
-        &signature[..signature.len().min(20)],
-        timestamp
-    );
 
     // Step 2: Call batchexecute API
     let inner_payload = format!(
@@ -149,10 +130,6 @@ async fn decode_google_news_url_api(article_id: &str) -> Option<String> {
         .ok()?;
 
     if !api_resp.status().is_success() {
-        println!(
-            "[gnews-decode] Tier 2: batchexecute failed with status {}",
-            api_resp.status()
-        );
         return None;
     }
 
@@ -161,10 +138,6 @@ async fn decode_google_news_url_api(article_id: &str) -> Option<String> {
     // Parse response: split on "\n\n", take second part, parse JSON
     // The response format is: )]}\'\n\n<json_array>
     let decoded_url = parse_batchexecute_response(&body);
-    match &decoded_url {
-        Some(url) => println!("[gnews-decode] Tier 2 decoded URL: {}", url),
-        None => println!("[gnews-decode] Tier 2: failed to parse batchexecute response"),
-    }
     decoded_url
 }
 
@@ -221,7 +194,6 @@ pub async fn decode_google_news_url(url: &str) -> Option<String> {
     }
 
     let article_id = extract_article_id(url)?;
-    println!("[gnews-decode] decoding article ID: {}...", &article_id[..article_id.len().min(30)]);
     logging::info(
         "Extract",
         format!("Decoding Google News redirect id {}", &article_id[..article_id.len().min(30)]),
@@ -271,19 +243,16 @@ fn build_client() -> reqwest::Client {
 pub async fn fetch_article_text_and_thumbnail(
     url: &str,
 ) -> Result<(String, Option<String>), String> {
-    println!("[thumbnail] fetching article: {}", url);
     logging::info("Extract", format!("Fetching article content for {}", url), None);
 
     // If this is a Google News URL, decode it to the real publisher URL first.
     let effective_url = if is_google_news_url(url) {
         match decode_google_news_url(url).await {
             Some(real_url) => {
-                println!("[thumbnail] decoded Google News URL -> {}", real_url);
                 logging::info("Extract", "Google News redirect decoded successfully", None);
                 real_url
             }
             None => {
-                println!("[thumbnail] Google News URL decode failed, using original URL");
                 logging::warn("Extract", "Google News redirect decode failed; using original URL", None);
                 url.to_string()
             }
@@ -303,18 +272,12 @@ pub async fn fetch_article_text_and_thumbnail(
         .await
         .map_err(|e| format!("Failed to read response body: {}", e))?;
 
-    println!("[thumbnail] extracting thumbnail from HTML ({} bytes):", html.len());
     logging::info(
         "Extract",
         format!("Received HTML payload ({} bytes); extracting thumbnail and body", html.len()),
         Some(html.len()),
     );
     let thumbnail = extract_thumbnail_from_html(&html, &effective_url);
-
-    match &thumbnail {
-        Some(url) => println!("[thumbnail] extracted thumbnail URL: {}", url),
-        None => println!("[thumbnail] no thumbnail extracted for: {}", effective_url),
-    }
 
     logging::info(
         "Extract",
@@ -331,12 +294,6 @@ pub async fn fetch_article_text_and_thumbnail(
 
     // Check if the extracted text is junk (JS wall, paywall, anti-bot, etc.)
     if let Some(reason) = is_junk_article_text(&result.content_text) {
-        println!(
-            "[article-extract] junk text detected for {}: {} (text: \"{}\")",
-            effective_url,
-            reason,
-            &result.content_text[..result.content_text.len().min(120)]
-        );
         logging::warn(
             "Extract",
             format!("Junk article text detected for {}: {}", effective_url, reason),
@@ -384,76 +341,42 @@ pub fn extract_thumbnail_from_html(html: &str, base_url: &str) -> Option<String>
 
     // 1. Try og:image
     if let Ok(sel) = Selector::parse(r#"meta[property="og:image"]"#) {
-        let mut found_any = false;
         for el in document.select(&sel) {
             if let Some(url) = el.value().attr("content") {
-                found_any = true;
                 let url = url.trim();
-                match check_image_url(url) {
-                    Ok(()) => {
-                        println!("[thumbnail]   og:image -> accepted: {}", url);
-                        return Some(resolve(url));
-                    }
-                    Err(reason) => {
-                        println!("[thumbnail]   og:image -> rejected ({}): {}", reason, url);
-                    }
+                if check_image_url(url).is_ok() {
+                    return Some(resolve(url));
                 }
             }
-        }
-        if !found_any {
-            println!("[thumbnail]   og:image: not found");
         }
     }
 
     // 2. Try twitter:image
     if let Ok(sel) = Selector::parse(r#"meta[name="twitter:image"], meta[name="twitter:image:src"]"#) {
-        let mut found_any = false;
         for el in document.select(&sel) {
             if let Some(url) = el.value().attr("content") {
-                found_any = true;
                 let url = url.trim();
-                match check_image_url(url) {
-                    Ok(()) => {
-                        println!("[thumbnail]   twitter:image -> accepted: {}", url);
-                        return Some(resolve(url));
-                    }
-                    Err(reason) => {
-                        println!("[thumbnail]   twitter:image -> rejected ({}): {}", reason, url);
-                    }
+                if check_image_url(url).is_ok() {
+                    return Some(resolve(url));
                 }
             }
-        }
-        if !found_any {
-            println!("[thumbnail]   twitter:image: not found");
         }
     }
 
     // 3. Try <link rel="image_src">
     if let Ok(sel) = Selector::parse(r#"link[rel="image_src"]"#) {
-        let mut found_any = false;
         for el in document.select(&sel) {
             if let Some(url) = el.value().attr("href") {
-                found_any = true;
                 let url = url.trim();
-                match check_image_url(url) {
-                    Ok(()) => {
-                        println!("[thumbnail]   link[image_src] -> accepted: {}", url);
-                        return Some(resolve(url));
-                    }
-                    Err(reason) => {
-                        println!("[thumbnail]   link[image_src] -> rejected ({}): {}", reason, url);
-                    }
+                if check_image_url(url).is_ok() {
+                    return Some(resolve(url));
                 }
             }
-        }
-        if !found_any {
-            println!("[thumbnail]   link[image_src]: not found");
         }
     }
 
     // 4. Fallback: first <img> in <body>
     if let Ok(sel) = Selector::parse("body img") {
-        let mut found_any = false;
         for el in document.select(&sel) {
             // Prefer src, fall back to data-src (lazy-loaded images)
             let url = el
@@ -461,25 +384,14 @@ pub fn extract_thumbnail_from_html(html: &str, base_url: &str) -> Option<String>
                 .attr("src")
                 .or_else(|| el.value().attr("data-src"));
             if let Some(url) = url {
-                found_any = true;
                 let url = url.trim();
-                match check_image_url(url) {
-                    Ok(()) => {
-                        println!("[thumbnail]   body img -> accepted: {}", url);
-                        return Some(resolve(url));
-                    }
-                    Err(reason) => {
-                        println!("[thumbnail]   body img -> rejected ({}): {}", reason, url);
-                    }
+                if check_image_url(url).is_ok() {
+                    return Some(resolve(url));
                 }
             }
         }
-        if !found_any {
-            println!("[thumbnail]   body img: no <img> tags found in <body>");
-        }
     }
 
-    println!("[thumbnail]   result: no usable image found in HTML");
     None
 }
 

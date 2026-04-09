@@ -69,6 +69,10 @@ impl LLMProvider {
     pub fn options() -> Vec<&'static str> {
         vec!["ollama", "openai", "claude", "gemini"]
     }
+
+    pub fn is_local(&self) -> bool {
+        matches!(self, LLMProvider::Ollama)
+    }
 }
 
 /// Configuration for LLM provider
@@ -125,6 +129,12 @@ pub trait LLMProviderImpl: Send + Sync {
 
     /// Get provider name
     fn provider_name(&self) -> &str;
+
+    /// Returns true if this is a locally-running model (e.g., Ollama)
+    /// which may be resource-constrained and should not receive concurrent requests.
+    fn is_local(&self) -> bool {
+        false
+    }
 }
 
 fn build_translation_prompt(text: &str, source_language: &str, target_language: &str) -> String {
@@ -276,8 +286,6 @@ impl LLMProviderImpl for OllamaProvider {
             ));
         }
 
-        println!("[llm-batch] sending batch of {} articles to Ollama", n);
-
         let response = match ollama.generate(GenerationRequest::new(model.to_string(), prompt)).await {
             Ok(r) => r,
             Err(e) => {
@@ -287,7 +295,6 @@ impl LLMProviderImpl for OllamaProvider {
         };
 
         let full_text = response.response.trim();
-        println!("[llm-batch] received response ({} chars), parsing {} articles", full_text.len(), n);
 
         parse_batch_response(full_text, n)
     }
@@ -331,6 +338,10 @@ impl LLMProviderImpl for OllamaProvider {
 
     fn provider_name(&self) -> &str {
         "Ollama"
+    }
+
+    fn is_local(&self) -> bool {
+        true
     }
 }
 
@@ -423,8 +434,6 @@ impl LLMProviderImpl for OpenAIProvider {
             ));
         }
 
-        println!("[llm-batch] sending batch of {} articles to OpenAI", n);
-
         let client = reqwest::Client::new();
         let req = ChatRequest {
             model: self.model.clone(),
@@ -469,8 +478,6 @@ impl LLMProviderImpl for OpenAIProvider {
             .first()
             .map(|c| c.message.content.as_str())
             .unwrap_or("");
-
-        println!("[llm-batch] received response ({} chars), parsing {} articles", full_text.len(), n);
 
         parse_batch_response(full_text, n)
     }
@@ -658,8 +665,6 @@ impl LLMProviderImpl for ClaudeProvider {
             ));
         }
 
-        println!("[llm-batch] sending batch of {} articles to Claude", n);
-
         let client = reqwest::Client::new();
         let req = ClaudeRequest {
             model: self.model.clone(),
@@ -708,8 +713,6 @@ impl LLMProviderImpl for ClaudeProvider {
             .first()
             .map(|c| c.text.as_str())
             .unwrap_or("");
-
-        println!("[llm-batch] received response ({} chars), parsing {} articles", full_text.len(), n);
 
         parse_batch_response(full_text, n)
     }
@@ -922,8 +925,6 @@ impl LLMProviderImpl for GeminiProvider {
             ));
         }
 
-        println!("[llm-batch] sending batch of {} articles to Gemini", n);
-
         let client = reqwest::Client::new();
         let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
@@ -972,8 +973,6 @@ impl LLMProviderImpl for GeminiProvider {
             .and_then(|c| c.content.parts.first())
             .map(|p| p.text.as_str())
             .unwrap_or("");
-
-        println!("[llm-batch] received response ({} chars), parsing {} articles", full_text.len(), n);
 
         // Parse the response by splitting on ===ARTICLE N=== markers
         parse_batch_response(full_text, n)
@@ -1208,14 +1207,8 @@ fn parse_batch_response(
 
     let mut results = Vec::with_capacity(expected_count);
 
-    for (i, section) in sections.iter().enumerate().take(expected_count) {
+    for section in sections.iter().take(expected_count) {
         let parsed = parse_single_article_section(section);
-        println!(
-            "[llm-batch] article {}: snippet={}chars, summary={}chars",
-            i + 1,
-            parsed.0.len(),
-            parsed.1.len()
-        );
         results.push(Ok(parsed));
     }
 

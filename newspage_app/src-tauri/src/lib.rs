@@ -154,7 +154,7 @@ async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str
         })
         .unwrap_or_else(|| url.clone());
 
-    println!("[thumbnail] downloading: {}", url);
+    
 
     let client = reqwest::Client::builder()
         .user_agent(THUMBNAIL_USER_AGENT)
@@ -179,18 +179,14 @@ async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
-    println!(
-        "[thumbnail] response: status={}, content-type={}",
-        status,
-        content_type.as_deref().unwrap_or("(none)")
-    );
+    
 
     let bytes = response
         .bytes()
         .await
         .map_err(|e| format!("reading thumbnail bytes failed: {}", e))?;
 
-    println!("[thumbnail] received {} bytes", bytes.len());
+    
 
     if bytes.is_empty() {
         return Err(format!(
@@ -208,7 +204,7 @@ async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str
     let file_name = format!("{}.{}", sanitize_filename(article_id), ext);
     let file_path = cache_dir.join(file_name);
 
-    println!("[thumbnail] saving to: {}", file_path.display());
+    
 
     tokio::fs::write(&file_path, &bytes)
         .await
@@ -234,18 +230,12 @@ async fn enrich_media_and_embedding(
     image_search::fill_thumbnail_if_missing(&mut enriched.thumbnail, &search_query).await;
 
     if !enriched.thumbnail.trim().is_empty() {
-        println!("[thumbnail] caching thumbnail for '{}': {}", enriched.id, enriched.thumbnail);
         match cache_thumbnail(image_cache_dir, &enriched.id, &enriched.thumbnail).await {
             Ok(cached_path) => {
-                println!("[thumbnail] cached to: {}", cached_path);
                 enriched.thumbnail = cached_path;
             }
-            Err(err) => {
-                println!("[thumbnail] cache failed for '{}': {}", enriched.id, err);
-            }
+            Err(_) => {}
         }
-    } else {
-        println!("[thumbnail] no thumbnail URL for '{}', skipping cache", enriched.id);
     }
 
     // Generate and store embedding (soft failure — missing embedding degrades gracefully).
@@ -259,13 +249,9 @@ async fn enrich_media_and_embedding(
     };
     match local_embedding::embed_text(&embed_text, Some(local_embedding_model), local_embedding::EmbedPurpose::Passage).await {
         Ok(vec) => {
-            if let Err(e) = db::save_embedding(db_pool, &enriched.id, &vec).await {
-                println!("Embedding save failed for {}: {}", enriched.id, e);
-            }
+            let _ = db::save_embedding(db_pool, &enriched.id, &vec).await;
         }
-        Err(e) => {
-            println!("Embedding generation skipped for '{}': {}", enriched.title, e);
-        }
+        Err(_) => {}
     }
 }
 
@@ -360,10 +346,6 @@ fn emit_enriched_articles_updated(
         emitted_at_utc: Utc::now().to_rfc3339(),
         item: enriched.clone(),
     };
-    println!(
-        "[Event] enriched-articles-updated: current={}, total={}, enriched={}, id={}",
-        event.current, event.total, event.enriched_count, event.item.id
-    );
     logging::info(
         "Enrichment",
         format!(
@@ -712,11 +694,6 @@ async fn run_scrape_stage(
             .and_then(|t| t.elapsed().ok())
             .map(|d| d.as_secs() / 60)
             .unwrap_or(0);
-        println!(
-            "Skipping web scrape — last scrape was {}min ago (cooldown: {}h). Processing DB only.",
-            elapsed_min,
-            cooldown_hours
-        );
         logging::info(
             "Scrape",
             format!(
@@ -737,7 +714,6 @@ async fn run_scrape_stage(
     }
 
     if resolved.selected_regions.is_empty() {
-        println!("Skipping Google News RSS scrape — no regions selected in settings.");
         logging::warn("Scrape", "No regions selected in settings; skipping RSS stage", None);
     }
 
@@ -771,7 +747,6 @@ async fn run_scrape_stage(
     let total_stages = stage_results.len();
 
     for (index, stage_result) in stage_results.iter().enumerate() {
-        println!("Fetched {} items from {}", stage_result.items.len(), stage_result.stage_name);
         logging::info(
             "Scrape",
             format!("{} fetched {} items", stage_result.stage_name, stage_result.items.len()),
@@ -1026,7 +1001,7 @@ async fn run_none_ai_stage(
 async fn run_enrichment_stage(
     app: &tauri::AppHandle,
     state: &AppState,
-    llm: &dyn platform_llm::LLMProviderImpl,
+    llm_config: &platform_llm::LLMConfig,
     image_cache_dir: &Path,
     settings: &ResolvedLlmSettings,
     per_category_limit: i64,
@@ -1036,10 +1011,6 @@ async fn run_enrichment_stage(
         .iter()
         .map(|(_, items)| items.len())
         .sum();
-    println!(
-        "Enriching {} unenriched items this run (up to {} per category, batch size {})",
-            total, per_category_limit, settings.llm_batch_size
-    );
     logging::info(
         "Enrichment",
         format!(
@@ -1073,134 +1044,181 @@ async fn run_enrichment_stage(
         Some(total),
     )?;
 
-    let mut enriched_count = 0;
-    let mut first_error: Option<String> = None;
-    let mut global_index: usize = 0;
-    let mut stopped = false;
+    if state.stop_requested.load(Ordering::Relaxed) {
+        return Ok(EnrichmentStageResult {
+            total,
+            enriched_count: 0,
+            first_error: None,
+            stopped: true,
+        });
+    }
 
-    // Process in language-homogeneous batches so CN/EN do not mix in one LLM call.
-    'outer: for (language, items_to_enrich) in items_to_enrich_by_language {
-        if state.stop_requested.load(Ordering::Relaxed) {
-            stopped = true;
-            emit_process_stage(
-                app,
-                "enrich",
-                "stopped",
-                "Stopped by user",
-                Some(enriched_count),
-                Some(total),
-            )?;
-            break;
-        }
-        logging::info(
-            "Enrichment",
-            format!(
-                "Starting language group '{}' with {} item(s)",
-                language,
-                items_to_enrich.len()
-            ),
-            Some(items_to_enrich.len()),
-        );
+    // Flatten all articles with language association for concurrent extraction
+    let all_articles: Vec<(String, Article)> = items_to_enrich_by_language
+        .iter()
+        .flat_map(|(lang, items)| items.iter().map(|a| (lang.clone(), a.clone())))
+        .collect();
 
-        for batch in items_to_enrich.chunks(settings.llm_batch_size) {
-            if state.stop_requested.load(Ordering::Relaxed) {
-                stopped = true;
-                emit_process_stage(
-                    app,
-                    "enrich",
-                    "stopped",
-                    "Stopped by user",
-                    Some(enriched_count),
-                    Some(total),
-                )?;
-                break 'outer;
-            }
-            let batch_items: Vec<Article> = batch.to_vec();
-            let batch_len = batch_items.len();
+    // Bounded concurrency: workers process chunks sequentially
+    const ARTICLES_PER_WORKER: usize = 5;
+    const MAX_CONCURRENT_WORKERS: usize = 10;
 
-        // Phase 1: Fetch article texts and thumbnails for the batch
-            println!("[batch:{}] fetching text for {} articles...", language, batch_len);
-            logging::info(
-                "Extract",
-                format!(
-                    "Fetching text and thumbnails for '{}' batch of {} article(s)",
-                    language, batch_len
-                ),
-                Some(batch_len),
-            );
-            let mut fetched: Vec<(Article, Result<(String, Option<String>), String>)> =
-                Vec::with_capacity(batch_len);
+    let worker_count = ((all_articles.len() + ARTICLES_PER_WORKER - 1) / ARTICLES_PER_WORKER)
+        .min(MAX_CONCURRENT_WORKERS)
+        .max(1);
+    let chunk_size = (all_articles.len() + worker_count - 1) / worker_count;
 
-            for item in &batch_items {
+    logging::info(
+        "Extract",
+        format!(
+            "Extracting {} article(s) with {} worker(s), {} article(s) per worker",
+            all_articles.len(), worker_count, chunk_size
+        ),
+        Some(all_articles.len()),
+    );
+
+    // Phase 1: Concurrent extraction with bounded workers
+    let mut join_set = tokio::task::JoinSet::new();
+    for chunk in all_articles.chunks(chunk_size) {
+        let chunk_vec: Vec<(String, Article)> = chunk.to_vec();
+        join_set.spawn(async move {
+            let mut results: Vec<(String, Article, Result<(String, Option<String>), String>)> = Vec::new();
+            for (language, article) in chunk_vec {
                 let result = tokio::time::timeout(
                     Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
-                    article_extract::fetch_article_text_and_thumbnail(&item.url),
+                    article_extract::fetch_article_text_and_thumbnail(&article.url),
                 )
                 .await;
-
                 let fetch_result = match result {
                     Ok(r) => r,
                     Err(_) => Err(format!(
                         "Timed out fetching article '{}' after {}s",
-                        item.title, ARTICLE_PROCESS_TIMEOUT_SECS
+                        article.title, ARTICLE_PROCESS_TIMEOUT_SECS
                     )),
                 };
-                fetched.push((item.clone(), fetch_result));
+                results.push((language, article, fetch_result));
+            }
+            results
+        });
+    }
+
+    let mut fetched: Vec<(String, Article, Result<(String, Option<String>), String>)> =
+        Vec::with_capacity(total);
+    while let Some(task_result) = join_set.join_next().await {
+        match task_result {
+            Ok(chunk_results) => {
+                fetched.extend(chunk_results);
+            }
+            Err(e) => {
+                logging::warn("Extract", format!("Worker task panicked: {}", e), None);
+            }
+        }
+    }
+
+    if state.stop_requested.load(Ordering::Relaxed) {
+        return Ok(EnrichmentStageResult {
+            total,
+            enriched_count: 0,
+            first_error: None,
+            stopped: true,
+        });
+    }
+
+    emit_process_stage(
+        app,
+        "extract",
+        "done",
+        "Extraction stage completed",
+        Some(total),
+        Some(total),
+    )?;
+
+    // Regroup fetched results by language
+    let mut by_language: std::collections::HashMap<String, Vec<(Article, Result<(String, Option<String>), String>)>> =
+        std::collections::HashMap::new();
+    for (lang, article, result) in fetched {
+        by_language.entry(lang).or_default().push((article, result));
+    }
+
+    let is_local_llm = llm_config.provider.is_local();
+
+    logging::info(
+        "Enrichment",
+        format!(
+            "LLM provider '{}' - {} concurrency",
+            llm_config.provider.as_str(),
+            if is_local_llm { "sequential" } else { "concurrent" }
+        ),
+        None,
+    );
+
+    if is_local_llm {
+        run_enrichment_stage_sequential(
+            app, state, llm_config, image_cache_dir, settings, total, by_language
+        ).await
+    } else {
+        run_enrichment_stage_concurrent(
+            app, state, llm_config, image_cache_dir, settings, total, by_language
+        ).await
+    }
+}
+
+async fn run_enrichment_stage_sequential(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    llm_config: &platform_llm::LLMConfig,
+    image_cache_dir: &Path,
+    settings: &ResolvedLlmSettings,
+    total: usize,
+    by_language: std::collections::HashMap<String, Vec<(Article, Result<(String, Option<String>), String>)>>,
+) -> Result<EnrichmentStageResult, String> {
+    let llm = platform_llm::create_provider(llm_config)?;
+    let mut enriched_count = 0;
+    let mut first_error: Option<String> = None;
+    let mut global_index: usize = 0;
+
+    for (language, items) in by_language {
+        if state.stop_requested.load(Ordering::Relaxed) {
+            break;
+        }
+
+        logging::info(
+            "Enrichment",
+            format!(
+                "Processing language group '{}' with {} item(s)",
+                language,
+                items.len()
+            ),
+            Some(items.len()),
+        );
+
+        for batch in items.chunks(settings.llm_batch_size) {
+            if state.stop_requested.load(Ordering::Relaxed) {
+                break;
             }
 
-        // Phase 2: Collect successfully fetched articles for batch LLM call
-            let mut llm_inputs: Vec<(usize, String, String)> = Vec::new(); // (batch_index, title, text)
-            for (i, (item, result)) in fetched.iter().enumerate() {
+            let mut llm_inputs: Vec<(usize, String, String)> = Vec::new();
+            for (i, (item, result)) in batch.iter().enumerate() {
                 match result {
                     Ok((text, _)) => {
                         llm_inputs.push((i, item.title.clone(), text.clone()));
                     }
-                    Err(err) => {
-                        // If the item has pre-populated og_content (e.g. RSS description
-                        // fallback text set by the scraper), use it so LLM enrichment can
-                        // still proceed even when the live article fetch fails.
+                    Err(_) => {
                         if !item.og_content.trim().is_empty() {
-                            println!(
-                                "Article fetch failed for '{}', using RSS fallback text ({} chars): {}",
-                                item.title, item.og_content.len(), err
-                            );
-                            logging::info(
-                                "Extract",
-                                format!(
-                                    "Using RSS fallback text for '{}' ({} chars); live fetch error: {}",
-                                    item.title, item.og_content.len(), err
-                                ),
-                                Some(item.og_content.len()),
-                            );
                             llm_inputs.push((i, item.title.clone(), item.og_content.clone()));
-                        } else {
-                            println!("Failed to fetch article text: {}", err);
-                            logging::warn("Extract", format!("Text fetch failed: {}", err), None);
-                            if first_error.is_none() {
-                                first_error = Some(err.clone());
-                            }
+                        } else if first_error.is_none() {
+                            first_error = Some(format!("Text fetch failed for '{}'", item.title));
                         }
                     }
                 }
             }
 
-            emit_process_stage(
-                app,
-                "extract",
-                "running",
-                format!("Extraction batch completed ({})", language),
-                Some(global_index.saturating_add(batch_len).min(total)),
-                Some(total),
-            )?;
-
-        // Call enrich_batch with all successfully fetched articles
             let llm_results = if !llm_inputs.is_empty() {
                 let articles_for_llm: Vec<(String, String)> = llm_inputs
                     .iter()
                     .map(|(_, title, text)| (title.clone(), text.clone()))
                     .collect();
 
-                println!("[batch:{}] calling LLM enrich_batch for {} articles...", language, articles_for_llm.len());
                 logging::info(
                     "Enrichment",
                     format!(
@@ -1225,36 +1243,29 @@ async fn run_enrichment_stage(
                 vec![]
             };
 
-        // Phase 3: Apply results, cache thumbnails, persist
             let mut llm_result_idx = 0;
-            for (i, (item, fetch_result)) in fetched.into_iter().enumerate() {
+            for (i, (item, fetch_result)) in batch.iter().enumerate() {
                 global_index += 1;
 
-            // Check if this item had a successful text fetch
                 let is_in_llm_batch = llm_inputs.iter().any(|(idx, _, _)| *idx == i);
 
                 if !is_in_llm_batch {
-                // Text fetch failed — mark as failed, will retry next run
-                println!("Failed to enrich item (will retry next run): text fetch failed for '{}'", item.title);
-                logging::warn(
-                    "Enrichment",
-                    format!("Skipping '{}' because fetch failed; will retry", item.title),
-                    None,
-                );
-                if first_error.is_none() {
-                    first_error = Some(format!("Text fetch failed for '{}'", item.title));
-                }
+                    logging::warn(
+                        "Enrichment",
+                        format!("Skipping '{}' because fetch failed; will retry", item.title),
+                        None,
+                    );
+                    if first_error.is_none() {
+                        first_error = Some(format!("Text fetch failed for '{}'", item.title));
+                    }
                     continue;
                 }
 
                 let (text, thumbnail) = match fetch_result {
-                    Ok((t, th)) => (t, th),
-                    // Fetch failed but we used og_content as RSS fallback text —
-                    // thumbnail stays as whatever the scraper already set.
+                    Ok((t, th)) => (t.clone(), th.clone()),
                     Err(_) => (item.og_content.clone(), None),
                 };
 
-            // Get the LLM result for this article
                 let llm_result = if llm_result_idx < llm_results.len() {
                     llm_result_idx += 1;
                     llm_results[llm_result_idx - 1].clone()
@@ -1265,7 +1276,7 @@ async fn run_enrichment_stage(
                 match llm_result {
                     Ok((snippet, ai_summary)) => {
                         let mut enriched = apply_enrichment_payload(
-                            item, text, snippet, ai_summary, thumbnail, false,
+                            item.clone(), text, snippet, ai_summary, thumbnail, false,
                         );
                         enriched.enrichment_mode = "ai".to_string();
 
@@ -1289,7 +1300,6 @@ async fn run_enrichment_stage(
                         enriched_count += 1;
 
                         emit_enriched_articles_updated(app, &enriched, global_index, total, enriched_count)?;
-                        println!("Enriched: {}", enriched.title);
                         logging::info(
                             "Enrichment",
                             format!("Enriched '{}' successfully", enriched.title),
@@ -1305,7 +1315,6 @@ async fn run_enrichment_stage(
                         )?;
                     }
                     Err(err) => {
-                        println!("Failed to enrich item (will retry next run): {}", err);
                         logging::warn("Enrichment", format!("LLM enrich failed: {}", err), None);
                         if first_error.is_none() {
                             first_error = Some(err);
@@ -1316,39 +1325,291 @@ async fn run_enrichment_stage(
         }
     }
 
-    if !stopped {
-        emit_process_stage(
-            app,
-            "extract",
-            "done",
-            "Extraction stage completed",
-            Some(total),
-            Some(total),
-        )?;
-        emit_process_stage(
-            app,
-            "enrich",
-            "done",
-            "Enrichment stage completed",
-            Some(enriched_count),
-            Some(total),
-        )?;
-        emit_process_stage(
-            app,
-            "persist",
-            "done",
-            "Persistence stage completed",
-            Some(enriched_count),
-            Some(total),
-        )?;
-    }
+    emit_process_stage(
+        app,
+        "enrich",
+        "done",
+        "Enrichment stage completed",
+        Some(enriched_count),
+        Some(total),
+    )?;
+    emit_process_stage(
+        app,
+        "persist",
+        "done",
+        "Persistence stage completed",
+        Some(enriched_count),
+        Some(total),
+    )?;
 
     Ok(EnrichmentStageResult {
         total,
         enriched_count,
         first_error,
-        stopped,
+        stopped: false,
     })
+}
+
+async fn run_enrichment_stage_concurrent(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    llm_config: &platform_llm::LLMConfig,
+    image_cache_dir: &Path,
+    settings: &ResolvedLlmSettings,
+    total: usize,
+    by_language: std::collections::HashMap<String, Vec<(Article, Result<(String, Option<String>), String>)>>,
+) -> Result<EnrichmentStageResult, String> {
+    const MAX_CONCURRENT_LLM_BATCHES: usize = 5;
+
+    let language_groups: Vec<(String, Vec<(Article, Result<(String, Option<String>), String>)>)> =
+        by_language.into_iter().collect();
+
+    logging::info(
+        "Enrichment",
+        format!(
+            "Starting concurrent LLM enrichment for {} language group(s) with max {} concurrent",
+            language_groups.len(), MAX_CONCURRENT_LLM_BATCHES
+        ),
+        None,
+    );
+
+    emit_process_stage(
+        app,
+        "enrich",
+        "running",
+        "Starting concurrent LLM enrichment",
+        Some(0),
+        Some(total),
+    )?;
+
+    // Phase 2a: Concurrent LLM calls for each language group
+    let mut join_set = tokio::task::JoinSet::new();
+    let batch_size = settings.llm_batch_size;
+    let min_points = settings.min_summary_points;
+    let max_points = settings.max_summary_points;
+
+    for (language, items) in language_groups {
+        let llm_config_clone = llm_config.clone();
+
+        join_set.spawn(async move {
+            let llm = match platform_llm::create_provider(&llm_config_clone) {
+                Ok(p) => p,
+                Err(e) => {
+                    return LanguageGroupResult {
+                        language,
+                        items,
+                        batch_results: vec![],
+                        error: Some(e),
+                    };
+                }
+            };
+
+            let mut batch_results: Vec<(usize, Vec<(usize, Result<(String, String), String>)>)> = Vec::new();
+
+            for (batch_idx, batch) in items.chunks(batch_size).enumerate() {
+                let mut llm_inputs: Vec<(usize, String, String)> = Vec::new();
+                for (i, (item, result)) in batch.iter().enumerate() {
+                    match result {
+                        Ok((text, _)) => {
+                            llm_inputs.push((i, item.title.clone(), text.clone()));
+                        }
+                        Err(_) => {
+                            if !item.og_content.trim().is_empty() {
+                                llm_inputs.push((i, item.title.clone(), item.og_content.clone()));
+                            }
+                        }
+                    }
+                }
+
+                if llm_inputs.is_empty() {
+                    batch_results.push((batch_idx, vec![]));
+                    continue;
+                }
+
+                let articles_for_llm: Vec<(String, String)> = llm_inputs
+                    .iter()
+                    .map(|(_, title, text)| (title.clone(), text.clone()))
+                    .collect();
+
+                let results = llm
+                    .enrich_batch(
+                        &articles_for_llm,
+                        Some(language.as_str()),
+                        min_points,
+                        max_points,
+                    )
+                    .await;
+
+                let mapped_results: Vec<(usize, Result<(String, String), String>)> = llm_inputs
+                    .iter()
+                    .zip(results.into_iter())
+                    .map(|((idx, _, _), r)| (*idx, r))
+                    .collect();
+
+                batch_results.push((batch_idx, mapped_results));
+            }
+
+            LanguageGroupResult {
+                language,
+                items,
+                batch_results,
+                error: None,
+            }
+        });
+    }
+
+    let mut group_results: Vec<LanguageGroupResult> = Vec::new();
+    while let Some(task_result) = join_set.join_next().await {
+        match task_result {
+            Ok(result) => {
+                group_results.push(result);
+            }
+            Err(e) => {
+                logging::warn("Enrichment", format!("LLM task panicked: {}", e), None);
+            }
+        }
+    }
+
+    if state.stop_requested.load(Ordering::Relaxed) {
+        return Ok(EnrichmentStageResult {
+            total,
+            enriched_count: 0,
+            first_error: None,
+            stopped: true,
+        });
+    }
+
+    // Phase 2b: Apply results sequentially (persistence must be sequential)
+    let mut enriched_count = 0;
+    let mut first_error: Option<String> = None;
+    let mut global_index: usize = 0;
+
+    for group in group_results {
+        if state.stop_requested.load(Ordering::Relaxed) {
+            break;
+        }
+
+        if let Some(e) = group.error {
+            if first_error.is_none() {
+                first_error = Some(e);
+            }
+            continue;
+        }
+
+        logging::info(
+            "Enrichment",
+            format!(
+                "Persisting language group '{}' with {} item(s)",
+                group.language,
+                group.items.len()
+            ),
+            Some(group.items.len()),
+);
+
+        for (batch_idx, batch) in group.items.chunks(batch_size).enumerate() {
+            let llm_results_for_batch = group.batch_results.iter()
+                .find(|(idx, _)| *idx == batch_idx)
+                .map(|(_, r)| r.clone())
+                .unwrap_or_default();
+
+            let mut llm_result_iter = llm_results_for_batch.into_iter();
+
+            for (i, (item, fetch_result)) in batch.iter().enumerate() {
+                global_index += 1;
+
+                let (text, thumbnail) = match fetch_result {
+                    Ok((t, th)) => (t.clone(), th.clone()),
+                    Err(_) => (item.og_content.clone(), None),
+                };
+
+                let llm_result = llm_result_iter
+                    .find(|(idx, _)| *idx == i)
+                    .map(|(_, r)| r);
+
+                match llm_result {
+                    Some(Ok((snippet, ai_summary))) => {
+                        let mut enriched = apply_enrichment_payload(
+                            item.clone(), text, snippet, ai_summary, thumbnail, false,
+                        );
+                        enriched.enrichment_mode = "ai".to_string();
+
+                        enrich_media_and_embedding(
+                            &state.db,
+                            image_cache_dir,
+                            &mut enriched,
+                            &settings.local_embedding_model,
+                        )
+                        .await;
+
+                        emit_process_stage(
+                            app,
+                            "persist",
+                            "running",
+                            format!("Persisting '{}'", enriched.title),
+                            Some(global_index),
+                            Some(total),
+                        )?;
+                        persist_enriched_article(&state.db, &enriched).await?;
+                        enriched_count += 1;
+
+                        emit_enriched_articles_updated(app, &enriched, global_index, total, enriched_count)?;
+                        logging::info(
+                            "Enrichment",
+                            format!("Enriched '{}' successfully", enriched.title),
+                            Some(enriched_count),
+                        );
+                    }
+                    Some(Err(err)) => {
+                        logging::warn("Enrichment", format!("LLM enrich failed: {}", err), None);
+                        if first_error.is_none() {
+                            first_error = Some(err);
+                        }
+                    }
+                    None => {
+                        logging::warn(
+                            "Enrichment",
+                            format!("Skipping '{}' because fetch failed", item.title),
+                            None,
+                        );
+                        if first_error.is_none() {
+                            first_error = Some(format!("Text fetch failed for '{}'", item.title));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    emit_process_stage(
+        app,
+        "enrich",
+        "done",
+        "Enrichment stage completed",
+        Some(enriched_count),
+        Some(total),
+    )?;
+    emit_process_stage(
+        app,
+        "persist",
+        "done",
+        "Persistence stage completed",
+        Some(enriched_count),
+        Some(total),
+    )?;
+
+    Ok(EnrichmentStageResult {
+        total,
+        enriched_count,
+        first_error,
+        stopped: false,
+    })
+}
+
+struct LanguageGroupResult {
+    language: String,
+    items: Vec<(Article, Result<(String, Option<String>), String>)>,
+    batch_results: Vec<(usize, Vec<(usize, Result<(String, String), String>)>)>,
+    error: Option<String>,
 }
 
 fn emit_enriched_articles_sync_complete(
@@ -1371,10 +1632,6 @@ fn emit_enriched_articles_sync_complete(
         emitted_at_utc: Utc::now().to_rfc3339(),
     };
 
-    println!(
-        "[Event] Emitting enriched-articles-sync-complete: total={}, enriched={}, failed={}",
-        sync_event.total, sync_event.enriched_count, sync_event.failed_count
-    );
     logging::info(
         "Enrichment",
         format!(
@@ -1385,11 +1642,6 @@ fn emit_enriched_articles_sync_complete(
     );
     app.emit("enriched-articles-sync-complete", &sync_event)
         .map_err(|e| format!("Event emit error: {}", e))?;
-
-    println!(
-        "Enrichment complete: {}/{} items enriched",
-        sync_event.enriched_count, sync_event.total
-    );
     Ok(())
 }
 
@@ -1545,7 +1797,7 @@ async fn get_enriched_articles(
                         .insert(key, v.clone());
                     liked_vecs.push(v);
                 }
-                Err(e) => println!("Skipping liked concept '{}': {}", concept, e),
+                Err(_) => {}
             }
         }
         let mut disliked_vecs: Vec<Vec<f32>> = Vec::new();
@@ -1569,7 +1821,7 @@ async fn get_enriched_articles(
                         .insert(key, v.clone());
                     disliked_vecs.push(v);
                 }
-                Err(e) => println!("Skipping disliked concept '{}': {}", concept, e),
+                Err(_) => {}
             }
         }
 
@@ -2129,10 +2381,6 @@ async fn start_all_action(
                 .collect()
         })
         .unwrap_or_default();
-    println!(
-        "Starting full pipeline action (per-category limit={})…",
-        per_category_limit
-    );
     state.stop_requested.store(false, Ordering::Relaxed);
     emit_process_stage(
         &app,
@@ -2179,17 +2427,14 @@ async fn start_all_action(
     )
     .await?;
     let result = if ai_mode_enabled {
-        let (llm_config, llm) = create_provider_from_resolved(&runtime.resolved, true).await?;
-        println!(
-            "Using LLM provider '{}' with model '{}'",
-            runtime.resolved.llm_provider,
-            llm_config.model
-        );
+        let llm_config = build_llm_config(&runtime.resolved);
+        let llm = platform_llm::create_provider(&llm_config)?;
+        verify_llm_provider_handshake(&runtime.resolved.llm_provider, llm.as_ref(), &llm_config).await?;
 
         run_enrichment_stage(
             &app,
             &state,
-            llm.as_ref(),
+            &llm_config,
             &runtime.image_cache_dir,
             &runtime.resolved,
             per_category_limit,
@@ -2428,8 +2673,6 @@ pub fn run() {
                     Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
                 })?;
             let db_path = format!("sqlite:{}", app_data_dir.join("news.db").to_string_lossy());
-            println!("📁 Database path: {}", db_path);
-            println!("📁 App data directory: {}", app_data_dir.to_string_lossy());
             logging::info(
                 "System",
                 format!("Application started; app data dir is {}", app_data_dir.to_string_lossy()),
@@ -2470,12 +2713,7 @@ pub fn run() {
                             .unwrap_or(false);
                         if !supported {
                             settings_map.insert("sortMode".to_string(), "date".to_string());
-                            if let Ok(json) = serde_json::to_string_pretty(&settings_map) {
-                                let _ = std::fs::write(&settings_path, json);
-                            }
-                            println!(
-                                "Startup check: configured local embedding model is missing or unsupported. Relevance sort was reset to date."
-                            );
+                            let _ = std::fs::write(&settings_path, serde_json::to_string_pretty(&settings_map).unwrap_or_default());
                         }
                     }
                 }
