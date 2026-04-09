@@ -53,6 +53,7 @@ const DEFAULT_LOCAL_EMBEDDING_MODEL: &str = local_embedding::DEFAULT_LOCAL_EMBED
 const DEFAULT_OPENAI_MODEL: &str = "gpt-5.4-mini";
 const DEFAULT_CLAUDE_MODEL: &str = "claude-sonnet-4-6";
 const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
+const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-chat";
 const ARTICLE_PROCESS_TIMEOUT_SECS: u64 = 30;
 const RELEVANCE_UNAVAILABLE_TOKEN: &str = "RELEVANCE_EMBEDDING_UNAVAILABLE";
 const SYSTEM_ALL_TOPICS_FEED_ID: &str = "feed-all";
@@ -82,7 +83,7 @@ async fn verify_llm_provider_handshake(
         .map_err(|e| format!("{} model discovery failed: {}", provider, e))?;
 
     let selected_model = config.model.trim();
-    if !selected_model.is_empty() && !available_models.iter().any(|m| m == selected_model) {
+    if !selected_model.is_empty() && !available_models.is_empty() && !available_models.iter().any(|m| m == selected_model) {
         return Err(format!(
             "{} model '{}' is unavailable. Available models: {}",
             provider,
@@ -422,9 +423,11 @@ struct LlmOverrideArgs {
     openai_api_key: Option<String>,
     claude_api_key: Option<String>,
     gemini_api_key: Option<String>,
+    deepseek_api_key: Option<String>,
     openai_model: Option<String>,
     claude_model: Option<String>,
     gemini_model: Option<String>,
+    deepseek_model: Option<String>,
     ollama_address: Option<String>,
     ollama_model: Option<String>,
     ollama_embedding_model: Option<String>,
@@ -438,9 +441,11 @@ struct ResolvedLlmSettings {
     openai_api_key: String,
     claude_api_key: String,
     gemini_api_key: String,
+    deepseek_api_key: String,
     openai_model: String,
     claude_model: String,
     gemini_model: String,
+    deepseek_model: String,
     ollama_address: String,
     ollama_model: String,
     local_embedding_model: String,
@@ -557,6 +562,14 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
         .get("geminiModel")
         .cloned()
         .unwrap_or_else(|| "gemini-2.5-flash".to_string());
+    let saved_deepseek_api_key = settings_map
+        .get("deepseekApiKey")
+        .cloned()
+        .unwrap_or_default();
+    let saved_deepseek_model = settings_map
+        .get("deepseekModel")
+        .cloned()
+        .unwrap_or_else(|| "deepseek-chat".to_string());
     let saved_selected_regions: Vec<String> = settings_map
         .get("selectedRegions")
         .and_then(|raw| serde_json::from_str(raw).ok())
@@ -568,9 +581,11 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
         openai_api_key: resolve_setting_value(overrides.openai_api_key, saved_openai_api_key),
         claude_api_key: resolve_setting_value(overrides.claude_api_key, saved_claude_api_key),
         gemini_api_key: resolve_setting_value(overrides.gemini_api_key, saved_gemini_api_key),
+        deepseek_api_key: resolve_setting_value(overrides.deepseek_api_key, saved_deepseek_api_key),
         openai_model: resolve_setting_value(overrides.openai_model, saved_openai_model),
         claude_model: resolve_setting_value(overrides.claude_model, saved_claude_model),
         gemini_model: resolve_setting_value(overrides.gemini_model, saved_gemini_model),
+        deepseek_model: resolve_setting_value(overrides.deepseek_model, saved_deepseek_model),
         ollama_address: resolve_setting_value(overrides.ollama_address, saved_ollama_address),
         ollama_model: resolve_setting_value(overrides.ollama_model, saved_ollama_model),
         local_embedding_model: resolve_setting_value(
@@ -634,6 +649,12 @@ fn build_llm_config(settings: &ResolvedLlmSettings) -> platform_llm::LLMConfig {
             api_key: Some(settings.gemini_api_key.clone()),
             endpoint: None,
             model: settings.gemini_model.clone(),
+        },
+        platform_llm::LLMProvider::DeepSeek => platform_llm::LLMConfig {
+            provider: selected_provider,
+            api_key: Some(settings.deepseek_api_key.clone()),
+            endpoint: None,
+            model: settings.deepseek_model.clone(),
         },
     }
 }
@@ -2096,6 +2117,120 @@ async fn set_feed_categories_action(
 }
 
 #[tauri::command]
+async fn list_cloud_models(
+    state: tauri::State<'_, AppState>,
+    provider: String,
+) -> Result<Vec<String>, String> {
+    let cached = db::load_cloud_models(&state.db, &provider)
+        .await
+        .map_err(|e| format!("DB read error: {}", e))?;
+
+    let fetched_at = db::get_cloud_models_fetched_at(&state.db, &provider)
+        .await
+        .map_err(|e| format!("DB read error: {}", e))?;
+
+    let is_fresh = fetched_at.as_ref().map_or(false, |ts| {
+        chrono::DateTime::parse_from_rfc3339(ts)
+            .map(|dt| {
+                let now = chrono::Utc::now();
+                (now - dt.with_timezone(&chrono::Utc)).num_hours() < 24
+            })
+            .unwrap_or(false)
+    });
+
+    if !cached.is_empty() && is_fresh {
+        return Ok(cached);
+    }
+
+    let models_dev_key = match provider.as_str() {
+        "openai" => "openai",
+        "claude" => "anthropic",
+        "gemini" => "google",
+        _ => &provider,
+    };
+
+    let hardcoded_fallback: Vec<String> = match provider.as_str() {
+        "openai" => vec![
+            "gpt-5.4".to_string(),
+            "gpt-5.4-mini".to_string(),
+            "gpt-5.4-nano".to_string(),
+        ],
+        "claude" => vec![
+            "claude-haiku-4-5".to_string(),
+            "claude-sonnet-4-6".to_string(),
+            "claude-opus-4-6".to_string(),
+        ],
+        "gemini" => vec![
+            "gemini-2.5-flash-lite".to_string(),
+            "gemini-2.5-flash".to_string(),
+            "gemini-2.5-pro".to_string(),
+            "gemini-3-flash-preview".to_string(),
+        ],
+        "deepseek" => vec![
+            "deepseek-chat".to_string(),
+            "deepseek-reasoner".to_string(),
+        ],
+        _ => vec![],
+    };
+
+    match reqwest::get("https://models.dev/api.json").await {
+        Ok(response) => {
+            let body = response
+                .text()
+                .await
+                .map_err(|e| format!("Failed to read models.dev response: {}", e))?;
+            let json: serde_json::Value = serde_json::from_str(&body)
+                .map_err(|e| format!("Failed to parse models.dev JSON: {}", e))?;
+
+            let mut model_ids: Vec<String> = Vec::new();
+            if let Some(provider_obj) = json.get(models_dev_key) {
+                if let Some(models_obj) = provider_obj.get("models") {
+                    if let Some(models_map) = models_obj.as_object() {
+                        for (id, _) in models_map {
+                            model_ids.push(id.clone());
+                        }
+                    }
+                }
+            }
+
+            if model_ids.is_empty() {
+                logging::warn(
+                    "models.dev",
+                    format!(
+                        "0 models for provider='{}' (key='{}') — key exists in JSON: {}",
+                        provider,
+                        models_dev_key,
+                        json.get(models_dev_key).is_some()
+                    ),
+                    None,
+                );
+                if !cached.is_empty() {
+                    return Ok(cached);
+                }
+                return Ok(hardcoded_fallback);
+            }
+
+            model_ids.sort();
+
+            let _ = db::save_cloud_models(&state.db, &provider, &model_ids).await;
+            Ok(model_ids)
+        }
+        Err(e) => {
+            logging::warn(
+                "models.dev",
+                format!("network error for '{}': {}", provider, e),
+                None,
+            );
+            if !cached.is_empty() {
+                Ok(cached)
+            } else {
+                Ok(hardcoded_fallback)
+            }
+        }
+    }
+}
+
+#[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     open::that(url).map_err(|e| format!("Failed to open URL: {}", e))
 }
@@ -2121,6 +2256,7 @@ fn default_settings_map() -> HashMap<String, String> {
     map.insert("openaiModel".to_string(), DEFAULT_OPENAI_MODEL.to_string());
     map.insert("claudeModel".to_string(), DEFAULT_CLAUDE_MODEL.to_string());
     map.insert("geminiModel".to_string(), DEFAULT_GEMINI_MODEL.to_string());
+    map.insert("deepseekModel".to_string(), DEFAULT_DEEPSEEK_MODEL.to_string());
     map.insert("selectedRegions".to_string(), "[]".to_string());
     map.insert("sourceBlacklist".to_string(), "[]".to_string());
     // RSS source settings are managed in feed_sources (DB-backed).
@@ -2361,9 +2497,11 @@ async fn start_all_action(
     openai_api_key: Option<String>,
     claude_api_key: Option<String>,
     gemini_api_key: Option<String>,
+    deepseek_api_key: Option<String>,
     openai_model: Option<String>,
     claude_model: Option<String>,
     gemini_model: Option<String>,
+    deepseek_model: Option<String>,
     ollama_address: Option<String>,
     ollama_model: Option<String>,
     local_embedding_model: Option<String>,
@@ -2397,9 +2535,11 @@ async fn start_all_action(
             openai_api_key,
             claude_api_key,
             gemini_api_key,
+            deepseek_api_key,
             openai_model,
             claude_model,
             gemini_model,
+            deepseek_model,
             ollama_address,
             ollama_model,
             ollama_embedding_model: None,
@@ -2475,9 +2615,11 @@ async fn reprocess_article(
     openai_api_key: Option<String>,
     claude_api_key: Option<String>,
     gemini_api_key: Option<String>,
+    deepseek_api_key: Option<String>,
     openai_model: Option<String>,
     claude_model: Option<String>,
     gemini_model: Option<String>,
+    deepseek_model: Option<String>,
     ollama_address: Option<String>,
     ollama_model: Option<String>,
     local_embedding_model: Option<String>,
@@ -2489,9 +2631,11 @@ async fn reprocess_article(
             openai_api_key,
             claude_api_key,
             gemini_api_key,
+            deepseek_api_key,
             openai_model,
             claude_model,
             gemini_model,
+            deepseek_model,
             ollama_address,
             ollama_model,
             ollama_embedding_model: None,
@@ -2557,6 +2701,8 @@ async fn test_provider_connection(provider: String, api_key: Option<String>, end
                 "gpt-5.4-mini".to_string()
             } else if provider == "claude" {
                 "claude-sonnet-4-6".to_string()
+            } else if provider == "deepseek" {
+                "deepseek-chat".to_string()
             } else {
                 "gemini-2.5-flash".to_string()
             }
@@ -2750,7 +2896,8 @@ pub fn run() {
             purge_database,
             list_feed_sources_action,
             upsert_feed_source_action,
-            remove_feed_source_action
+            remove_feed_source_action,
+            list_cloud_models
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

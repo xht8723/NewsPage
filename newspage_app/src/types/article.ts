@@ -74,6 +74,8 @@ export interface UserSettings {
   claudeModel: string;
   geminiApiKey: string;
   geminiModel: string;
+  deepseekApiKey: string;
+  deepseekModel: string;
   selectedRegions: string[];
   sourceBlacklist: string[];
   showFeedDeletionConfirmation: boolean;

@@ -80,6 +80,8 @@ function createDefaultSettings(): UserSettings {
     claudeModel: "claude-sonnet-4-6",
     geminiApiKey: "",
     geminiModel: "gemini-2.5-flash",
+    deepseekApiKey: "",
+    deepseekModel: "deepseek-chat",
     selectedRegions: [],
     sourceBlacklist: [],
     showFeedDeletionConfirmation: true,
@@ -191,7 +193,9 @@ function App(): React.JSX.Element {
       claudeApiKey: "",
       claudeModel: "claude-sonnet-4-6",
       geminiApiKey: "",
-      geminiModel: "gemini-2.5-flash",
+    geminiModel: "gemini-2.5-flash",
+    deepseekApiKey: "",
+    deepseekModel: "deepseek-chat",
       selectedRegions: [],
       sourceBlacklist: [],
       showFeedDeletionConfirmation: true,
@@ -215,6 +219,7 @@ function App(): React.JSX.Element {
   const [localEmbeddingStatus, setLocalEmbeddingStatus] = useState<LocalEmbeddingStatus | null>(null);
   const [isPreparingLocalEmbeddingModel, setIsPreparingLocalEmbeddingModel] = useState(false);
   const [isEmbeddingReady, setIsEmbeddingReady] = useState(false);
+  const [cloudModels, setCloudModels] = useState<Record<string, string[]>>({});
   const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState(DEFAULT_EMBEDDING_MODEL);
   const [startupPhase, setStartupPhase] = useState<StartupPhase>("loading-settings");
   const [startupErrorMessage, setStartupErrorMessage] = useState("");
@@ -335,6 +340,8 @@ function App(): React.JSX.Element {
           claudeModel: saved.claudeModel?.trim() ? saved.claudeModel : defaults.claudeModel,
           geminiApiKey: saved.geminiApiKey ?? defaults.geminiApiKey,
           geminiModel: saved.geminiModel?.trim() ? saved.geminiModel : defaults.geminiModel,
+          deepseekApiKey: saved.deepseekApiKey ?? defaults.deepseekApiKey,
+          deepseekModel: saved.deepseekModel?.trim() ? saved.deepseekModel : defaults.deepseekModel,
           selectedRegions: saved.selectedRegions ? (() => { try { return JSON.parse(saved.selectedRegions) as string[]; } catch { return defaults.selectedRegions; } })() : defaults.selectedRegions,
           sourceBlacklist: parseSourceBlacklist(saved.sourceBlacklist),
           showFeedDeletionConfirmation: saved.showFeedDeletionConfirmation !== "false",
@@ -481,6 +488,32 @@ function App(): React.JSX.Element {
       setIsPreparingLocalEmbeddingModel(false);
     }
   }, [saveSetting]);
+
+  const refreshCloudModels = useCallback(async (provider: string) => {
+    try {
+      const models = await llmService.listCloudModels(provider);
+      setCloudModels((prev) => ({ ...prev, [provider]: models }));
+      const modelKey = `${provider}Model` as keyof UserSettings;
+      const currentModel = settings[modelKey] as string;
+      if (currentModel && !models.includes(currentModel) && models.length > 0) {
+        const nextModel = models[0];
+        setSettings((s) => ({ ...s, [modelKey]: nextModel }));
+        saveSetting(modelKey as string, nextModel);
+      }
+    } catch (e) {
+      console.error(`refreshCloudModels(${provider}) failed:`, e);
+    }
+  }, [settings, saveSetting]);
+
+  const initialCloudFetchDone = useRef(false);
+  useEffect(() => {
+    if (initialCloudFetchDone.current) return;
+    if (startupPhase === "loading-settings") return;
+    initialCloudFetchDone.current = true;
+    for (const p of ["openai", "claude", "gemini", "deepseek"]) {
+      void refreshCloudModels(p);
+    }
+  }, [startupPhase, refreshCloudModels]);
 
   const { news, setNews, fetchEnrichedNews } = useEnrichedArticles({
     selectedFeedId,
@@ -1552,6 +1585,8 @@ function App(): React.JSX.Element {
         onOpenCategoryLimits={() => setShowCategoryLimitsManager(true)}
         feedSources={feedSources}
         onOpenCustomRssFeedSettings={() => setShowCustomRssFeedSettings(true)}
+        cloudModels={cloudModels}
+        refreshCloudModels={refreshCloudModels}
         onClose={() => {
           setShowSettings(false);
           setPurgeConfirmStep(0);

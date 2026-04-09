@@ -21,6 +21,8 @@ function createDefaultSettings(): UserSettings {
     claudeModel: "claude-sonnet-4-6",
     geminiApiKey: "",
     geminiModel: "gemini-2.5-flash",
+    deepseekApiKey: "",
+    deepseekModel: "deepseek-chat",
     selectedRegions: [],
     sourceBlacklist: [],
     showFeedDeletionConfirmation: true,
@@ -85,6 +87,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
           claudeModel: saved.claudeModel?.trim() ? saved.claudeModel : defaults.claudeModel,
           geminiApiKey: saved.geminiApiKey ?? defaults.geminiApiKey,
           geminiModel: saved.geminiModel?.trim() ? saved.geminiModel : defaults.geminiModel,
+          deepseekApiKey: saved.deepseekApiKey ?? defaults.deepseekApiKey,
+          deepseekModel: saved.deepseekModel?.trim() ? saved.deepseekModel : defaults.deepseekModel,
           selectedRegions: saved.selectedRegions ? (() => {
             try {
               return JSON.parse(saved.selectedRegions) as string[];

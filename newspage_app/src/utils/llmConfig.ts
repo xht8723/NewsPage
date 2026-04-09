@@ -1,10 +1,10 @@
 import type { UserSettings } from "../types/article";
 
-type LLMProvider = "ollama" | "openai" | "claude" | "gemini";
+type LLMProvider = "ollama" | "openai" | "claude" | "gemini" | "deepseek";
 
 function normalizedProvider(settings: UserSettings): LLMProvider {
   const provider = settings.llmProvider.trim().toLowerCase();
-  if (provider === "openai" || provider === "claude" || provider === "gemini") {
+  if (provider === "openai" || provider === "claude" || provider === "gemini" || provider === "deepseek") {
     return provider;
   }
   return "ollama";
@@ -21,6 +21,9 @@ export function getSelectedModel(settings: UserSettings): string {
   if (provider === "gemini") {
     return settings.geminiModel;
   }
+  if (provider === "deepseek") {
+    return settings.deepseekModel;
+  }
   return settings.ollamaModel;
 }
 
@@ -35,6 +38,9 @@ export function getSelectedApiKey(settings: UserSettings): string {
   if (provider === "gemini") {
     return settings.geminiApiKey;
   }
+  if (provider === "deepseek") {
+    return settings.deepseekApiKey;
+  }
   return "";
 }
 
@@ -48,9 +54,11 @@ export function buildLLMArgs(settings: UserSettings): {
   openaiApiKey: string;
   claudeApiKey: string;
   geminiApiKey: string;
+  deepseekApiKey: string;
   openaiModel: string;
   claudeModel: string;
   geminiModel: string;
+  deepseekModel: string;
   ollamaAddress: string;
   ollamaModel: string;
   localEmbeddingModel: string;
@@ -62,9 +70,11 @@ export function buildLLMArgs(settings: UserSettings): {
     openaiApiKey: settings.openaiApiKey,
     claudeApiKey: settings.claudeApiKey,
     geminiApiKey: settings.geminiApiKey,
+    deepseekApiKey: settings.deepseekApiKey,
     openaiModel: settings.openaiModel,
     claudeModel: settings.claudeModel,
     geminiModel: settings.geminiModel,
+    deepseekModel: settings.deepseekModel,
     ollamaAddress: settings.ollamaAddress,
     ollamaModel: settings.ollamaModel,
     localEmbeddingModel: settings.localEmbeddingModel,

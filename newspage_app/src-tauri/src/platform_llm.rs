@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 use reqwest::Url;
+use rig::client::CompletionClient;
+use rig::completion::Prompt;
 use serde::{Deserialize, Serialize};
 
 pub fn normalize_ollama_base_url(address: &str) -> Result<String, String> {
@@ -45,6 +47,8 @@ pub enum LLMProvider {
     Claude,
     #[serde(rename = "gemini")]
     Gemini,
+    #[serde(rename = "deepseek")]
+    DeepSeek,
 }
 
 impl LLMProvider {
@@ -54,6 +58,7 @@ impl LLMProvider {
             LLMProvider::OpenAI => "openai",
             LLMProvider::Claude => "claude",
             LLMProvider::Gemini => "gemini",
+            LLMProvider::DeepSeek => "deepseek",
         }
     }
 
@@ -62,12 +67,13 @@ impl LLMProvider {
             "openai" => LLMProvider::OpenAI,
             "claude" => LLMProvider::Claude,
             "gemini" => LLMProvider::Gemini,
+            "deepseek" => LLMProvider::DeepSeek,
             _ => LLMProvider::Ollama,
         }
     }
 
     pub fn options() -> Vec<&'static str> {
-        vec!["ollama", "openai", "claude", "gemini"]
+        vec!["ollama", "openai", "claude", "gemini", "deepseek"]
     }
 
     pub fn is_local(&self) -> bool {
@@ -353,26 +359,22 @@ impl OllamaProvider {
 
 /// OpenAI API provider
 pub struct OpenAIProvider {
-    api_key: String,
+    client: rig::providers::openai::Client,
     model: String,
 }
 
 impl OpenAIProvider {
-    pub fn new(api_key: String, model: String) -> Self {
-        Self { api_key, model }
+    pub fn new(api_key: String, model: String) -> Result<Self, String> {
+        let client = rig::providers::openai::Client::new(&api_key)
+            .map_err(|e| format!("Failed to create OpenAI client: {}", e))?;
+        Ok(Self { client, model })
     }
 }
-
-const OPENAI_MODELS: &[&str] = &[
-    "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-5.4-nano",
-];
 
 #[async_trait]
 impl LLMProviderImpl for OpenAIProvider {
     async fn list_models(&self) -> Result<Vec<String>, String> {
-        Ok(OPENAI_MODELS.iter().map(|s| s.to_string()).collect())
+        Ok(vec![])
     }
 
     async fn enrich(
@@ -400,29 +402,6 @@ impl LLMProviderImpl for OpenAIProvider {
             return vec![];
         }
 
-        #[derive(Serialize, Deserialize)]
-        struct Message {
-            role: String,
-            content: String,
-        }
-
-        #[derive(Serialize)]
-        struct ChatRequest {
-            model: String,
-            messages: Vec<Message>,
-            temperature: f32,
-        }
-
-        #[derive(Deserialize)]
-        struct Choice {
-            message: Message,
-        }
-
-        #[derive(Deserialize)]
-        struct ChatResponse {
-            choices: Vec<Choice>,
-        }
-
         let n = articles.len();
         let mut prompt = build_batch_prompt_header(n, language_hint, min_summary_points, max_summary_points);
 
@@ -434,23 +413,8 @@ impl LLMProviderImpl for OpenAIProvider {
             ));
         }
 
-        let client = reqwest::Client::new();
-        let req = ChatRequest {
-            model: self.model.clone(),
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: prompt,
-            }],
-            temperature: 0.7,
-        };
-
-        let resp = match client
-            .post("https://api.openai.com/v1/chat/completions")
-            .bearer_auth(&self.api_key)
-            .json(&req)
-            .send()
-            .await
-        {
+        let agent = self.client.agent(&self.model).build();
+        let full_text = match agent.prompt(&prompt).await {
             Ok(r) => r,
             Err(e) => {
                 let err = format!("OpenAI batch request failed: {}", e);
@@ -458,28 +422,7 @@ impl LLMProviderImpl for OpenAIProvider {
             }
         };
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            let err = format!("OpenAI batch request failed: status {} body {}", status, body);
-            return articles.iter().map(|_| Err(err.clone())).collect();
-        }
-
-        let chat_resp = match resp.json::<ChatResponse>().await {
-            Ok(r) => r,
-            Err(e) => {
-                let err = format!("Failed to parse OpenAI batch response: {}", e);
-                return articles.iter().map(|_| Err(err.clone())).collect();
-            }
-        };
-
-        let full_text = chat_resp
-            .choices
-            .first()
-            .map(|c| c.message.content.as_str())
-            .unwrap_or("");
-
-        parse_batch_response(full_text, n)
+        parse_batch_response(&full_text, n)
     }
 
     async fn translate_text(
@@ -488,81 +431,24 @@ impl LLMProviderImpl for OpenAIProvider {
         source_language: &str,
         target_language: &str,
     ) -> Result<String, String> {
-        #[derive(Serialize)]
-        struct Message {
-            role: String,
-            content: String,
-        }
-
-        #[derive(Serialize)]
-        struct ChatRequest {
-            model: String,
-            messages: Vec<Message>,
-            temperature: f32,
-        }
-
-        #[derive(Deserialize)]
-        struct ChoiceMessage {
-            content: String,
-        }
-
-        #[derive(Deserialize)]
-        struct Choice {
-            message: ChoiceMessage,
-        }
-
-        #[derive(Deserialize)]
-        struct ChatResponse {
-            choices: Vec<Choice>,
-        }
-
         let prompt = build_translation_prompt(text, source_language, target_language);
-        let client = reqwest::Client::new();
-        let req = ChatRequest {
-            model: self.model.clone(),
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: prompt,
-            }],
-            temperature: 0.1,
-        };
-
-        let resp = client
-            .post("https://api.openai.com/v1/chat/completions")
-            .bearer_auth(&self.api_key)
-            .json(&req)
-            .send()
+        let agent = self.client.agent(&self.model).build();
+        let translated = agent
+            .prompt(&prompt)
             .await
             .map_err(|e| format!("OpenAI translation request failed: {}", e))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("OpenAI translation failed: status {} body {}", status, body));
-        }
-
-        let response = resp
-            .json::<ChatResponse>()
-            .await
-            .map_err(|e| format!("Failed to parse OpenAI translation response: {}", e))?;
-        let translated = response
-            .choices
-            .first()
-            .map(|choice| choice.message.content.trim().to_string())
-            .unwrap_or_default();
-
-        if translated.is_empty() {
+        let trimmed = translated.trim().to_string();
+        if trimmed.is_empty() {
             return Err("OpenAI translation response was empty".to_string());
         }
-        Ok(translated)
+        Ok(trimmed)
     }
 
     async fn test_connection(&self) -> Result<bool, String> {
-        let client = reqwest::Client::new();
-        client
-            .get("https://api.openai.com/v1/models")
-            .bearer_auth(&self.api_key)
-            .send()
+        let agent = self.client.agent(&self.model).build();
+        agent
+            .prompt("Hi")
             .await
             .map_err(|e| format!("Connection failed: {}", e))?;
         Ok(true)
@@ -575,27 +461,22 @@ impl LLMProviderImpl for OpenAIProvider {
 
 /// Anthropic Claude provider
 pub struct ClaudeProvider {
-    api_key: String,
+    client: rig::providers::anthropic::Client,
     model: String,
 }
 
 impl ClaudeProvider {
-    pub fn new(api_key: String, model: String) -> Self {
-        Self { api_key, model }
+    pub fn new(api_key: String, model: String) -> Result<Self, String> {
+        let client = rig::providers::anthropic::Client::new(&api_key)
+            .map_err(|e| format!("Failed to create Claude client: {}", e))?;
+        Ok(Self { client, model })
     }
 }
-
-// Common Claude models (Anthropic doesn't provide a public API to list models)
-const CLAUDE_MODELS: &[&str] = &[
-    "claude-haiku-4-5",
-    "claude-sonnet-4-6",
-    "claude-opus-4-6",
-];
 
 #[async_trait]
 impl LLMProviderImpl for ClaudeProvider {
     async fn list_models(&self) -> Result<Vec<String>, String> {
-        Ok(CLAUDE_MODELS.iter().map(|s| s.to_string()).collect())
+        Ok(vec![])
     }
 
     async fn enrich(
@@ -621,37 +502,6 @@ impl LLMProviderImpl for ClaudeProvider {
     ) -> Vec<Result<(String, String), String>> {
         if articles.is_empty() {
             return vec![];
-        }
-
-        #[derive(Serialize)]
-        struct TextContent {
-            r#type: String,
-            text: String,
-        }
-
-        #[derive(Serialize)]
-        struct Message {
-            role: String,
-            content: Vec<TextContent>,
-        }
-
-        #[derive(Serialize)]
-        struct ClaudeRequest {
-            model: String,
-            max_tokens: u32,
-            messages: Vec<Message>,
-        }
-
-        #[derive(Deserialize)]
-        struct TextBlock {
-            #[serde(rename = "type")]
-            _type: String,
-            text: String,
-        }
-
-        #[derive(Deserialize)]
-        struct ClaudeResponse {
-            content: Vec<TextBlock>,
         }
 
         let n = articles.len();
@@ -665,27 +515,8 @@ impl LLMProviderImpl for ClaudeProvider {
             ));
         }
 
-        let client = reqwest::Client::new();
-        let req = ClaudeRequest {
-            model: self.model.clone(),
-            max_tokens: 2000,
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: vec![TextContent {
-                    r#type: "text".to_string(),
-                    text: prompt,
-                }],
-            }],
-        };
-
-        let resp = match client
-            .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .json(&req)
-            .send()
-            .await
-        {
+        let agent = self.client.agent(&self.model).build();
+        let full_text = match agent.prompt(&prompt).await {
             Ok(r) => r,
             Err(e) => {
                 let err = format!("Claude batch request failed: {}", e);
@@ -693,28 +524,7 @@ impl LLMProviderImpl for ClaudeProvider {
             }
         };
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            let err = format!("Claude batch request failed: status {} body {}", status, body);
-            return articles.iter().map(|_| Err(err.clone())).collect();
-        }
-
-        let claude_resp = match resp.json::<ClaudeResponse>().await {
-            Ok(r) => r,
-            Err(e) => {
-                let err = format!("Failed to parse Claude batch response: {}", e);
-                return articles.iter().map(|_| Err(err.clone())).collect();
-            }
-        };
-
-        let full_text = claude_resp
-            .content
-            .first()
-            .map(|c| c.text.as_str())
-            .unwrap_or("");
-
-        parse_batch_response(full_text, n)
+        parse_batch_response(&full_text, n)
     }
 
     async fn translate_text(
@@ -723,119 +533,24 @@ impl LLMProviderImpl for ClaudeProvider {
         source_language: &str,
         target_language: &str,
     ) -> Result<String, String> {
-        #[derive(Serialize)]
-        struct TextContent {
-            r#type: String,
-            text: String,
-        }
-
-        #[derive(Serialize)]
-        struct Message {
-            role: String,
-            content: Vec<TextContent>,
-        }
-
-        #[derive(Serialize)]
-        struct ClaudeRequest {
-            model: String,
-            max_tokens: u32,
-            messages: Vec<Message>,
-        }
-
-        #[derive(Deserialize)]
-        struct TextBlock {
-            text: String,
-        }
-
-        #[derive(Deserialize)]
-        struct ClaudeResponse {
-            content: Vec<TextBlock>,
-        }
-
         let prompt = build_translation_prompt(text, source_language, target_language);
-        let client = reqwest::Client::new();
-        let req = ClaudeRequest {
-            model: self.model.clone(),
-            max_tokens: 2000,
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: vec![TextContent {
-                    r#type: "text".to_string(),
-                    text: prompt,
-                }],
-            }],
-        };
-
-        let resp = client
-            .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .json(&req)
-            .send()
+        let agent = self.client.agent(&self.model).build();
+        let translated = agent
+            .prompt(&prompt)
             .await
             .map_err(|e| format!("Claude translation request failed: {}", e))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Claude translation failed: status {} body {}", status, body));
-        }
-
-        let response = resp
-            .json::<ClaudeResponse>()
-            .await
-            .map_err(|e| format!("Failed to parse Claude translation response: {}", e))?;
-        let translated = response
-            .content
-            .first()
-            .map(|item| item.text.trim().to_string())
-            .unwrap_or_default();
-
-        if translated.is_empty() {
+        let trimmed = translated.trim().to_string();
+        if trimmed.is_empty() {
             return Err("Claude translation response was empty".to_string());
         }
-        Ok(translated)
+        Ok(trimmed)
     }
 
     async fn test_connection(&self) -> Result<bool, String> {
-        #[derive(Serialize)]
-        struct TextContent {
-            r#type: String,
-            text: String,
-        }
-
-        #[derive(Serialize)]
-        struct Message {
-            role: String,
-            content: Vec<TextContent>,
-        }
-
-        #[derive(Serialize)]
-        struct TestRequest {
-            model: String,
-            max_tokens: u32,
-            messages: Vec<Message>,
-        }
-
-        let client = reqwest::Client::new();
-        let req = TestRequest {
-            model: self.model.clone(),
-            max_tokens: 10,
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: vec![TextContent {
-                    r#type: "text".to_string(),
-                    text: "Hi".to_string(),
-                }],
-            }],
-        };
-
-        client
-            .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .json(&req)
-            .send()
+        let agent = self.client.agent(&self.model).build();
+        agent
+            .prompt("Hi")
             .await
             .map_err(|e| format!("Connection failed: {}", e))?;
         Ok(true)
@@ -848,29 +563,22 @@ impl LLMProviderImpl for ClaudeProvider {
 
 /// Google Gemini provider
 pub struct GeminiProvider {
-    api_key: String,
+    client: rig::providers::gemini::Client,
     model: String,
 }
 
 impl GeminiProvider {
-    pub fn new(api_key: String, model: String) -> Self {
-        Self { api_key, model }
+    pub fn new(api_key: String, model: String) -> Result<Self, String> {
+        let client = rig::providers::gemini::Client::new(&api_key)
+            .map_err(|e| format!("Failed to create Gemini client: {}", e))?;
+        Ok(Self { client, model })
     }
 }
-
-// Common Google Gemini models
-const GEMINI_MODELS: &[&str] = &[
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gemini-3-flash-preview",
-];
 
 #[async_trait]
 impl LLMProviderImpl for GeminiProvider {
     async fn list_models(&self) -> Result<Vec<String>, String> {
-        // Google Gemini has limited public model listing API
-        Ok(GEMINI_MODELS.iter().map(|s| s.to_string()).collect())
+        Ok(vec![])
     }
 
     async fn enrich(
@@ -898,26 +606,10 @@ impl LLMProviderImpl for GeminiProvider {
             return vec![];
         }
 
-        #[derive(Serialize)]
-        struct Part { text: String }
-        #[derive(Serialize)]
-        struct Content { role: String, parts: Vec<Part> }
-        #[derive(Serialize)]
-        struct GeminiRequest { contents: Vec<Content> }
-        #[derive(Deserialize)]
-        struct TextPart { text: String }
-        #[derive(Deserialize)]
-        struct CandidateContent { parts: Vec<TextPart> }
-        #[derive(Deserialize)]
-        struct Candidate { content: CandidateContent }
-        #[derive(Deserialize)]
-        struct GeminiResponse { candidates: Vec<Candidate> }
-
         let n = articles.len();
-            let mut prompt = build_batch_prompt_header(n, language_hint, min_summary_points, max_summary_points);
+        let mut prompt = build_batch_prompt_header(n, language_hint, min_summary_points, max_summary_points);
 
         for (i, (title, text)) in articles.iter().enumerate() {
-            // Truncate text to ~4000 bytes at a valid char boundary
             let truncated = truncate_at_char_boundary(text, 4000);
             prompt.push_str(&format!(
                 "[ARTICLE {}]\nTitle: {}\nText: {}\n\n",
@@ -925,26 +617,8 @@ impl LLMProviderImpl for GeminiProvider {
             ));
         }
 
-        let client = reqwest::Client::new();
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
-            self.model
-        );
-
-        let req = GeminiRequest {
-            contents: vec![Content {
-                role: "user".to_string(),
-                parts: vec![Part { text: prompt }],
-            }],
-        };
-
-        let resp = match client
-            .post(&url)
-            .header("x-goog-api-key", &self.api_key)
-            .json(&req)
-            .send()
-            .await
-        {
+        let agent = self.client.agent(&self.model).build();
+        let full_text = match agent.prompt(&prompt).await {
             Ok(r) => r,
             Err(e) => {
                 let err = format!("Gemini batch request failed: {}", e);
@@ -952,30 +626,7 @@ impl LLMProviderImpl for GeminiProvider {
             }
         };
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            let err = format!("Gemini batch request failed: status {} body {}", status, body);
-            return articles.iter().map(|_| Err(err.clone())).collect();
-        }
-
-        let gemini_resp = match resp.json::<GeminiResponse>().await {
-            Ok(r) => r,
-            Err(e) => {
-                let err = format!("Failed to parse Gemini batch response: {}", e);
-                return articles.iter().map(|_| Err(err.clone())).collect();
-            }
-        };
-
-        let full_text = gemini_resp
-            .candidates
-            .first()
-            .and_then(|c| c.content.parts.first())
-            .map(|p| p.text.as_str())
-            .unwrap_or("");
-
-        // Parse the response by splitting on ===ARTICLE N=== markers
-        parse_batch_response(full_text, n)
+        parse_batch_response(&full_text, n)
     }
 
     async fn translate_text(
@@ -984,138 +635,132 @@ impl LLMProviderImpl for GeminiProvider {
         source_language: &str,
         target_language: &str,
     ) -> Result<String, String> {
-        #[derive(Serialize)]
-        struct Part {
-            text: String,
-        }
-
-        #[derive(Serialize)]
-        struct Content {
-            role: String,
-            parts: Vec<Part>,
-        }
-
-        #[derive(Serialize)]
-        struct GeminiRequest {
-            contents: Vec<Content>,
-        }
-
-        #[derive(Deserialize)]
-        struct TextPart {
-            text: String,
-        }
-
-        #[derive(Deserialize)]
-        struct CandidateContent {
-            parts: Vec<TextPart>,
-        }
-
-        #[derive(Deserialize)]
-        struct Candidate {
-            content: CandidateContent,
-        }
-
-        #[derive(Deserialize)]
-        struct GeminiResponse {
-            candidates: Vec<Candidate>,
-        }
-
         let prompt = build_translation_prompt(text, source_language, target_language);
-        let client = reqwest::Client::new();
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
-            self.model
-        );
-
-        let req = GeminiRequest {
-            contents: vec![Content {
-                role: "user".to_string(),
-                parts: vec![Part { text: prompt }],
-            }],
-        };
-
-        let resp = client
-            .post(&url)
-            .header("x-goog-api-key", &self.api_key)
-            .json(&req)
-            .send()
+        let agent = self.client.agent(&self.model).build();
+        let translated = agent
+            .prompt(&prompt)
             .await
             .map_err(|e| format!("Gemini translation request failed: {}", e))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Gemini translation failed: status {} body {}", status, body));
-        }
-
-        let response = resp
-            .json::<GeminiResponse>()
-            .await
-            .map_err(|e| format!("Failed to parse Gemini translation response: {}", e))?;
-
-        let translated = response
-            .candidates
-            .first()
-            .and_then(|candidate| candidate.content.parts.first())
-            .map(|part| part.text.trim().to_string())
-            .unwrap_or_default();
-
-        if translated.is_empty() {
+        let trimmed = translated.trim().to_string();
+        if trimmed.is_empty() {
             return Err("Gemini translation response was empty".to_string());
         }
-        Ok(translated)
+        Ok(trimmed)
     }
 
     async fn test_connection(&self) -> Result<bool, String> {
-        let client = reqwest::Client::new();
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
-            self.model
-        );
-
-        #[derive(Serialize)]
-        struct Part {
-            text: String,
-        }
-
-        #[derive(Serialize)]
-        struct Content {
-            role: String,
-            parts: Vec<Part>,
-        }
-
-        #[derive(Serialize)]
-        struct TestRequest {
-            contents: Vec<Content>,
-        }
-
-        let req = TestRequest {
-            contents: vec![Content {
-                role: "user".to_string(),
-                parts: vec![Part {
-                    text: "Hi".to_string(),
-                }],
-            }],
-        };
-
-        client
-            .post(&url)
-            .header("x-goog-api-key", &self.api_key)
-            .json(&req)
-            .send()
+        let agent = self.client.agent(&self.model).build();
+        agent
+            .prompt("Hi")
             .await
-            .map_err(|e| format!("Connection failed: {}", e))
-            .and_then(|resp| {
-                if resp.status().is_success() {
-                    Ok(true)
-                } else {
-                    Err(format!("Gemini test failed with status {}", resp.status()))
-                }
-            })
+            .map_err(|e| format!("Connection failed: {}", e))?;
+        Ok(true)
     }
 
     fn provider_name(&self) -> &str {
         "Google Gemini"
+    }
+}
+
+pub struct DeepSeekProvider {
+    client: rig::providers::deepseek::Client,
+    model: String,
+}
+
+impl DeepSeekProvider {
+    pub fn new(api_key: String, model: String) -> Result<Self, String> {
+        let client = rig::providers::deepseek::Client::new(&api_key)
+            .map_err(|e| format!("Failed to create DeepSeek client: {}", e))?;
+        Ok(Self { client, model })
+    }
+}
+
+#[async_trait]
+impl LLMProviderImpl for DeepSeekProvider {
+    async fn list_models(&self) -> Result<Vec<String>, String> {
+        Ok(vec![])
+    }
+
+    async fn enrich(
+        &self,
+        title: &str,
+        text: &str,
+        language_hint: Option<&str>,
+        min_summary_points: u8,
+        max_summary_points: u8,
+    ) -> Result<(String, String), String> {
+        let results = self
+            .enrich_batch(&[(title.to_string(), text.to_string())], language_hint, min_summary_points, max_summary_points)
+            .await;
+        results.into_iter().next().unwrap_or_else(|| Err("No result from batch".to_string()))
+    }
+
+    async fn enrich_batch(
+        &self,
+        articles: &[(String, String)],
+        language_hint: Option<&str>,
+        min_summary_points: u8,
+        max_summary_points: u8,
+    ) -> Vec<Result<(String, String), String>> {
+        if articles.is_empty() {
+            return vec![];
+        }
+
+        let n = articles.len();
+        let mut prompt = build_batch_prompt_header(n, language_hint, min_summary_points, max_summary_points);
+
+        for (i, (title, text)) in articles.iter().enumerate() {
+            let truncated = truncate_at_char_boundary(text, 4000);
+            prompt.push_str(&format!(
+                "[ARTICLE {}]\nTitle: {}\nText: {}\n\n",
+                i + 1, title, truncated
+            ));
+        }
+
+        let agent = self.client.agent(&self.model).build();
+        let full_text = match agent.prompt(&prompt).await {
+            Ok(r) => r,
+            Err(e) => {
+                let err = format!("DeepSeek batch request failed: {}", e);
+                return articles.iter().map(|_| Err(err.clone())).collect();
+            }
+        };
+
+        parse_batch_response(&full_text, n)
+    }
+
+    async fn translate_text(
+        &self,
+        text: &str,
+        source_language: &str,
+        target_language: &str,
+    ) -> Result<String, String> {
+        let prompt = build_translation_prompt(text, source_language, target_language);
+        let agent = self.client.agent(&self.model).build();
+        let translated = agent
+            .prompt(&prompt)
+            .await
+            .map_err(|e| format!("DeepSeek translation request failed: {}", e))?;
+
+        let trimmed = translated.trim().to_string();
+        if trimmed.is_empty() {
+            return Err("DeepSeek translation response was empty".to_string());
+        }
+        Ok(trimmed)
+    }
+
+    async fn test_connection(&self) -> Result<bool, String> {
+        let agent = self.client.agent(&self.model).build();
+        agent
+            .prompt("Hi")
+            .await
+            .map_err(|e| format!("Connection failed: {}", e))?;
+        Ok(true)
+    }
+
+    fn provider_name(&self) -> &str {
+        "DeepSeek"
     }
 }
 
@@ -1134,21 +779,28 @@ pub fn create_provider(config: &LLMConfig) -> Result<Box<dyn LLMProviderImpl>, S
             Ok(Box::new(OpenAIProvider::new(
                 api_key,
                 config.model.clone(),
-            )))
+            )?))
         }
         LLMProvider::Claude => {
             let api_key = config
                 .api_key
                 .clone()
                 .ok_or_else(|| "Claude API key is required".to_string())?;
-            Ok(Box::new(ClaudeProvider::new(api_key, config.model.clone())))
+            Ok(Box::new(ClaudeProvider::new(api_key, config.model.clone())?))
         }
         LLMProvider::Gemini => {
             let api_key = config
                 .api_key
                 .clone()
                 .ok_or_else(|| "Gemini API key is required".to_string())?;
-            Ok(Box::new(GeminiProvider::new(api_key, config.model.clone())))
+            Ok(Box::new(GeminiProvider::new(api_key, config.model.clone())?))
+        }
+        LLMProvider::DeepSeek => {
+            let api_key = config
+                .api_key
+                .clone()
+                .ok_or_else(|| "DeepSeek API key is required".to_string())?;
+            Ok(Box::new(DeepSeekProvider::new(api_key, config.model.clone())?))
         }
     }
 }

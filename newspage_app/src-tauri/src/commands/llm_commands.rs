@@ -60,6 +60,7 @@ pub async fn test_provider_connection(
         "openai" => "gpt-5.4-mini",
         "claude" => "claude-sonnet-4-6",
         "gemini" => "gemini-2.5-flash",
+        "deepseek" => "deepseek-chat",
         _ => "default",
     };
     

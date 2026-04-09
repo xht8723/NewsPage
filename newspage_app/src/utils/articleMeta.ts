@@ -41,6 +41,9 @@ export function getProviderLabel(provider: string): string {
   if (normalized === "gemini") {
     return "Gemini";
   }
+  if (normalized === "deepseek") {
+    return "DeepSeek";
+  }
   return "Ollama";
 }
 

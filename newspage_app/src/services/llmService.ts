@@ -27,4 +27,7 @@ export const llmService = {
 
   listLocalEmbeddingModels: (): Promise<string[]> =>
     invoke("list_local_embedding_models"),
+
+  listCloudModels: (provider: string): Promise<string[]> =>
+    invoke("list_cloud_models", { provider }),
 };

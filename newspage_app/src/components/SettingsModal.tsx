@@ -7,10 +7,7 @@ import { addSourceToBlacklist, normalizeSourceName, removeSourceFromBlacklist } 
 import { NeonCheckbox } from "./NeonCheckbox";
 import {
   AVAILABLE_REGIONS,
-  CLAUDE_MODELS,
   EMBEDDING_MODEL_INFO,
-  GEMINI_MODELS,
-  OPENAI_MODELS,
   type OllamaConnectionState,
 } from "../constants/article";
 import type { FeedSource, LocalEmbeddingStatus, UserSettings } from "../types/article";
@@ -49,6 +46,8 @@ interface SettingsModalProps {
   onScrollConsumed: () => void;
   showOnboardingHints: boolean;
   onDismissHint: (hint: "googleNews" | "rss") => void;
+  cloudModels: Record<string, string[]>;
+  refreshCloudModels: (provider: string) => Promise<void>;
 }
 
 export function SettingsModal({
@@ -84,6 +83,8 @@ export function SettingsModal({
   onScrollConsumed,
   showOnboardingHints,
   onDismissHint,
+  cloudModels,
+  refreshCloudModels,
 }: SettingsModalProps): React.JSX.Element | null {
   const { isMounted, isClosing } = usePanelTransition(showSettings, 170);
 
@@ -816,6 +817,7 @@ export function SettingsModal({
                         <option value="openai">OpenAI</option>
                         <option value="claude">Claude (Anthropic)</option>
                         <option value="gemini">Google Gemini</option>
+                        <option value="deepseek">DeepSeek</option>
                       </select>
                     </div>
 
@@ -931,26 +933,44 @@ export function SettingsModal({
                             }`}
                           />
                         </div>
-                        <div>
-                          <label className="mb-1.5 block text-xs font-medium opacity-70">OpenAI Model</label>
-                          <select
-                            value={settings.openaiModel}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setSettings((s) => ({ ...s, openaiModel: val }));
-                              saveSetting("openaiModel", val);
-                            }}
-                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                              isDarkMode
-                                ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                                : "border-zinc-300 bg-zinc-200 text-zinc-900"
-                            }`}
-                          >
-                            {OPENAI_MODELS.map((model) => (
-                              <option key={model} value={model}>{model}</option>
-                            ))}
-                          </select>
-                        </div>
+                         <div>
+                           <div className="mb-2 flex items-center justify-between gap-2">
+                             <label className="text-xs font-medium opacity-70">OpenAI Model</label>
+                             <button
+                               type="button"
+                               onClick={() => void refreshCloudModels("openai")}
+                               className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                                 isDarkMode
+                                   ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                                   : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
+                               } disabled:opacity-50`}
+                             >
+                               <RefreshCw size={12} />
+                               Refresh
+                             </button>
+                           </div>
+                           <select
+                             value={settings.openaiModel}
+                             onChange={(e) => {
+                               const val = e.target.value;
+                               setSettings((s) => ({ ...s, openaiModel: val }));
+                               saveSetting("openaiModel", val);
+                             }}
+                             className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                               isDarkMode
+                                 ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                                 : "border-zinc-300 bg-zinc-200 text-zinc-900"
+                             }`}
+                           >
+                             {(cloudModels["openai"] || []).length === 0 ? (
+                               <option value={settings.openaiModel}>{settings.openaiModel}</option>
+                             ) : (
+                               (cloudModels["openai"] || []).map((model) => (
+                                 <option key={model} value={model}>{model}</option>
+                               ))
+                             )}
+                           </select>
+                         </div>
                       </>
                     )}
 
@@ -974,26 +994,44 @@ export function SettingsModal({
                             }`}
                           />
                         </div>
-                        <div>
-                          <label className="mb-1.5 block text-xs font-medium opacity-70">Claude Model</label>
-                          <select
-                            value={settings.claudeModel}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setSettings((s) => ({ ...s, claudeModel: val }));
-                              saveSetting("claudeModel", val);
-                            }}
-                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                              isDarkMode
-                                ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                                : "border-zinc-300 bg-zinc-200 text-zinc-900"
-                            }`}
-                          >
-                            {CLAUDE_MODELS.map((model) => (
-                              <option key={model} value={model}>{model}</option>
-                            ))}
-                          </select>
-                        </div>
+                         <div>
+                           <div className="mb-2 flex items-center justify-between gap-2">
+                             <label className="text-xs font-medium opacity-70">Claude Model</label>
+                             <button
+                               type="button"
+                               onClick={() => void refreshCloudModels("claude")}
+                               className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                                 isDarkMode
+                                   ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                                   : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
+                               } disabled:opacity-50`}
+                             >
+                               <RefreshCw size={12} />
+                               Refresh
+                             </button>
+                           </div>
+                           <select
+                             value={settings.claudeModel}
+                             onChange={(e) => {
+                               const val = e.target.value;
+                               setSettings((s) => ({ ...s, claudeModel: val }));
+                               saveSetting("claudeModel", val);
+                             }}
+                             className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                               isDarkMode
+                                 ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                                 : "border-zinc-300 bg-zinc-200 text-zinc-900"
+                             }`}
+                           >
+                             {(cloudModels["claude"] || []).length === 0 ? (
+                               <option value={settings.claudeModel}>{settings.claudeModel}</option>
+                             ) : (
+                               (cloudModels["claude"] || []).map((model) => (
+                                 <option key={model} value={model}>{model}</option>
+                               ))
+                             )}
+                           </select>
+                         </div>
                       </>
                     )}
 
@@ -1017,14 +1055,89 @@ export function SettingsModal({
                             }`}
                           />
                         </div>
+                         <div>
+                           <div className="mb-2 flex items-center justify-between gap-2">
+                             <label className="text-xs font-medium opacity-70">Gemini Model</label>
+                             <button
+                               type="button"
+                               onClick={() => void refreshCloudModels("gemini")}
+                               className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                                 isDarkMode
+                                   ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                                   : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
+                               } disabled:opacity-50`}
+                             >
+                               <RefreshCw size={12} />
+                               Refresh
+                             </button>
+                           </div>
+                           <select
+                             value={settings.geminiModel}
+                             onChange={(e) => {
+                               const val = e.target.value;
+                               setSettings((s) => ({ ...s, geminiModel: val }));
+                               saveSetting("geminiModel", val);
+                             }}
+                             className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                               isDarkMode
+                                 ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                                 : "border-zinc-300 bg-zinc-200 text-zinc-900"
+                             }`}
+                           >
+                             {(cloudModels["gemini"] || []).length === 0 ? (
+                               <option value={settings.geminiModel}>{settings.geminiModel}</option>
+                             ) : (
+                               (cloudModels["gemini"] || []).map((model) => (
+                                 <option key={model} value={model}>{model}</option>
+                               ))
+                             )}
+                           </select>
+                         </div>
+                       </>
+                     )}
+
+                    {settings.llmProvider === "deepseek" && (
+                      <>
                         <div>
-                          <label className="mb-1.5 block text-xs font-medium opacity-70">Gemini Model</label>
-                          <select
-                            value={settings.geminiModel}
+                          <label className="mb-1.5 block text-xs font-medium opacity-70">DeepSeek API Key</label>
+                          <input
+                            type="password"
+                            placeholder="sk-..."
+                            value={settings.deepseekApiKey}
                             onChange={(e) => {
                               const val = e.target.value;
-                              setSettings((s) => ({ ...s, geminiModel: val }));
-                              saveSetting("geminiModel", val);
+                              setSettings((s) => ({ ...s, deepseekApiKey: val }));
+                              saveSetting("deepseekApiKey", val);
+                            }}
+                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+                              isDarkMode
+                                ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                                : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
+                            }`}
+                          />
+                        </div>
+                        <div>
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <label className="text-xs font-medium opacity-70">DeepSeek Model</label>
+                            <button
+                              type="button"
+                              onClick={() => void refreshCloudModels("deepseek")}
+                              className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
+                                isDarkMode
+                                  ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                                  : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
+                              } disabled:opacity-50`}
+                            >
+                              <RefreshCw size={12} />
+                              Refresh
+                            </button>
+                          </div>
+                          <select
+                            value={settings.deepseekModel}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSettings((s) => ({ ...s, deepseekModel: val }));
+                              saveSetting("deepseekModel", val);
                             }}
                             className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
                               isDarkMode
@@ -1032,20 +1145,24 @@ export function SettingsModal({
                                 : "border-zinc-300 bg-zinc-200 text-zinc-900"
                             }`}
                           >
-                            {GEMINI_MODELS.map((model) => (
-                              <option key={model} value={model}>{model}</option>
-                            ))}
+                            {(cloudModels["deepseek"] || []).length === 0 ? (
+                              <option value={settings.deepseekModel}>{settings.deepseekModel}</option>
+                            ) : (
+                              (cloudModels["deepseek"] || []).map((model) => (
+                                <option key={model} value={model}>{model}</option>
+                              ))
+                            )}
                           </select>
                         </div>
                       </>
                     )}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
+                   </div>
+                 </div>
+               )}
+             </div>
+           </div>
 
-          <div>
+           <div>
             <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-red-500">Danger Zone</p>
             <div className={`rounded-xl border border-red-500/30 p-4 ${isDarkMode ? "bg-red-950/20" : "bg-red-50"}`}>
               <p className="mb-1 text-sm font-semibold">Clean Reset</p>

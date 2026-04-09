@@ -28,6 +28,8 @@ export interface StartAllRequest {
   claudeModel?: string;
   geminiApiKey?: string;
   geminiModel?: string;
+  deepseekApiKey?: string;
+  deepseekModel?: string;
   [key: string]: unknown;
 }
 
@@ -42,6 +44,8 @@ export interface ReprocessArticleRequest {
   claudeModel?: string;
   geminiApiKey?: string;
   geminiModel?: string;
+  deepseekApiKey?: string;
+  deepseekModel?: string;
   [key: string]: unknown;
 }
 

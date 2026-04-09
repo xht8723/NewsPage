@@ -174,6 +174,7 @@ let pool = SqlitePoolOptions::new()
 .await?;
 create_article_schema(&pool).await?;
 create_feed_tables(&pool).await?;
+create_cloud_models_table(&pool).await?;
 seed_default_feeds(&pool).await?;
 logging::info("DB", format!("Initialized SQLite database at {}", db_path), None);
 Ok(pool)
@@ -743,6 +744,57 @@ pub async fn count_visible_feeds(pool: &SqlitePool) -> Result<i64, sqlx::Error> 
     sqlx::query_scalar("SELECT COUNT(1) FROM feed_definitions WHERE is_visible = 1")
         .fetch_one(pool)
         .await
+}
+
+pub async fn create_cloud_models_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS cloud_models (
+            provider TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (provider, model_id)
+        )",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn save_cloud_models(pool: &SqlitePool, provider: &str, model_ids: &[String]) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM cloud_models WHERE provider = ?1")
+        .bind(provider)
+        .execute(&mut *tx)
+        .await?;
+    for model_id in model_ids {
+        sqlx::query("INSERT INTO cloud_models (provider, model_id) VALUES (?1, ?2)")
+            .bind(provider)
+            .bind(model_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn load_cloud_models(pool: &SqlitePool, provider: &str) -> Result<Vec<String>, sqlx::Error> {
+    let rows = sqlx::query_scalar::<_, String>(
+        "SELECT model_id FROM cloud_models WHERE provider = ?1 ORDER BY model_id",
+    )
+    .bind(provider)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn get_cloud_models_fetched_at(pool: &SqlitePool, provider: &str) -> Result<Option<String>, sqlx::Error> {
+    let row = sqlx::query_scalar::<_, String>(
+        "SELECT MAX(fetched_at) FROM cloud_models WHERE provider = ?1",
+    )
+    .bind(provider)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
 }
 
 pub async fn create_article_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
