@@ -1052,34 +1052,6 @@ pub async fn list_unenriched_languages_by_category(
     Ok(languages)
 }
 
-pub async fn get_unenriched_articles_by_category(
-    pool: &SqlitePool,
-    category: &str,
-    limit: i64,
-) -> Result<Vec<Article>, sqlx::Error> {
-    let rows = sqlx::query(
-        "SELECT a.id, a.title, a.url, a.date, a.source_name, a.source_icon, a.authors,
-                a.language, a.thumbnail, a.category, a.article_type
-         FROM articles a
-         LEFT JOIN enriched_articles e ON a.id = e.article_id
-         WHERE e.article_id IS NULL AND a.category = ?1
-         ORDER BY a.date DESC
-         LIMIT ?2",
-    )
-    .bind(category)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
-
-    let items = rows.iter().map(row_to_article).collect::<Vec<Article>>();
-    logging::info(
-        "DB",
-        format!("Loaded {} unenriched article(s) for category '{}'", items.len(), category),
-        Some(items.len()),
-    );
-    Ok(items)
-}
-
 pub async fn get_unenriched_articles_by_category_and_language(
     pool: &SqlitePool,
     category: &str,
@@ -1143,96 +1115,6 @@ pub async fn list_articles(pool: &SqlitePool, limit: i64, offset: i64) -> Result
     .fetch_all(pool)
     .await?;
     Ok(rows.iter().map(row_to_article).collect())
-}
-
-pub async fn get_articles_by_category(
-    pool: &SqlitePool,
-    category: &str,
-    limit: i64,
-    offset: i64,
-) -> Result<Vec<Article>, sqlx::Error> {
-    let rows = sqlx::query(
-        "SELECT a.id, a.title, a.url, a.date, a.source_name, a.source_icon, a.authors,
-                a.language, a.thumbnail, a.category, a.article_type,
-                e.ai_summary, e.og_content, e.snippet, e.enrichment_mode
-         FROM articles a
-         INNER JOIN enriched_articles e ON a.id = e.article_id
-         WHERE a.category = ?1
-         ORDER BY a.date DESC
-         LIMIT ?2 OFFSET ?3",
-    )
-    .bind(category)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows.iter().map(row_to_article).collect())
-}
-
-pub async fn get_articles_on_date(pool: &SqlitePool, date: &str) -> Result<Vec<Article>, sqlx::Error> {
-    let rows = sqlx::query(
-        "SELECT a.id, a.title, a.url, a.date, a.source_name, a.source_icon, a.authors,
-                a.language, a.thumbnail, a.category, a.article_type,
-                e.ai_summary, e.og_content, e.snippet, e.enrichment_mode
-         FROM articles a
-         INNER JOIN enriched_articles e ON a.id = e.article_id
-         WHERE a.date = ?1
-         ORDER BY a.date DESC",
-    )
-    .bind(date)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows.iter().map(row_to_article).collect())
-}
-
-pub async fn search_articles_by_title(
-    pool: &SqlitePool,
-    keyword: &str,
-    limit: i64,
-    offset: i64,
-) -> Result<Vec<Article>, sqlx::Error> {
-    let pattern = format!("%{}%", keyword);
-    let rows = sqlx::query(
-        "SELECT a.id, a.title, a.url, a.date, a.source_name, a.source_icon, a.authors,
-                a.language, a.thumbnail, a.category, a.article_type,
-                e.ai_summary, e.og_content, e.snippet, e.enrichment_mode
-         FROM articles a
-         INNER JOIN enriched_articles e ON a.id = e.article_id
-         WHERE a.title LIKE ?1
-         ORDER BY a.date DESC
-         LIMIT ?2 OFFSET ?3",
-    )
-    .bind(pattern)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows.iter().map(row_to_article).collect())
-}
-
-pub async fn update_summary(
-    pool: &SqlitePool,
-    id: &str,
-    ai_summary: &str,
-) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query(
-        "UPDATE enriched_articles
-         SET ai_summary = ?1
-         WHERE article_id = ?2",
-    )
-    .bind(ai_summary)
-    .bind(id)
-    .execute(pool)
-    .await?;
-    Ok(result.rows_affected() > 0)
-}
-
-pub async fn delete_article_by_id(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query("DELETE FROM articles WHERE id = ?1")
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected() > 0)
 }
 
 // ─── Feed sources ─────────────────────────────────────────────────────────────

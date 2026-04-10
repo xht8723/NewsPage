@@ -36,12 +36,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 
 pub mod article_extract;
-// pub mod commands; // Created for incremental refactoring - currently uses existing lib.rs implementations
 pub mod db;
 pub mod id_generator;
 pub mod image_search;
 pub mod article;
-pub mod repositories;
 pub mod scrapers;
 pub mod platform_llm;
 pub mod local_embedding;
@@ -215,14 +213,10 @@ async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str
 }
 
 async fn enrich_media_and_embedding(
-    db_pool: &SqlitePool,
     image_cache_dir: &Path,
     enriched: &mut Article,
     local_embedding_model: &str,
-) {
-    // If thumbnail is missing or low quality, search DuckDuckGo for a replacement.
-    // In AI mode the snippet is available and makes a richer query; in None-AI mode
-    // snippet is empty so the title is used.
+) -> Option<Vec<f32>> {
     let search_query = if enriched.snippet.trim().is_empty() {
         enriched.title.clone()
     } else {
@@ -239,8 +233,6 @@ async fn enrich_media_and_embedding(
         }
     }
 
-    // Generate and store embedding (soft failure — missing embedding degrades gracefully).
-    // In None-AI mode snippets are intentionally empty, so fall back to title-only input.
     let trimmed_title = enriched.title.trim();
     let trimmed_snippet = enriched.snippet.trim();
     let embed_text = if trimmed_snippet.is_empty() {
@@ -249,10 +241,11 @@ async fn enrich_media_and_embedding(
         format!("{} {}", trimmed_title, trimmed_snippet)
     };
     match local_embedding::embed_text(&embed_text, Some(local_embedding_model), local_embedding::EmbedPurpose::Passage).await {
-        Ok(vec) => {
-            let _ = db::save_embedding(db_pool, &enriched.id, &vec).await;
+        Ok(vec) => Some(vec),
+        Err(e) => {
+            logging::warn("Embedding", format!("Failed to generate embedding for '{}' (model='{}'): {}", enriched.title, local_embedding_model, e), None);
+            None
         }
-        Err(_) => {}
     }
 }
 
@@ -413,7 +406,6 @@ struct AppState {
     last_scrape: Mutex<Option<SystemTime>>,
     preference_embedding_cache: Mutex<HashMap<String, Vec<f32>>>,
     translation_cache: Mutex<HashMap<String, String>>,
-    settings_path: PathBuf,
     stop_requested: AtomicBool,
 }
 
@@ -430,7 +422,6 @@ struct LlmOverrideArgs {
     deepseek_model: Option<String>,
     ollama_address: Option<String>,
     ollama_model: Option<String>,
-    ollama_embedding_model: Option<String>,
     local_embedding_model: Option<String>,
     min_summary_points: Option<u8>,
     max_summary_points: Option<u8>,
@@ -590,9 +581,7 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
         ollama_address: resolve_setting_value(overrides.ollama_address, saved_ollama_address),
         ollama_model: resolve_setting_value(overrides.ollama_model, saved_ollama_model),
         local_embedding_model: resolve_setting_value(
-            overrides
-                .local_embedding_model
-                .or(overrides.ollama_embedding_model),
+            overrides.local_embedding_model,
             saved_local_embedding_model,
         ),
         selected_regions: saved_selected_regions,
@@ -986,8 +975,7 @@ async fn run_none_ai_stage(
             enriched.ai_summary.clear();
             enriched.enrichment_mode = "none".to_string();
 
-            enrich_media_and_embedding(
-                &state.db,
+            let embedding = enrich_media_and_embedding(
                 image_cache_dir,
                 &mut enriched,
                 &settings.local_embedding_model,
@@ -995,6 +983,13 @@ async fn run_none_ai_stage(
             .await;
 
             persist_enriched_article(&state.db, &enriched).await?;
+
+            if let Some(vec) = embedding {
+                if let Err(e) = db::save_embedding(&state.db, &enriched.id, &vec).await {
+                    logging::warn("Embedding", format!("Failed to save embedding for '{}': {}", enriched.title, e), None);
+                }
+            }
+
             enriched_count += 1;
 
             emit_enriched_articles_updated(app, &enriched.id, global_index, total, enriched_count)?;
@@ -1339,8 +1334,7 @@ async fn run_enrichment_stage_sequential(
                         );
                         enriched.enrichment_mode = "ai".to_string();
 
-                        enrich_media_and_embedding(
-                            &state.db,
+                        let embedding = enrich_media_and_embedding(
                             image_cache_dir,
                             &mut enriched,
                             &settings.local_embedding_model,
@@ -1356,6 +1350,13 @@ async fn run_enrichment_stage_sequential(
                             Some(total),
                         )?;
                         persist_enriched_article(&state.db, &enriched).await?;
+
+                        if let Some(vec) = embedding {
+                            if let Err(e) = db::save_embedding(&state.db, &enriched.id, &vec).await {
+                                logging::warn("Embedding", format!("Failed to save embedding for '{}': {}", enriched.title, e), None);
+                            }
+                        }
+
                         enriched_count += 1;
 
                         emit_enriched_articles_updated(app, &enriched.id, global_index, total, enriched_count)?;
@@ -1647,8 +1648,7 @@ async fn run_enrichment_stage_concurrent(
                         );
                         enriched.enrichment_mode = "ai".to_string();
 
-                        enrich_media_and_embedding(
-                            &state.db,
+                        let embedding = enrich_media_and_embedding(
                             image_cache_dir,
                             &mut enriched,
                             &settings.local_embedding_model,
@@ -1664,6 +1664,13 @@ async fn run_enrichment_stage_concurrent(
                             Some(total),
                         )?;
                         persist_enriched_article(&state.db, &enriched).await?;
+
+                        if let Some(vec) = embedding {
+                            if let Err(e) = db::save_embedding(&state.db, &enriched.id, &vec).await {
+                                logging::warn("Embedding", format!("Failed to save embedding for '{}': {}", enriched.title, e), None);
+                            }
+                        }
+
                         enriched_count += 1;
 
                         emit_enriched_articles_updated(app, &enriched.id, global_index, total, enriched_count)?;
@@ -1792,242 +1799,144 @@ fn is_on_utc_day(date_value: &str, target_utc_day: &str) -> bool {
 #[tauri::command]
 async fn get_enriched_articles(
     state: tauri::State<'_, AppState>,
-    feed_id: Option<String>,
-    category: Option<String>,
     date: Option<String>,
     limit: Option<i64>,
-    offset: Option<i64>,
-    sort_by: Option<String>,
-    liked_concepts: Option<Vec<String>>,
-    disliked_concepts: Option<Vec<String>>,
-    local_embedding_model: Option<String>,
 ) -> Result<Vec<RankedArticle>, String> {
-    let limit = limit.unwrap_or(300).clamp(1, 1000);
-    let offset = offset.unwrap_or(0).max(0);
+    let limit = limit.unwrap_or(1000).clamp(1, 2000);
 
-    let feed_id = feed_id
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    let category = category
-        .map(|value| value.trim().to_lowercase())
-        .filter(|value| !value.is_empty());
     let date = date
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
 
-    let sort_mode = sort_by.as_deref().unwrap_or("date");
+    let mut items = db::list_articles(&state.db, limit, 0)
+        .await
+        .map_err(|e| format!("DB read error: {}", e))?;
+
+    if let Some(ref date_utc_day) = date {
+        items.retain(|item| is_on_utc_day(&item.date, date_utc_day));
+    }
+
+    Ok(items
+        .into_iter()
+        .map(|item| RankedArticle { item, preference_score: 0.0 })
+        .collect())
+}
+
+#[tauri::command]
+async fn compute_preference_scores(
+    state: tauri::State<'_, AppState>,
+    article_ids: Vec<String>,
+    liked_concepts: Vec<String>,
+    disliked_concepts: Vec<String>,
+    local_embedding_model: String,
+) -> Result<Vec<(String, f32)>, String> {
     let liked: Vec<String> = liked_concepts
-        .unwrap_or_default()
         .into_iter()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
     let disliked: Vec<String> = disliked_concepts
-        .unwrap_or_default()
         .into_iter()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
 
-    let use_scoring = sort_mode == "score" && (!liked.is_empty() || !disliked.is_empty());
-    let settings_map = read_settings_map(&state.settings_path);
-    let source_blacklist = parse_source_blacklist(&settings_map);
-    let feed_categories = if category.is_none() {
-        if let Some(ref selected_feed_id) = feed_id {
-            if selected_feed_id == SYSTEM_ALL_TOPICS_FEED_ID {
-                // The system All feed always aggregates persisted articles across categories.
-                None
-            } else {
-                let (news_cats, rss_cats) = db::list_feed_categories(&state.db, selected_feed_id)
-                    .await
-                    .map_err(|e| format!("DB feed topic read error: {}", e))?;
-                let news_set: HashSet<String> = news_cats.into_iter().collect();
-                let rss_set: HashSet<String> = rss_cats.into_iter().collect();
-                Some((news_set, rss_set))
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    if category.is_none() && matches!(feed_categories.as_ref(), Some((n, r)) if n.is_empty() && r.is_empty()) {
+    if liked.is_empty() && disliked.is_empty() {
         return Ok(vec![]);
     }
 
-    if use_scoring {
-        let embedding_model = local_embedding_model
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| DEFAULT_LOCAL_EMBEDDING_MODEL.to_string());
+    let embedding_model = local_embedding_model
+        .trim()
+        .to_string();
+    let embedding_model = if embedding_model.is_empty() {
+        DEFAULT_LOCAL_EMBEDDING_MODEL.to_string()
+    } else {
+        embedding_model
+    };
 
-        if let Err(e) = local_embedding::health_check(Some(&embedding_model)).await {
-            return Err(format!(
-                "{}: Relevance sort unavailable because local embedding engine failed ({})",
-                RELEVANCE_UNAVAILABLE_TOKEN, e
-            ));
+    if let Err(e) = local_embedding::health_check(Some(&embedding_model)).await {
+        return Err(format!(
+            "{}: Relevance sort unavailable because local embedding engine failed ({})",
+            RELEVANCE_UNAVAILABLE_TOKEN, e
+        ));
+    }
+
+    let cache_prefix = format!("candle::{}", embedding_model.to_ascii_lowercase());
+
+    let mut liked_vecs: Vec<Vec<f32>> = Vec::new();
+    for concept in &liked {
+        let key = format!(
+            "{}::{}::liked::{}",
+            cache_prefix,
+            embedding_model.to_ascii_lowercase(),
+            concept.trim().to_ascii_lowercase()
+        );
+        if let Some(cached) = state.preference_embedding_cache.lock().unwrap().get(&key).cloned() {
+            liked_vecs.push(cached);
+            continue;
         }
+        match local_embedding::embed_text(concept, Some(&embedding_model), local_embedding::EmbedPurpose::Query).await {
+            Ok(v) => {
+                state
+                    .preference_embedding_cache
+                    .lock()
+                    .unwrap()
+                    .insert(key, v.clone());
+                liked_vecs.push(v);
+            }
+            Err(_) => {}
+        }
+    }
+    let mut disliked_vecs: Vec<Vec<f32>> = Vec::new();
+    for concept in &disliked {
+        let key = format!(
+            "{}::{}::disliked::{}",
+            cache_prefix,
+            embedding_model.to_ascii_lowercase(),
+            concept.trim().to_ascii_lowercase()
+        );
+        if let Some(cached) = state.preference_embedding_cache.lock().unwrap().get(&key).cloned() {
+            disliked_vecs.push(cached);
+            continue;
+        }
+        match local_embedding::embed_text(concept, Some(&embedding_model), local_embedding::EmbedPurpose::Query).await {
+            Ok(v) => {
+                state
+                    .preference_embedding_cache
+                    .lock()
+                    .unwrap()
+                    .insert(key, v.clone());
+                disliked_vecs.push(v);
+            }
+            Err(_) => {}
+        }
+    }
 
-        let cache_prefix = format!("candle::{}", embedding_model.to_ascii_lowercase());
+    if liked_vecs.is_empty() && disliked_vecs.is_empty() {
+        return Err(format!(
+            "{}: Relevance sort unavailable because preference embeddings could not be generated",
+            RELEVANCE_UNAVAILABLE_TOKEN
+        ));
+    }
 
-        // Fetch all articles with embeddings (no LIMIT — scoring needs the full set).
-        let rows = db::get_articles_with_embeddings(
-            &state.db,
-            category.as_deref(),
-            10_000,
-            0,
-        )
+    let id_set: HashSet<String> = article_ids.into_iter().collect();
+    let rows = db::get_articles_with_embeddings(&state.db, None, 10_000, 0)
         .await
         .map_err(|e| format!("DB read error: {}", e))?;
 
-        // Generate preference embeddings (one per concept string).
-        let mut liked_vecs: Vec<Vec<f32>> = Vec::new();
-        for concept in &liked {
-            let key = format!(
-                "{}::{}::liked::{}",
-                cache_prefix,
-                embedding_model.to_ascii_lowercase(),
-                concept.trim().to_ascii_lowercase()
-            );
-            if let Some(cached) = state.preference_embedding_cache.lock().unwrap().get(&key).cloned() {
-                liked_vecs.push(cached);
-                continue;
-            }
-            match local_embedding::embed_text(concept, Some(&embedding_model), local_embedding::EmbedPurpose::Query).await {
-                Ok(v) => {
-                    state
-                        .preference_embedding_cache
-                        .lock()
-                        .unwrap()
-                        .insert(key, v.clone());
-                    liked_vecs.push(v);
-                }
-                Err(_) => {}
-            }
-        }
-        let mut disliked_vecs: Vec<Vec<f32>> = Vec::new();
-        for concept in &disliked {
-            let key = format!(
-                "{}::{}::disliked::{}",
-                cache_prefix,
-                embedding_model.to_ascii_lowercase(),
-                concept.trim().to_ascii_lowercase()
-            );
-            if let Some(cached) = state.preference_embedding_cache.lock().unwrap().get(&key).cloned() {
-                disliked_vecs.push(cached);
-                continue;
-            }
-            match local_embedding::embed_text(concept, Some(&embedding_model), local_embedding::EmbedPurpose::Query).await {
-                Ok(v) => {
-                    state
-                        .preference_embedding_cache
-                        .lock()
-                        .unwrap()
-                        .insert(key, v.clone());
-                    disliked_vecs.push(v);
-                }
-                Err(_) => {}
-            }
-        }
+    let scores: Vec<(String, f32)> = rows
+        .into_iter()
+        .filter(|(item, _)| id_set.contains(&item.id))
+        .map(|(item, emb)| {
+            let score = emb
+                .as_deref()
+                .map(|v| article_preference_score(v, &liked_vecs, &disliked_vecs))
+                .unwrap_or(0.0);
+            (item.id, score)
+        })
+        .collect();
 
-        // If all preference embeddings fail, keep the current UI ordering by returning an error.
-        if liked_vecs.is_empty() && disliked_vecs.is_empty() {
-            return Err(format!(
-                "{}: Relevance sort unavailable because preference embeddings could not be generated",
-                RELEVANCE_UNAVAILABLE_TOKEN
-            ));
-        }
-
-        let mut ranked: Vec<RankedArticle> = rows
-            .into_iter()
-            .filter(|(item, _)| {
-                if let Some((ref news_set, ref rss_set)) = feed_categories {
-                    if item.article_type == "rss" {
-                        rss_set.contains(&item.category.to_ascii_lowercase())
-                    } else {
-                        news_set.contains(&item.category.to_ascii_lowercase())
-                    }
-                } else {
-                    true
-                }
-            })
-            .filter(|(item, _)| {
-                let source_key = normalize_source_name_key(&item.source_name);
-                source_key.is_empty() || !source_blacklist.contains(&source_key)
-            })
-            .map(|(item, emb)| {
-                let score = emb
-                    .as_deref()
-                    .map(|v| article_preference_score(v, &liked_vecs, &disliked_vecs))
-                    .unwrap_or(0.0);
-                RankedArticle { item, preference_score: score }
-            })
-            .collect();
-
-        // Apply date filter.
-        if let Some(ref date_utc_day) = date {
-            ranked.retain(|r| is_on_utc_day(&r.item.date, date_utc_day));
-        }
-
-        // Sort by score descending, then by date descending as tie-breaker.
-        ranked.sort_by(|a, b| {
-            b.preference_score
-                .partial_cmp(&a.preference_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.item.date.cmp(&a.item.date))
-        });
-
-        // Apply pagination in memory.
-        let start = offset as usize;
-        let end = (start + limit as usize).min(ranked.len());
-        Ok(if start < ranked.len() { ranked[start..end].to_vec() } else { vec![] })
-    } else {
-        // Default path: date-sorted, DB-level pagination.
-        let items = if let Some(ref selected_category) = category {
-            db::get_articles_by_category(&state.db, selected_category, limit, offset)
-                .await
-                .map_err(|e| format!("DB read error: {}", e))?
-        } else if feed_categories.is_some() {
-            db::list_articles(&state.db, 10_000, 0)
-                .await
-                .map_err(|e| format!("DB read error: {}", e))?
-        } else {
-            db::list_articles(&state.db, limit, offset)
-                .await
-                .map_err(|e| format!("DB read error: {}", e))?
-        };
-
-        let mut items = items;
-        if let Some((ref news_set, ref rss_set)) = feed_categories {
-            items.retain(|item| {
-                if item.article_type == "rss" {
-                    rss_set.contains(&item.category.to_ascii_lowercase())
-                } else {
-                    news_set.contains(&item.category.to_ascii_lowercase())
-                }
-            });
-            let start = offset as usize;
-            let end = (start + limit as usize).min(items.len());
-            items = if start < items.len() {
-                items[start..end].to_vec()
-            } else {
-                vec![]
-            };
-        }
-        items.retain(|item| {
-            let source_key = normalize_source_name_key(&item.source_name);
-            source_key.is_empty() || !source_blacklist.contains(&source_key)
-        });
-        if let Some(ref date_utc_day) = date {
-            items.retain(|item| is_on_utc_day(&item.date, date_utc_day));
-        }
-
-        Ok(items
-            .into_iter()
-            .map(|item| RankedArticle { item, preference_score: 0.0 })
-            .collect())
-    }
+    Ok(scores)
 }
 
 #[tauri::command]
@@ -2643,7 +2552,6 @@ async fn start_all_action(
             deepseek_model,
             ollama_address,
             ollama_model,
-            ollama_embedding_model: None,
             local_embedding_model,
             min_summary_points: None,
             max_summary_points: None,
@@ -2739,7 +2647,6 @@ async fn reprocess_article(
             deepseek_model,
             ollama_address,
             ollama_model,
-            ollama_embedding_model: None,
             local_embedding_model,
             min_summary_points: None,
             max_summary_points: None,
@@ -2759,8 +2666,7 @@ async fn reprocess_article(
     let mut enriched = apply_enrichment_payload(item, text, snippet, ai_summary, thumbnail, true);
     enriched.enrichment_mode = "ai".to_string();
 
-    enrich_media_and_embedding(
-        &state.db,
+    let embedding = enrich_media_and_embedding(
         &runtime.image_cache_dir,
         &mut enriched,
         &runtime.resolved.local_embedding_model,
@@ -2768,6 +2674,12 @@ async fn reprocess_article(
     .await;
 
     persist_enriched_article(&state.db, &enriched).await?;
+
+    if let Some(vec) = embedding {
+        if let Err(e) = db::save_embedding(&state.db, &enriched.id, &vec).await {
+            logging::warn("Embedding", format!("Failed to save embedding for '{}': {}", enriched.title, e), None);
+        }
+    }
 
     emit_enriched_articles_updated(&app, &enriched.id, 1, 1, 1)?;
 
@@ -2939,7 +2851,6 @@ pub fn run() {
                 last_scrape: Mutex::new(last_scrape),
                 preference_embedding_cache: Mutex::new(HashMap::new()),
                 translation_cache: Mutex::new(HashMap::new()),
-                settings_path: settings_path.clone(),
                 stop_requested: AtomicBool::new(false),
             });
 
@@ -2971,6 +2882,7 @@ pub fn run() {
             get_available_regions,
             get_enriched_articles,
             get_enriched_article_by_id,
+            compute_preference_scores,
             list_feeds,
             create_feed_action,
             rename_feed_action,

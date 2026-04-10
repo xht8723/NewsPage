@@ -47,7 +47,7 @@ export function getProviderLabel(provider: string): string {
   return "Ollama";
 }
 
-export function getTagColor(category: string): string {
+function getTagColor(category: string): string {
   const colors: Record<string, string> = {
     World: "bg-sky-500/90",
     Nation: "bg-cyan-500/90",

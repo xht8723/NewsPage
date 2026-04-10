@@ -2,12 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 import type { BackendArticle, ProcessLogEntry } from "../types/article";
 
 export interface EnrichedArticlesRequest {
-  feedId: string | null;
-  category: string | null;
   date: string | null;
   limit: number;
-  offset: number;
-  sortBy: string;
+  [key: string]: unknown;
+}
+
+export interface ComputeScoresRequest {
+  articleIds: string[];
   likedConcepts: string[];
   dislikedConcepts: string[];
   localEmbeddingModel: string;
@@ -55,6 +56,9 @@ export const articleService = {
 
   getEnrichedById: (id: string): Promise<BackendArticle> =>
     invoke("get_enriched_article_by_id", { id }),
+
+  computePreferenceScores: (request: ComputeScoresRequest): Promise<[string, number][]> =>
+    invoke("compute_preference_scores", request),
 
   reprocessArticle: (request: ReprocessArticleRequest): Promise<BackendArticle> =>
     invoke("reprocess_article", request),

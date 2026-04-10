@@ -18,7 +18,6 @@ interface UIState {
   isFilterTransitioning: boolean;
   settingsScrollToEmbedding: boolean;
   showSettingsHints: boolean;
-  toggleDarkMode: () => void;
   setIsDarkMode: (isDark: boolean) => void;
   setShowSettings: (show: boolean) => void;
   setShowCalendar: (show: boolean) => void;
@@ -55,7 +54,6 @@ export const useUIStore = create<UIState>((set) => ({
   settingsScrollToEmbedding: false,
   showSettingsHints: false,
 
-  toggleDarkMode: () => set((state) => ({ isDarkMode: !state.isDarkMode })),
   setIsDarkMode: (isDark) => set({ isDarkMode: isDark }),
   setShowSettings: (show) => set({ showSettings: show }),
   setShowCalendar: (show) => set({ showCalendar: show }),

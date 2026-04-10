@@ -118,11 +118,6 @@ pub async fn search_image_by_title(title: &str) -> Option<String> {
             .get("width")
             .and_then(|w| w.as_u64())
             .unwrap_or(0);
-        let _height = result
-            .get("height")
-            .and_then(|h| h.as_u64())
-            .unwrap_or(0);
-
         // Skip small images
         if width > 0 && width < 300 {
             continue;

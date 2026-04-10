@@ -93,11 +93,21 @@ function ArticleCardComponent({
               className={`ml-auto rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-widest ${
                 item.preferenceScore > 0
                   ? isDarkMode ? "bg-emerald-500/20 text-emerald-400" : "bg-emerald-100 text-emerald-700"
-                  : isDarkMode ? "bg-red-500/20 text-red-400" : "bg-red-100 text-red-700"
+                  : isDarkMode ? "bg-zinc-500/20 text-zinc-400" : "bg-zinc-100 text-zinc-700"
               }`}
             >
               {item.preferenceScore > 0 ? "+" : ""}
               {(item.preferenceScore * 100).toFixed(0)}%
+            </span>
+          )}
+          {sortMode === "score" && item.preferenceScore === 0 && (
+            <span
+              title="No embedding available for this article"
+              className={`ml-auto rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-widest ${
+                isDarkMode ? "bg-zinc-700/40 text-zinc-500" : "bg-zinc-100 text-zinc-400"
+              }`}
+            >
+              --
             </span>
           )}
         </div>

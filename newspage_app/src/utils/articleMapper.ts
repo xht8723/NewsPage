@@ -4,7 +4,7 @@ import { ARTICLE_THUMBNAIL_FALLBACK_URL } from "../constants/article";
 import type { BackendArticle, NewsArticle } from "../types/article";
 import { getUtcDateKey, toTopicCategory } from "./articleMeta";
 
-export function resolveThumbnailSrc(thumbnail: string): string {
+function resolveThumbnailSrc(thumbnail: string): string {
   const value = thumbnail.trim();
   if (!value) {
     return ARTICLE_THUMBNAIL_FALLBACK_URL;
@@ -26,7 +26,7 @@ export function resolveThumbnailSrc(thumbnail: string): string {
   }
 }
 
-export function resolveSourceIcon(sourceName: string, sourceIcon: string): string {
+function resolveSourceIcon(sourceName: string, sourceIcon: string): string {
   const normalizedSourceName = sourceName.trim().toLowerCase();
   const normalizedSourceIcon = sourceIcon.trim();
 

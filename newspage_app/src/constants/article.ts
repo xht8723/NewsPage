@@ -39,4 +39,3 @@ export const EMBEDDING_MODEL_INFO: Record<string, { size: string; dims: number; 
   "bge-m3":                { size: "~2.3 GB", dims: 1024, langs: "100+ languages" },
   "LaBSE":                 { size: "~1.9 GB", dims: 768,  langs: "109 languages" },
 };
-export const RELEVANCE_UNAVAILABLE_TOKEN = "RELEVANCE_EMBEDDING_UNAVAILABLE";

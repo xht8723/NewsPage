@@ -149,7 +149,6 @@ function App(): React.JSX.Element {
   const reprocessingArticleId = useNewsStore((state) => state.reprocessingArticleId);
   const stageStatus = useNewsStore((state) => state.stageStatus);
   const processLogs = useNewsStore((state) => state.processLogs);
-  const setEnrichmentProgress = useNewsStore((state) => state.setEnrichmentProgress);
   const setEnrichmentError = useNewsStore((state) => state.setEnrichmentError);
   const setRelevanceWarning = useNewsStore((state) => state.setRelevanceWarning);
   const setSelectedArticle = useNewsStore((state) => state.setSelectedArticle);
@@ -170,7 +169,6 @@ function App(): React.JSX.Element {
   const [isPurging, setIsPurging] = useState(false);
   
   const translatePanelRef = useRef<HTMLDivElement | null>(null);
-  const refreshTimeoutRef = useRef<number | null>(null);
   const seenLogKeysRef = useRef<Map<string, number>>(new Map());
   const todayString = formatDateLocal(new Date());
   const canGoToNextDay = selectedDate < todayString;
@@ -402,7 +400,9 @@ function App(): React.JSX.Element {
     }
     console.info(`Relevance sort unavailable: ${reason}`);
     setRelevanceWarning(reason);
-  }, [settings.sortMode]);
+    setSettings((current) => ({ ...current, sortMode: "date" as const }));
+    saveSetting("sortMode", "date");
+  }, [settings.sortMode, saveSetting]);
 
   const testOllamaConnection = useCallback(async (address: string) => {
     setIsTestingOllama(true);
@@ -525,10 +525,7 @@ function App(): React.JSX.Element {
   }, [startupPhase, refreshCloudModels]);
 
   const { news, setNews, fetchEnrichedNews } = useEnrichedArticles({
-    selectedFeedId,
     selectedDate,
-    settings,
-    disableRelevanceSort,
   });
 
   const loadFeeds = useCallback(async () => {
@@ -618,10 +615,20 @@ function App(): React.JSX.Element {
   const fetchEnrichedNewsRef = useRef(fetchEnrichedNews);
   const setNewsRef = useRef(setNews);
   const selectedDateRef = useRef(selectedDate);
+  const settingsRef = useRef(settings);
+  const newsRef = useRef(news);
 
   useEffect(() => {
     fetchEnrichedNewsRef.current = fetchEnrichedNews;
   }, [fetchEnrichedNews]);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  useEffect(() => {
+    newsRef.current = news;
+  }, [news]);
 
   useEffect(() => {
     setNewsRef.current = setNews;
@@ -630,20 +637,6 @@ function App(): React.JSX.Element {
   useEffect(() => {
     selectedDateRef.current = selectedDate;
   }, [selectedDate]);
-
-  const selectedFeedIdRef = useRef(selectedFeedId);
-  useEffect(() => {
-    selectedFeedIdRef.current = selectedFeedId;
-  }, [selectedFeedId]);
-
-  const scheduleRefresh = useCallback((filterByDate: boolean) => {
-    if (refreshTimeoutRef.current !== null) {
-      window.clearTimeout(refreshTimeoutRef.current);
-    }
-    refreshTimeoutRef.current = window.setTimeout(() => {
-      void fetchEnrichedNewsRef.current(filterByDate, true);
-    }, 300);
-  }, []);
 
   useEffect(() => {
     void loadFeeds();
@@ -657,7 +650,6 @@ function App(): React.JSX.Element {
     const defaults = createDefaultSettings();
     setNews([]);
     setLoading(false);
-    setEnrichmentProgress(null);
     setEnrichmentError(null);
     setRelevanceWarning(null);
     setStageStatus(makeInitialStageStatus());
@@ -736,7 +728,6 @@ function App(): React.JSX.Element {
     const selectedEndpoint = getSelectedEndpoint(settings);
 
     setLoading(true);
-    setEnrichmentProgress(null);
     setEnrichmentError(null);
     setRelevanceWarning(null);
     setStageStatus(makeInitialStageStatus());
@@ -759,14 +750,12 @@ function App(): React.JSX.Element {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setLoading(false);
-        setEnrichmentProgress(null);
         setConfigPopupMessage(message);
         setShowConfigPopup(true);
         return;
       }
     }
 
-    setEnrichmentProgress({ current: 0, total: 0, enriched: 0 });
     console.log("🚀 Starting enrichment pipeline...");
     try {
       await articleService.startAll({
@@ -780,7 +769,6 @@ function App(): React.JSX.Element {
       console.error("❌ Enrichment pipeline failed:", error);
       const message = error instanceof Error ? error.message : String(error);
       setEnrichmentError(message);
-      setEnrichmentProgress(null);
       setLoading(false);
     }
     setLoading(false);
@@ -811,7 +799,6 @@ function App(): React.JSX.Element {
       const mapped = mapBackendArticle(updatedItem);
       setNews((current) => current.map((item) => (item.id === mapped.id ? mapped : item)));
       setSelectedArticle((current) => (current && current.id === mapped.id ? mapped : current));
-      await fetchEnrichedNewsRef.current(true, true);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setEnrichmentError(message);
@@ -853,11 +840,6 @@ function App(): React.JSX.Element {
     [feeds],
   );
 
-  const availableFeedsRef = useRef(availableFeeds);
-  useEffect(() => {
-    availableFeedsRef.current = availableFeeds;
-  }, [availableFeeds]);
-
   const selectedFeedName = useMemo(
     () => availableFeeds.find((feed) => feed.id === selectedFeedId)?.name ?? "All",
     [availableFeeds, selectedFeedId],
@@ -891,47 +873,42 @@ function App(): React.JSX.Element {
 
       try {
         const off = await listen<EnrichedArticlesUpdatedEvent>("enriched-articles-updated", async (event) => {
-          setEnrichmentProgress({
-            current: event.payload.current,
-            total: event.payload.total,
-            enriched: event.payload.enriched_count,
-          });
-
           try {
             const backendArticle = await articleService.getEnrichedById(event.payload.id);
             const article = mapBackendArticle(backendArticle);
 
-            const feedId = selectedFeedIdRef.current;
-            if (feedId === "feed-all") {
-              setNewsRef.current((prev) => {
-                const idx = prev.findIndex((a) => a.id === article.id);
-                if (idx >= 0) {
-                  const updated = [...prev];
-                  updated[idx] = article;
-                  return updated;
-                }
-                return [article, ...prev];
-              });
-            } else {
-              const feed = availableFeedsRef.current.find((f) => f.id === feedId);
-              if (feed) {
-                const categoryLower = article.category.toLowerCase();
-                const isMember = article.articleType === "rss"
-                  ? feed.rss_categories.some((c) => c.toLowerCase() === categoryLower)
-                  : feed.news_categories.some((c) => c.toLowerCase() === categoryLower);
-                if (isMember) {
-                  setNewsRef.current((prev) => {
-                    const idx = prev.findIndex((a) => a.id === article.id);
-                    if (idx >= 0) {
-                      const updated = [...prev];
-                      updated[idx] = article;
-                      return updated;
-                    }
-                    return [article, ...prev];
+            const currentSettings = settingsRef.current;
+            const needsScore = currentSettings.sortMode === "score";
+            let scoredArticle = article;
+
+            if (needsScore) {
+              const liked = currentSettings.likedConcepts.split(",").map((s) => s.trim()).filter(Boolean);
+              const disliked = currentSettings.dislikedConcepts.split(",").map((s) => s.trim()).filter(Boolean);
+              if (liked.length > 0 || disliked.length > 0) {
+                try {
+                  const scorePairs = await articleService.computePreferenceScores({
+                    articleIds: [article.id],
+                    likedConcepts: liked,
+                    dislikedConcepts: disliked,
+                    localEmbeddingModel: currentSettings.localEmbeddingModel,
                   });
+                  const scoreMap = Object.fromEntries(scorePairs);
+                  scoredArticle = { ...article, preferenceScore: scoreMap[article.id] ?? article.preferenceScore };
+                } catch {
+                  // Score computation failed — article enters cache with score 0.0
                 }
               }
             }
+
+            setNewsRef.current((prev) => {
+              const idx = prev.findIndex((a) => a.id === scoredArticle.id);
+              if (idx >= 0) {
+                const updated = [...prev];
+                updated[idx] = scoredArticle;
+                return updated;
+              }
+              return [scoredArticle, ...prev];
+            });
           } catch (err) {
             console.warn("Failed to fetch enriched article:", err);
           }
@@ -948,7 +925,6 @@ function App(): React.JSX.Element {
 
       try {
         const off = await listen<{total: number; enriched_count: number; failed_count: number; error_sample?: string; stopped: boolean}>("enriched-news-sync-complete", (event) => {
-          setEnrichmentProgress(null);
           setStageStatus((current) => {
             const completionState = event.payload.stopped ? "stopped" : "done";
             return {
@@ -964,7 +940,6 @@ function App(): React.JSX.Element {
           } else {
             setEnrichmentError(null);
           }
-          void fetchEnrichedNewsRef.current(true, true);
         });
         if (disposed) {
           off();
@@ -1009,15 +984,11 @@ function App(): React.JSX.Element {
 
     return () => {
       disposed = true;
-      if (refreshTimeoutRef.current !== null) {
-        window.clearTimeout(refreshTimeoutRef.current);
-        refreshTimeoutRef.current = null;
-      }
       for (const unlisten of unlisteners) {
         unlisten();
       }
     };
-  }, [appendUniqueProcessLog, scheduleRefresh, updateStageFromEvent]);
+  }, [appendUniqueProcessLog, updateStageFromEvent]);
 
   useEffect(() => {
     if (availableFeeds.length === 0) {
@@ -1238,10 +1209,58 @@ function App(): React.JSX.Element {
   const filteredNews = useMemo(() => {
     const sortedNews = [...news].sort(settings.sortMode === "score" ? scoreComparator : dateComparator);
 
+    const activeFeed = availableFeeds.find((f) => f.id === selectedFeedId);
+
     return sortedNews
       .filter((item) => item.date === selectedDate)
+      .filter((item) => {
+        if (!activeFeed || selectedFeedId === "feed-all") return true;
+        const categoryLower = item.category.toLowerCase();
+        return item.articleType === "rss"
+          ? activeFeed.rss_categories.some((c) => c.toLowerCase() === categoryLower)
+          : activeFeed.news_categories.some((c) => c.toLowerCase() === categoryLower);
+      })
       .filter((item) => !blacklistedSources.has(normalizeSourceName(item.sourceName)));
-  }, [news, selectedDate, settings.sortMode, blacklistedSources, scoreComparator, dateComparator]);
+  }, [news, selectedDate, selectedFeedId, availableFeeds, settings.sortMode, blacklistedSources, scoreComparator, dateComparator]);
+
+  useEffect(() => {
+    if (settings.sortMode !== "score") return;
+    const liked = settings.likedConcepts.split(",").map((s) => s.trim()).filter(Boolean);
+    const disliked = settings.dislikedConcepts.split(",").map((s) => s.trim()).filter(Boolean);
+    if (liked.length === 0 && disliked.length === 0) return;
+
+    const timeout = window.setTimeout(async () => {
+      const currentNews = newsRef.current;
+      if (currentNews.length === 0) return;
+      const ids = currentNews.map((a) => a.id);
+
+      try {
+        console.log("[score] Computing scores for", ids.length, "articles, model:", settings.localEmbeddingModel, "liked:", liked, "disliked:", disliked);
+        const scorePairs = await articleService.computePreferenceScores({
+          articleIds: ids,
+          likedConcepts: liked,
+          dislikedConcepts: disliked,
+          localEmbeddingModel: settings.localEmbeddingModel,
+        });
+        console.log("[score] Received", scorePairs.length, "score pairs:", scorePairs.slice(0, 5), "...");
+        const scoreMap = Object.fromEntries(scorePairs);
+        const nonZero = scorePairs.filter(([, s]) => s !== 0).length;
+        console.log("[score]", nonZero, "of", ids.length, "articles have non-zero scores");
+        setNews((prev) => prev.map((a) => ({
+          ...a,
+          preferenceScore: scoreMap[a.id] ?? a.preferenceScore,
+        })));
+        setRelevanceWarning(null);
+      } catch (error) {
+        console.error("[score] Computation failed:", error);
+        if (String(error).includes("RELEVANCE_EMBEDDING_UNAVAILABLE")) {
+          disableRelevanceSort(String(error));
+        }
+      }
+    }, 300);
+
+    return () => window.clearTimeout(timeout);
+  }, [settings.sortMode, settings.likedConcepts, settings.dislikedConcepts, settings.localEmbeddingModel, news.length, disableRelevanceSort]);
 
   if (startupPhase !== "ready") {
     const startupMessage = startupPhase === "loading-settings"
@@ -1632,9 +1651,6 @@ function App(): React.JSX.Element {
         scrollToEmbedding={settingsScrollToEmbedding}
         onScrollConsumed={() => setSettingsScrollToEmbedding(false)}
         showOnboardingHints={showSettingsHints}
-        onDismissHint={() => {
-          // bubble dismissal is managed locally inside SettingsModal
-        }}
       />
 
       <CategoryLimitsModal

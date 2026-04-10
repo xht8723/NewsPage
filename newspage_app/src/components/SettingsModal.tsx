@@ -45,7 +45,6 @@ interface SettingsModalProps {
   scrollToEmbedding: boolean;
   onScrollConsumed: () => void;
   showOnboardingHints: boolean;
-  onDismissHint: (hint: "googleNews" | "rss") => void;
   cloudModels: Record<string, string[]>;
   refreshCloudModels: (provider: string) => Promise<void>;
 }
@@ -82,7 +81,6 @@ export function SettingsModal({
   scrollToEmbedding,
   onScrollConsumed,
   showOnboardingHints,
-  onDismissHint,
   cloudModels,
   refreshCloudModels,
 }: SettingsModalProps): React.JSX.Element | null {
@@ -676,7 +674,7 @@ export function SettingsModal({
                       </p>
                       <button
                         type="button"
-                        onClick={() => { setGoogleNewsBubbleDismissed(true); onDismissHint("googleNews"); }}
+                        onClick={() => { setGoogleNewsBubbleDismissed(true); }}
                         className={`shrink-0 rounded p-0.5 transition-opacity hover:opacity-60 ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}
                       >
                         <X size={13} />
@@ -729,7 +727,7 @@ export function SettingsModal({
                       </p>
                       <button
                         type="button"
-                        onClick={() => { setRssBubbleDismissed(true); onDismissHint("rss"); }}
+                        onClick={() => { setRssBubbleDismissed(true); }}
                         className={`shrink-0 rounded p-0.5 transition-opacity hover:opacity-60 ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}
                       >
                         <X size={13} />
