@@ -210,7 +210,7 @@ pub async fn decode_google_news_url(url: &str) -> Option<String> {
 }
 
 fn build_client() -> reqwest::Client {
-    use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_ENCODING, ACCEPT_LANGUAGE};
+    use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE};
     let mut headers = HeaderMap::new();
     headers.insert(
         ACCEPT,
@@ -221,10 +221,6 @@ fn build_client() -> reqwest::Client {
     headers.insert(
         ACCEPT_LANGUAGE,
         HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8"),
-    );
-    headers.insert(
-        ACCEPT_ENCODING,
-        HeaderValue::from_static("gzip, deflate, br"),
     );
     reqwest::Client::builder()
         .user_agent(USER_AGENT)

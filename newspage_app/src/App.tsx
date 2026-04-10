@@ -93,7 +93,7 @@ function createDefaultSettings(): UserSettings {
     maxSummaryPoints: 8,
     liveTranslationEnabled: false,
     translationTargetLanguage: "en",
-    concurrentLlmRequests: false,
+    concurrentLlmRequests: 5,
   };
 }
 
@@ -208,7 +208,7 @@ function App(): React.JSX.Element {
       maxSummaryPoints: 8,
       liveTranslationEnabled: false,
       translationTargetLanguage: "en" as const,
-      concurrentLlmRequests: false,
+      concurrentLlmRequests: 5,
     };
     return defaults;
   });
@@ -355,7 +355,13 @@ function App(): React.JSX.Element {
           maxSummaryPoints: saved.maxSummaryPoints ? Math.min(20, Math.max(1, Number(saved.maxSummaryPoints))) : defaults.maxSummaryPoints,
           liveTranslationEnabled: saved.liveTranslationEnabled === "true",
           translationTargetLanguage: saved.translationTargetLanguage === "zh-CN" ? "zh-CN" : "en",
-          concurrentLlmRequests: saved.concurrentLlmRequests === "true",
+          concurrentLlmRequests: (() => {
+            const raw = saved.concurrentLlmRequests;
+            if (raw === "true") return 5;
+            if (raw === "false") return 1;
+            const n = Number(raw);
+            return raw && !isNaN(n) ? Math.min(20, Math.max(1, n)) : defaults.concurrentLlmRequests;
+          })(),
         }));
         setSelectedEmbeddingModel(savedLocalEmbeddingModel || DEFAULT_EMBEDDING_MODEL);
         if (nextLayout) {

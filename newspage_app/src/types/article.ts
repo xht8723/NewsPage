@@ -87,7 +87,7 @@ export interface UserSettings {
   maxSummaryPoints: number;
   liveTranslationEnabled: boolean;
   translationTargetLanguage: "en" | "zh-CN";
-  concurrentLlmRequests: boolean;
+  concurrentLlmRequests: number;
 }
 
 export interface LocalEmbeddingStatus {

@@ -392,19 +392,6 @@ export function SettingsModal({
                     >
                       Detailed
                     </button>
-                    <div className="ml-auto flex items-center gap-2">
-                      <span className="text-xs font-medium opacity-70">Concurrent LLM</span>
-                      <NeonCheckbox
-                        checked={settings.concurrentLlmRequests}
-                        onChange={(checked) => {
-                          setSettings((current) => ({ ...current, concurrentLlmRequests: checked }));
-                          saveSetting("concurrentLlmRequests", checked ? "true" : "false");
-                        }}
-                        isDarkMode={isDarkMode}
-                        size="sm"
-                        ariaLabel="Use concurrent LLM requests"
-                      />
-                    </div>
                   </div>
                 </div>
                 <div>
@@ -442,38 +429,75 @@ export function SettingsModal({
                     </div>
                   </div>
                 </div>
-                <div>
-                  <label className="mb-1.5 block text-xs font-medium opacity-70">LLM batch size</label>
-                  <p className="mb-1.5 text-xs opacity-50">How many articles for the LLM to process in a single batch.</p>
+                <div className="grid grid-cols-2 gap-4 items-start">
                   <div>
-                    <div className="relative h-6 w-full">
-                      <div className={`absolute top-1/2 h-1.5 w-full -translate-y-1/2 rounded-full ${isDarkMode ? "bg-zinc-700" : "bg-zinc-300"}`} />
-                      <div
-                        className={`absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full ${isDarkMode ? "bg-cyan-600/85" : "bg-emerald-500"}`}
-                        style={{ left: 0, width: `${((settings.llmBatchSize - 1) / (10 - 1)) * 100}%` }}
-                      />
-                      <input
-                        type="range"
-                        min={1}
-                        max={10}
-                        step={1}
-                        value={settings.llmBatchSize}
-                        onChange={(e) => {
-                          const val = Number(e.target.value);
-                          setSettings((s) => ({ ...s, llmBatchSize: val }));
-                          saveSetting("llmBatchSize", String(val));
-                        }}
-                        className={`absolute top-0 h-6 w-full appearance-none bg-transparent [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 ${
-                          isDarkMode
-                            ? "[&::-moz-range-thumb]:border-cyan-600 [&::-moz-range-thumb]:bg-zinc-900 [&::-webkit-slider-thumb]:border-cyan-600 [&::-webkit-slider-thumb]:bg-zinc-900"
-                            : "[&::-moz-range-thumb]:border-emerald-500 [&::-moz-range-thumb]:bg-white [&::-webkit-slider-thumb]:border-emerald-500 [&::-webkit-slider-thumb]:bg-white"
-                        }`}
-                      />
+                    <label className="mb-1.5 block text-xs font-medium opacity-70">LLM batch size</label>
+                    <p className="mb-1.5 h-4 text-xs opacity-50 line-clamp-1">{settings.llmBatchSize} article{settings.llmBatchSize !== 1 ? "s" : ""} per prompt.</p>
+                    <div>
+                      <div className="relative h-6 w-full">
+                        <div className={`absolute top-1/2 h-1.5 w-full -translate-y-1/2 rounded-full ${isDarkMode ? "bg-zinc-700" : "bg-zinc-300"}`} />
+                        <div
+                          className={`absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full ${isDarkMode ? "bg-cyan-600/85" : "bg-emerald-500"}`}
+                          style={{ left: 0, width: `${((settings.llmBatchSize - 1) / (10 - 1)) * 100}%` }}
+                        />
+                        <input
+                          type="range"
+                          min={1}
+                          max={10}
+                          step={1}
+                          value={settings.llmBatchSize}
+                          onChange={(e) => {
+                            const val = Number(e.target.value);
+                            setSettings((s) => ({ ...s, llmBatchSize: val }));
+                            saveSetting("llmBatchSize", String(val));
+                          }}
+                          className={`absolute top-0 h-6 w-full appearance-none bg-transparent [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 ${
+                            isDarkMode
+                              ? "[&::-moz-range-thumb]:border-cyan-600 [&::-moz-range-thumb]:bg-zinc-900 [&::-webkit-slider-thumb]:border-cyan-600 [&::-webkit-slider-thumb]:bg-zinc-900"
+                              : "[&::-moz-range-thumb]:border-emerald-500 [&::-moz-range-thumb]:bg-white [&::-webkit-slider-thumb]:border-emerald-500 [&::-webkit-slider-thumb]:bg-white"
+                          }`}
+                        />
+                      </div>
+                      <div className="mt-1 flex items-center justify-between">
+                        <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>1</span>
+                        <span className={`text-xs font-semibold ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>{settings.llmBatchSize}</span>
+                        <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>10</span>
+                      </div>
                     </div>
-                    <div className="mt-1 flex items-center justify-between">
-                      <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>1</span>
-                      <span className={`text-xs font-semibold ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>{settings.llmBatchSize}</span>
-                      <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>10</span>
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-xs font-medium opacity-70">Concurrent requests</label>
+                    <p className="mb-1.5 h-4 text-xs opacity-50 line-clamp-1">Max parallel calls for cloud providers.</p>
+                    <div>
+                      <div className="relative h-6 w-full">
+                        <div className={`absolute top-1/2 h-1.5 w-full -translate-y-1/2 rounded-full ${isDarkMode ? "bg-zinc-700" : "bg-zinc-300"}`} />
+                        <div
+                          className={`absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full ${isDarkMode ? "bg-cyan-600/85" : "bg-emerald-500"}`}
+                          style={{ left: 0, width: `${((settings.concurrentLlmRequests - 1) / (20 - 1)) * 100}%` }}
+                        />
+                        <input
+                          type="range"
+                          min={1}
+                          max={20}
+                          step={1}
+                          value={settings.concurrentLlmRequests}
+                          onChange={(e) => {
+                            const val = Number(e.target.value);
+                            setSettings((s) => ({ ...s, concurrentLlmRequests: val }));
+                            saveSetting("concurrentLlmRequests", String(val));
+                          }}
+                          className={`absolute top-0 h-6 w-full appearance-none bg-transparent [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 ${
+                            isDarkMode
+                              ? "[&::-moz-range-thumb]:border-cyan-600 [&::-moz-range-thumb]:bg-zinc-900 [&::-webkit-slider-thumb]:border-cyan-600 [&::-webkit-slider-thumb]:bg-zinc-900"
+                              : "[&::-moz-range-thumb]:border-emerald-500 [&::-moz-range-thumb]:bg-white [&::-webkit-slider-thumb]:border-emerald-500 [&::-webkit-slider-thumb]:bg-white"
+                          }`}
+                        />
+                      </div>
+                      <div className="mt-1 flex items-center justify-between">
+                        <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>1</span>
+                        <span className={`text-xs font-semibold ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>{settings.concurrentLlmRequests}</span>
+                        <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>20</span>
+                      </div>
                     </div>
                   </div>
                 </div>

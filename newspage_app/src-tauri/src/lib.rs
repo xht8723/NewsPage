@@ -452,7 +452,7 @@ struct ResolvedLlmSettings {
     selected_regions: Vec<String>,
     source_blacklist: HashSet<String>,
     llm_batch_size: usize,
-    concurrent_llm_requests: bool,
+    concurrent_llm_requests: usize,
     min_summary_points: u8,
     max_summary_points: u8,
 }
@@ -604,8 +604,12 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
             .unwrap_or(3),
         concurrent_llm_requests: settings_map
             .get("concurrentLlmRequests")
-            .map(|v| v == "true")
-            .unwrap_or(false),
+            .map(|v| {
+                if v == "true" { return 5; }
+                if v == "false" { return 1; }
+                v.parse::<usize>().ok().map(|n| n.clamp(1, 20)).unwrap_or(5)
+            })
+            .unwrap_or(5),
         max_summary_points: overrides
             .max_summary_points
             .or_else(|| {
@@ -1105,11 +1109,16 @@ async fn run_enrichment_stage(
 
     // Phase 1: Concurrent extraction with bounded workers
     let mut join_set = tokio::task::JoinSet::new();
+    let stop_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     for chunk in all_articles.chunks(chunk_size) {
         let chunk_vec: Vec<(String, Article)> = chunk.to_vec();
+        let flag = stop_flag.clone();
         join_set.spawn(async move {
             let mut results: Vec<(String, Article, Result<(String, Option<String>), String>)> = Vec::new();
             for (language, article) in chunk_vec {
+                if flag.load(Ordering::Relaxed) {
+                    break;
+                }
                 let result = tokio::time::timeout(
                     Duration::from_secs(ARTICLE_PROCESS_TIMEOUT_SECS),
                     article_extract::fetch_article_text_and_thumbnail(&article.url),
@@ -1131,6 +1140,9 @@ async fn run_enrichment_stage(
     let mut fetched: Vec<(String, Article, Result<(String, Option<String>), String>)> =
         Vec::with_capacity(total);
     while let Some(task_result) = join_set.join_next().await {
+        if state.stop_requested.load(Ordering::Relaxed) {
+            stop_flag.store(true, Ordering::Relaxed);
+        }
         match task_result {
             Ok(chunk_results) => {
                 fetched.extend(chunk_results);
@@ -1138,6 +1150,10 @@ async fn run_enrichment_stage(
             Err(e) => {
                 logging::warn("Extract", format!("Worker task panicked: {}", e), None);
             }
+        }
+        if state.stop_requested.load(Ordering::Relaxed) {
+            join_set.abort_all();
+            break;
         }
     }
 
@@ -1167,19 +1183,23 @@ async fn run_enrichment_stage(
     }
 
     let is_local_llm = llm_config.provider.is_local();
-    let use_concurrent = !is_local_llm || settings.concurrent_llm_requests;
 
     logging::info(
         "Enrichment",
         format!(
-            "LLM provider '{}' - {} concurrency",
+            "LLM provider '{}' - {} concurrency (max concurrent: {})",
             llm_config.provider.as_str(),
-            if use_concurrent { "concurrent" } else { "sequential" }
+            if is_local_llm { "sequential" } else { "concurrent" },
+            settings.concurrent_llm_requests,
         ),
         None,
     );
 
-    if use_concurrent {
+    if is_local_llm {
+        run_enrichment_stage_sequential(
+            app, state, llm_config, image_cache_dir, settings, total, by_language
+        ).await
+    } else if settings.concurrent_llm_requests > 1 {
         run_enrichment_stage_concurrent(
             app, state, llm_config, image_cache_dir, settings, total, by_language
         ).await
@@ -1265,13 +1285,25 @@ async fn run_enrichment_stage_sequential(
                     Some(global_index),
                     Some(total),
                 )?;
-                llm.enrich_batch(&articles_for_llm, Some(language.as_str()), settings.min_summary_points, settings.max_summary_points).await
+                match tokio::time::timeout(
+                    Duration::from_secs(120),
+                    llm.enrich_batch(&articles_for_llm, Some(language.as_str()), settings.min_summary_points, settings.max_summary_points),
+                ).await {
+                    Ok(r) => r,
+                    Err(_) => {
+                        logging::warn("Enrichment", format!("LLM batch timed out after 120s for language '{}'", language), None);
+                        llm_inputs.iter().map(|_| Err("LLM batch timed out after 120s".to_string())).collect()
+                    },
+                }
             } else {
                 vec![]
             };
 
             let mut llm_result_idx = 0;
             for (i, (item, fetch_result)) in batch.iter().enumerate() {
+                if state.stop_requested.load(Ordering::Relaxed) {
+                    break;
+                }
                 global_index += 1;
 
                 let is_in_llm_batch = llm_inputs.iter().any(|(idx, _, _)| *idx == i);
@@ -1393,7 +1425,7 @@ async fn run_enrichment_stage_concurrent(
     total: usize,
     by_language: std::collections::HashMap<String, Vec<(Article, Result<(String, Option<String>), String>)>>,
 ) -> Result<EnrichmentStageResult, String> {
-    const MAX_CONCURRENT_LLM_BATCHES: usize = 5;
+    let max_concurrent = settings.concurrent_llm_requests.max(1);
 
     let batch_size = settings.llm_batch_size;
     let min_points = settings.min_summary_points;
@@ -1429,7 +1461,7 @@ async fn run_enrichment_stage_concurrent(
     }
 
     let total_batches = all_batch_tasks.len();
-    let concurrency = MAX_CONCURRENT_LLM_BATCHES.min(total_batches);
+    let concurrency = max_concurrent.min(total_batches);
 
     logging::info(
         "Enrichment",
@@ -1489,14 +1521,21 @@ async fn run_enrichment_stage_concurrent(
                 .map(|(_, title, text)| (title.clone(), text.clone()))
                 .collect();
 
-            let results = llm
-                .enrich_batch(
+            let results = match tokio::time::timeout(
+                Duration::from_secs(120),
+                llm.enrich_batch(
                     &articles_for_llm,
                     Some(language.as_str()),
                     min_points,
                     max_points,
-                )
-                .await;
+                ),
+            ).await {
+                Ok(r) => r,
+                Err(_) => {
+                    let err = format!("LLM batch timed out after 120s (batch {} in {})", batch_idx, language);
+                    llm_inputs.iter().map(|_| Err::<(String, String), _>(err.clone())).collect()
+                },
+            };
 
             let mapped_results: Vec<(usize, Result<(String, String), String>)> = llm_inputs
                 .iter()
@@ -1522,6 +1561,10 @@ async fn run_enrichment_stage_concurrent(
             Err(e) => {
                 logging::warn("Enrichment", format!("LLM batch task panicked: {}", e), None);
             }
+        }
+        if state.stop_requested.load(Ordering::Relaxed) {
+            join_set.abort_all();
+            break;
         }
     }
 
@@ -1583,6 +1626,9 @@ async fn run_enrichment_stage_concurrent(
             let mut llm_result_iter = llm_results_for_batch.into_iter();
 
             for (i, (item, fetch_result)) in batch.iter().enumerate() {
+                if state.stop_requested.load(Ordering::Relaxed) {
+                    break;
+                }
                 global_index += 1;
 
                 let (text, thumbnail) = match fetch_result {
