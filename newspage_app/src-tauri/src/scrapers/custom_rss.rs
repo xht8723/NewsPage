@@ -4,7 +4,6 @@ use reqwest::Client;
 use std::collections::HashSet;
 
 use crate::db::FeedSource;
-use crate::logging;
 use crate::article::Article;
 
 use super::rss_common::{fetch_rss_feed, parse_rss_items, rss_item_to_article};
@@ -17,29 +16,15 @@ async fn scrape_custom_rss_sources(sources: &[&FeedSource]) -> Result<Vec<Articl
     let mut out: Vec<Article> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
 
-    logging::info(
-        "Scrape",
-        format!("CustomRssStage: {} subscribed source(s)", sources.len()),
-        Some(sources.len()),
-    );
-
     for source in sources {
         let url = source.source_ref.clone();
         let category = source.display_name.to_lowercase();
 
-        logging::info(
-            "Scrape",
-            format!("Fetching custom RSS '{}' -> {}", source.display_name, url),
-            None,
-        );
-
         match fetch_rss_feed(&client, &url).await {
             Ok(xml) => {
                 let items = parse_rss_items(&xml);
-                let mut added = 0usize;
                 let now = Utc::now();
                 for rss_item in &items {
-                    // Only include articles from last 24 hours when date is known.
                     if let Some(dt) = &rss_item.pub_date_parsed {
                         let diff = now.signed_duration_since(*dt);
                         if diff.num_hours() >= 24 || diff.num_seconds() < 0 {
@@ -49,27 +34,10 @@ async fn scrape_custom_rss_sources(sources: &[&FeedSource]) -> Result<Vec<Articl
                     let article = rss_item_to_article(rss_item, &category, "", "rss");
                     if seen_ids.insert(article.id.clone()) {
                         out.push(article);
-                        added += 1;
                     }
                 }
-                logging::info(
-                    "Scrape",
-                    format!(
-                        "Custom RSS '{}': {} parsed, {} unique within 24h",
-                        source.display_name,
-                        items.len(),
-                        added
-                    ),
-                    Some(added),
-                );
             }
-            Err(e) => {
-                logging::warn(
-                    "Scrape",
-                    format!("Custom RSS '{}' fetch failed: {}", source.display_name, e),
-                    None,
-                );
-            }
+            Err(_) => {}
         }
     }
 

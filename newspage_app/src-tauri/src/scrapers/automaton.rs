@@ -197,7 +197,7 @@ fn parse_rss_items(xml: &str) -> Vec<AutomatonArticle> {
             ai_summary: String::new(),
             og_content: String::new(),
             snippet: String::new(),
-            enrichment_mode: "pending".to_string(),
+            status: "pending".to_string(),
         });
     }
 
@@ -334,7 +334,7 @@ fn parse_html_items(html: &str) -> Vec<AutomatonArticle> {
             ai_summary: String::new(),
             og_content: String::new(),
             snippet: String::new(),
-            enrichment_mode: "pending".to_string(),
+            status: "pending".to_string(),
         });
     }
 
@@ -398,27 +398,19 @@ pub async fn scrape_automaton_for_urls(
     match scrape_via_rss_from_url(rss_url).await {
         Ok(items) => {
             let items = finalize(items);
-            eprintln!("[AUTOMATON] RSS strategy succeeded with {} items", items.len());
             return Ok(items);
         }
-        Err(e) => {
-            eprintln!("[AUTOMATON] RSS strategy failed: {}", e);
-        }
+        Err(_) => {}
     }
 
     match scrape_via_html_from_url(html_url).await {
         Ok(items) => {
             let items = finalize(items);
-            eprintln!("[AUTOMATON] HTML strategy succeeded with {} items", items.len());
             return Ok(items);
         }
-        Err(e) => {
-            eprintln!("[AUTOMATON] HTML strategy failed: {}", e);
-        }
+        Err(_) => {}
     }
 
-    // All strategies exhausted — soft-skip: log warning, return empty
-    eprintln!("[AUTOMATON] All strategies exhausted. Returning empty.");
     Ok(Vec::new())
 }
 

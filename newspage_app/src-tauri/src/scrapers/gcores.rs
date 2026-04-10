@@ -4,7 +4,6 @@ use std::collections::HashSet;
 
 use crate::db::FeedSource;
 use crate::id_generator::generate_article_id;
-use crate::logging;
 use crate::article::Article;
 
 use super::rss_common::{decode_entities, fetch_rss_feed, parse_pub_date, strip_cdata};
@@ -113,7 +112,7 @@ fn parse_gcores_item(
         ai_summary: String::new(),
         og_content: String::new(),
         snippet: String::new(),
-        enrichment_mode: "pending".to_string(),
+        status: "pending".to_string(),
     })
 }
 
@@ -154,50 +153,21 @@ async fn scrape_gcores_sources(sources: &[&FeedSource]) -> Result<Vec<Article>, 
     let mut out: Vec<Article> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();
 
-    logging::info(
-        "Scrape",
-        format!("GcoresStage: {} subscribed source(s)", sources.len()),
-        Some(sources.len()),
-    );
-
     for source in sources {
         let url = source.source_ref.clone();
         let category = source.display_name.to_lowercase();
         let source_name = source.display_name.clone();
 
-        logging::info(
-            "Scrape",
-            format!("Fetching GCores RSS '{}' -> {}", source.display_name, url),
-            None,
-        );
-
         match fetch_rss_feed(&client, &url).await {
             Ok(xml) => {
                 let items = parse_gcores_feed(&xml, &category, &source_name, "");
-                let total = items.len();
-                let mut added = 0usize;
                 for item in items {
                     if seen_ids.insert(item.id.clone()) {
                         out.push(item);
-                        added += 1;
                     }
                 }
-                logging::info(
-                    "Scrape",
-                    format!(
-                        "GCores RSS '{}': {} parsed, {} new",
-                        source.display_name, total, added
-                    ),
-                    Some(added),
-                );
             }
-            Err(e) => {
-                logging::warn(
-                    "Scrape",
-                    format!("GCores RSS '{}' fetch failed: {}", source.display_name, e),
-                    None,
-                );
-            }
+            Err(_) => {}
         }
     }
 

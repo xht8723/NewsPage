@@ -33,7 +33,7 @@ function ArticleCardComponent({
 }: ArticleCardProps): React.JSX.Element {
   const isListLayout = layout === "list";
   const isCompactListLayout = layout === "compact_list";
-  const isTitleOnlyCard = item.enrichmentMode === "none";
+  const isTitleOnlyCard = item.status !== "enriched";
   const onThumbnailError = useImageFallback(ARTICLE_THUMBNAIL_FALLBACK_URL);
   const translatedTitle = useLiveTranslation({
     text: item.title,
@@ -137,16 +137,6 @@ function ArticleCardComponent({
           <div className={`flex min-w-0 items-center gap-2 ${isCompactListLayout ? "text-[9px]" : "text-[10px]"} font-black uppercase tracking-widest ${
             isDarkMode ? "text-zinc-500" : "text-zinc-600"
           }`}>
-            {item.sourceIconUrl ? (
-              <img
-                src={item.sourceIconUrl}
-                alt={`${item.sourceName} icon`}
-                className="h-4 w-4 rounded-sm object-contain"
-                onError={(e) => {
-                  e.currentTarget.style.display = "none";
-                }}
-              />
-            ) : null}
             <span className="truncate">{item.sourceName}</span>
           </div>
           <div
@@ -170,10 +160,9 @@ function areEqual(prevProps: ArticleCardProps, nextProps: ArticleCardProps): boo
     prevProps.item.snippet === nextProps.item.snippet &&
     prevProps.item.thumbnailUrl === nextProps.item.thumbnailUrl &&
     prevProps.item.category === nextProps.item.category &&
-    prevProps.item.enrichmentMode === nextProps.item.enrichmentMode &&
+    prevProps.item.status === nextProps.item.status &&
     prevProps.item.preferenceScore === nextProps.item.preferenceScore &&
     prevProps.item.sourceName === nextProps.item.sourceName &&
-    prevProps.item.sourceIconUrl === nextProps.item.sourceIconUrl &&
     prevProps.item.language === nextProps.item.language &&
     prevProps.feedSources === nextProps.feedSources &&
     prevProps.layout === nextProps.layout &&

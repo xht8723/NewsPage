@@ -13,10 +13,10 @@ pub struct Article {
     pub thumbnail: String,
     pub category: String,
     pub article_type: String,
+    pub status: String,
     pub ai_summary: String,
     pub og_content: String,
     pub snippet: String,
-    pub enrichment_mode: String,
 }
 
 /// An `Article` annotated with a preference relevance score in the range [-1.0, 1.0].

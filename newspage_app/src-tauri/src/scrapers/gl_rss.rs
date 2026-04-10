@@ -153,30 +153,13 @@ async fn scrape_region(
         .iter()
         .filter(|t| subscribed_news_categories.contains(t.category))
         .collect();
-    logging::info(
-        "Scrape",
-        format!(
-            "Starting RSS scrape for region '{}' ({}/{} subscribed topics)",
-            region.id,
-            active_topics.len(),
-            region.topics.len()
-        ),
-        Some(active_topics.len()),
-    );
     for topic in active_topics {
         let url = build_feed_url(region, topic);
-        logging::info(
-            "Scrape",
-            format!("Fetching feed {}/{}", region.id, topic.category),
-            None,
-        );
 
         match fetch_rss_feed(client, &url).await {
             Ok(xml) => {
                 let rss_items = parse_rss_items(&xml);
-                let mut added = 0usize;
                 for rss_item in &rss_items {
-                    // Filter to articles published within the last 24 hours
                     if let Some(dt) = &rss_item.pub_date_parsed {
                         if !is_within_24h(dt) {
                             continue;
@@ -185,24 +168,10 @@ async fn scrape_region(
                     let article = rss_item_to_article(rss_item, topic.category, region_language(region), "news");
                     if seen_ids.insert(article.id.clone()) {
                         out.push(article);
-                        added += 1;
                     }
                 }
-                logging::info(
-                    "Scrape",
-                    format!(
-                        "{}/{} parsed {} item(s), added {} unique within 24h",
-                        region.id,
-                        topic.category,
-                        rss_items.len(),
-                        added
-                    ),
-                    Some(added),
-                );
             }
-            Err(e) => {
-                logging::warn("Scrape", format!("RSS fetch warning for {}/{}: {}", region.id, topic.category, e), None);
-            }
+            Err(_) => {}
         }
 
     }
@@ -215,11 +184,6 @@ pub async fn scrape_rss_regions(region_ids: &[String], subscribed_news_categorie
 
     for region_id in region_ids {
         let Some(region) = find_region(region_id) else {
-            logging::warn(
-                "Scrape",
-                format!("Unknown region '{}' skipped", region_id),
-                None,
-            );
             continue;
         };
         scrape_region(&client, region, subscribed_news_categories, &mut seen_ids, &mut all_items).await;

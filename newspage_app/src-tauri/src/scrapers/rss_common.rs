@@ -244,7 +244,7 @@ pub fn rss_item_to_article(rss: &RssItem, category: &str, language: &str, articl
         ai_summary: String::new(),
         og_content: String::new(),
         snippet: String::new(),
-        enrichment_mode: "pending".to_string(),
+        status: "pending".to_string(),
     }
 }
 

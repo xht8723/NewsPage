@@ -93,12 +93,8 @@ pub async fn run_default_scrapers(ctx: &ScrapeContext, stop: &AtomicBool) -> Res
             Ok((name, Ok(items))) => {
                 results.push(StageRunResult { stage_name: name, items });
             }
-            Ok((name, Err(e))) => {
-                eprintln!("[SCRAPER] Stage '{}' failed: {}", name, e);
-            }
-            Err(join_err) => {
-                eprintln!("[SCRAPER] Task panicked: {}", join_err);
-            }
+            Ok((_name, Err(_e))) => {}
+            Err(_join_err) => {}
         }
     }
 

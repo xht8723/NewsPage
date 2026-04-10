@@ -18,7 +18,6 @@ use crate::db::{
     set_feed_categories,
     set_feed_visibility,
     upsert_article,
-    upsert_enrichment,
     upsert_feed_source,
 };
 use crate::article::{Article, RankedArticle};
@@ -253,16 +252,6 @@ async fn persist_enriched_article(db_pool: &SqlitePool, enriched: &Article) -> R
     upsert_article(db_pool, enriched)
         .await
         .map_err(|e| format!("DB upsert error: {}", e))?;
-    upsert_enrichment(
-        db_pool,
-        &enriched.id,
-        &enriched.ai_summary,
-        &enriched.og_content,
-        &enriched.snippet,
-        &enriched.enrichment_mode,
-    )
-    .await
-    .map_err(|e| format!("upsert_enrichment error: {}", e))?;
     Ok(())
 }
 
@@ -340,14 +329,6 @@ fn emit_enriched_articles_updated(
         enriched_count,
         emitted_at_utc: Utc::now().to_rfc3339(),
     };
-    logging::info(
-        "Enrichment",
-        format!(
-            "Progress {}/{} ({} enriched)",
-            event.current, event.total, event.enriched_count
-        ),
-        Some(event.enriched_count),
-    );
     app.emit("enriched-articles-updated", &event)
         .map_err(|e| format!("Event emit error: {}", e))
 }
@@ -709,18 +690,6 @@ async fn run_scrape_stage(
 
     let last_scrape = *state.last_scrape.lock().unwrap();
     if !should_run_scrape(last_scrape, cooldown_hours) {
-        let elapsed_min = last_scrape
-            .and_then(|t| t.elapsed().ok())
-            .map(|d| d.as_secs() / 60)
-            .unwrap_or(0);
-        logging::info(
-            "Scrape",
-            format!(
-                "Skipped scraping because cooldown is active (last run {} minutes ago, cooldown {}h)",
-                elapsed_min, cooldown_hours
-            ),
-            None,
-        );
         emit_process_stage(
             app,
             "scrape",
@@ -730,10 +699,6 @@ async fn run_scrape_stage(
             None,
         )?;
         return Ok(false);
-    }
-
-    if resolved.selected_regions.is_empty() {
-        logging::warn("Scrape", "No regions selected in settings; skipping RSS stage", None);
     }
 
     let rss_sources = list_feed_sources(&state.db)
@@ -766,35 +731,16 @@ async fn run_scrape_stage(
     let total_stages = stage_results.len();
 
     for (index, stage_result) in stage_results.iter().enumerate() {
-        logging::info(
-            "Scrape",
-            format!("{} fetched {} items", stage_result.stage_name, stage_result.items.len()),
-            Some(stage_result.items.len()),
-        );
-        let mut skipped_blacklisted = 0usize;
         for item in &stage_result.items {
             let source_key = normalize_source_name_key(&item.source_name);
             if !source_key.is_empty() && resolved.source_blacklist.contains(&source_key) {
-                skipped_blacklisted += 1;
                 continue;
             }
-            // Strip trailing source attribution (e.g. "Title - VOCM") that some
-            // feeds append to titles. Source info is already shown on article cards.
             let mut item = item.clone();
             item.title = strip_trailing_source(&item.title);
             upsert_article(&state.db, &item)
                 .await
                 .map_err(|e| format!("DB upsert error: {}", e))?;
-        }
-        if skipped_blacklisted > 0 {
-            logging::info(
-                "Scrape",
-                format!(
-                    "Skipped {} blacklisted article(s) in {}",
-                    skipped_blacklisted, stage_result.stage_name
-                ),
-                Some(skipped_blacklisted),
-            );
         }
         emit_process_stage(
             app,
@@ -809,7 +755,6 @@ async fn run_scrape_stage(
     let now = SystemTime::now();
     *state.last_scrape.lock().unwrap() = Some(now);
     persist_last_scrape(settings_path, now);
-    logging::info("Scrape", "Scrape stage completed and persisted last scrape timestamp", None);
     emit_process_stage(
         app,
         "scrape",
@@ -826,6 +771,7 @@ async fn collect_items_to_enrich_by_language(
     per_category_limit: i64,
     per_category_limits: &HashMap<String, i64>,
     source_blacklist: &HashSet<String>,
+    process_past_date: bool,
 ) -> Result<Vec<(String, Vec<Article>)>, String> {
     let categories = list_unenriched_categories(&state.db)
         .await
@@ -867,22 +813,19 @@ async fn collect_items_to_enrich_by_language(
                 )
             })?;
 
-            let before_filter_count = category_items.len();
             category_items.retain(|item| {
                 let source_key = normalize_source_name_key(&item.source_name);
-                source_key.is_empty() || !source_blacklist.contains(&source_key)
+                if !source_key.is_empty() && source_blacklist.contains(&source_key) {
+                    return false;
+                }
+                if !process_past_date {
+                    let today = Local::now().date_naive().to_string();
+                    if !is_on_utc_day(&item.date, &today) {
+                        return false;
+                    }
+                }
+                true
             });
-            let skipped_blacklisted = before_filter_count.saturating_sub(category_items.len());
-            if skipped_blacklisted > 0 {
-                logging::info(
-                    "Extract",
-                    format!(
-                        "Skipped {} blacklisted article(s) for category '{}' language '{}'",
-                        skipped_blacklisted, category, normalized_language
-                    ),
-                    Some(skipped_blacklisted),
-                );
-            }
 
             grouped_items
                 .entry(normalized_language)
@@ -918,7 +861,7 @@ async fn run_none_ai_stage(
     logging::info(
         "Enrichment",
         format!(
-            "Starting None-AI mode for {} item(s): skipping LLM enrichment and persisting title-only records",
+            "Starting None-AI mode for {} item(s)",
             total
         ),
         Some(total),
@@ -973,7 +916,7 @@ async fn run_none_ai_stage(
             // Keep title-only presentation for None-AI mode output.
             enriched.snippet.clear();
             enriched.ai_summary.clear();
-            enriched.enrichment_mode = "none".to_string();
+            enriched.status = "enriched".to_string();
 
             let embedding = enrich_media_and_embedding(
                 image_cache_dir,
@@ -1093,15 +1036,6 @@ async fn run_enrichment_stage(
         .max(1);
     let chunk_size = (all_articles.len() + worker_count - 1) / worker_count;
 
-    logging::info(
-        "Extract",
-        format!(
-            "Extracting {} article(s) with {} worker(s), {} article(s) per worker",
-            all_articles.len(), worker_count, chunk_size
-        ),
-        Some(all_articles.len()),
-    );
-
     // Phase 1: Concurrent extraction with bounded workers
     let mut join_set = tokio::task::JoinSet::new();
     let stop_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1179,17 +1113,6 @@ async fn run_enrichment_stage(
 
     let is_local_llm = llm_config.provider.is_local();
 
-    logging::info(
-        "Enrichment",
-        format!(
-            "LLM provider '{}' - {} concurrency (max concurrent: {})",
-            llm_config.provider.as_str(),
-            if is_local_llm { "sequential" } else { "concurrent" },
-            settings.concurrent_llm_requests,
-        ),
-        None,
-    );
-
     if is_local_llm {
         run_enrichment_stage_sequential(
             app, state, llm_config, image_cache_dir, settings, total, by_language
@@ -1224,16 +1147,6 @@ async fn run_enrichment_stage_sequential(
             break;
         }
 
-        logging::info(
-            "Enrichment",
-            format!(
-                "Processing language group '{}' with {} item(s)",
-                language,
-                items.len()
-            ),
-            Some(items.len()),
-        );
-
         for batch in items.chunks(settings.llm_batch_size) {
             if state.stop_requested.load(Ordering::Relaxed) {
                 break;
@@ -1261,14 +1174,6 @@ async fn run_enrichment_stage_sequential(
                     .map(|(_, title, text)| (title.clone(), text.clone()))
                     .collect();
 
-                logging::info(
-                    "Enrichment",
-                    format!(
-                        "Sending {} '{}' article(s) to LLM batch enrich",
-                        articles_for_llm.len(), language
-                    ),
-                    Some(articles_for_llm.len()),
-                );
                 emit_process_stage(
                     app,
                     "enrich",
@@ -1304,14 +1209,13 @@ async fn run_enrichment_stage_sequential(
                 let is_in_llm_batch = llm_inputs.iter().any(|(idx, _, _)| *idx == i);
 
                 if !is_in_llm_batch {
-                    logging::warn(
-                        "Enrichment",
-                        format!("Skipping '{}' because fetch failed; will retry", item.title),
-                        None,
-                    );
                     if first_error.is_none() {
                         first_error = Some(format!("Text fetch failed for '{}'", item.title));
                     }
+                    let mut failed = item.clone();
+                    failed.status = "failed".to_string();
+                    persist_enriched_article(&state.db, &failed).await?;
+                    emit_enriched_articles_updated(app, &failed.id, global_index, total, enriched_count)?;
                     continue;
                 }
 
@@ -1332,7 +1236,7 @@ async fn run_enrichment_stage_sequential(
                         let mut enriched = apply_enrichment_payload(
                             item.clone(), text, snippet, ai_summary, thumbnail, false,
                         );
-                        enriched.enrichment_mode = "ai".to_string();
+                        enriched.status = "enriched".to_string();
 
                         let embedding = enrich_media_and_embedding(
                             image_cache_dir,
@@ -1360,11 +1264,6 @@ async fn run_enrichment_stage_sequential(
                         enriched_count += 1;
 
                         emit_enriched_articles_updated(app, &enriched.id, global_index, total, enriched_count)?;
-                        logging::info(
-                            "Enrichment",
-                            format!("Enriched '{}' successfully", enriched.title),
-                            Some(enriched_count),
-                        );
                         emit_process_stage(
                             app,
                             "persist",
@@ -1375,10 +1274,13 @@ async fn run_enrichment_stage_sequential(
                         )?;
                     }
                     Err(err) => {
-                        logging::warn("Enrichment", format!("LLM enrich failed: {}", err), None);
                         if first_error.is_none() {
                             first_error = Some(err);
                         }
+                        let mut failed = item.clone();
+                        failed.status = "failed".to_string();
+                        persist_enriched_article(&state.db, &failed).await?;
+                        emit_enriched_articles_updated(app, &failed.id, global_index, total, enriched_count)?;
                     }
                 }
             }
@@ -1463,15 +1365,6 @@ async fn run_enrichment_stage_concurrent(
 
     let total_batches = all_batch_tasks.len();
     let concurrency = max_concurrent.min(total_batches);
-
-    logging::info(
-        "Enrichment",
-        format!(
-            "Starting concurrent LLM enrichment: {} batch(es) across {} language group(s), max {} concurrent",
-            total_batches, language_groups.len(), concurrency
-        ),
-        None,
-    );
 
     emit_process_stage(
         app,
@@ -1597,17 +1490,6 @@ async fn run_enrichment_stage_concurrent(
             batch_map.insert(t.batch_idx, t);
         }
 
-        logging::info(
-            "Enrichment",
-            format!(
-                "Persisting language group '{}' with {} item(s) in {} batch(es)",
-                language,
-                items.len(),
-                lang_batches.len()
-            ),
-            Some(items.len()),
-        );
-
         for (batch_idx, batch) in items.chunks(batch_size).enumerate() {
             let batch_task = batch_map.get(&batch_idx);
 
@@ -1646,7 +1528,7 @@ async fn run_enrichment_stage_concurrent(
                         let mut enriched = apply_enrichment_payload(
                             item.clone(), text, snippet, ai_summary, thumbnail, false,
                         );
-                        enriched.enrichment_mode = "ai".to_string();
+                        enriched.status = "enriched".to_string();
 
                         let embedding = enrich_media_and_embedding(
                             image_cache_dir,
@@ -1674,27 +1556,24 @@ async fn run_enrichment_stage_concurrent(
                         enriched_count += 1;
 
                         emit_enriched_articles_updated(app, &enriched.id, global_index, total, enriched_count)?;
-                        logging::info(
-                            "Enrichment",
-                            format!("Enriched '{}' successfully", enriched.title),
-                            Some(enriched_count),
-                        );
                     }
                     Some(Err(err)) => {
-                        logging::warn("Enrichment", format!("LLM enrich failed: {}", err), None);
                         if first_error.is_none() {
                             first_error = Some(err);
                         }
+                        let mut failed = item.clone();
+                        failed.status = "failed".to_string();
+                        persist_enriched_article(&state.db, &failed).await?;
+                        emit_enriched_articles_updated(app, &failed.id, global_index, total, enriched_count)?;
                     }
                     None => {
-                        logging::warn(
-                            "Enrichment",
-                            format!("Skipping '{}' because fetch failed", item.title),
-                            None,
-                        );
                         if first_error.is_none() {
                             first_error = Some(format!("Text fetch failed for '{}'", item.title));
                         }
+                        let mut failed = item.clone();
+                        failed.status = "failed".to_string();
+                        persist_enriched_article(&state.db, &failed).await?;
+                        emit_enriched_articles_updated(app, &failed.id, global_index, total, enriched_count)?;
                     }
                 }
             }
@@ -2275,6 +2154,7 @@ fn default_settings_map() -> HashMap<String, String> {
     map.insert("dislikedConcepts".to_string(), "".to_string());
     map.insert("sortMode".to_string(), "date".to_string());
     map.insert("layout".to_string(), "grid".to_string());
+    map.insert("processPastDateArticles".to_string(), "false".to_string());
     map
 }
 
@@ -2515,6 +2395,7 @@ async fn start_all_action(
     ollama_address: Option<String>,
     ollama_model: Option<String>,
     local_embedding_model: Option<String>,
+    process_past_date_articles: Option<bool>,
 ) -> Result<(), String> {
     let ai_mode_enabled = ai_mode_enabled.unwrap_or(false);
     let per_category_limit = limit.clamp(1, 100) as i64;
@@ -2568,11 +2449,14 @@ async fn start_all_action(
         });
     }
 
+    let process_past_date = process_past_date_articles.unwrap_or(false);
+
     let items_to_enrich_by_language = collect_items_to_enrich_by_language(
         &state,
         per_category_limit,
         &per_category_limits,
         &runtime.resolved.source_blacklist,
+        process_past_date,
     )
     .await?;
     let result = if ai_mode_enabled {
@@ -2664,7 +2548,7 @@ async fn reprocess_article(
         fetch_and_enrich_article_with_timeouts(llm.as_ref(), &item, runtime.resolved.min_summary_points, runtime.resolved.max_summary_points).await?;
 
     let mut enriched = apply_enrichment_payload(item, text, snippet, ai_summary, thumbnail, true);
-    enriched.enrichment_mode = "ai".to_string();
+    enriched.status = "enriched".to_string();
 
     let embedding = enrich_media_and_embedding(
         &runtime.image_cache_dir,

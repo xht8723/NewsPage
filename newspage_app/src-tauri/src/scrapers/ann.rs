@@ -177,7 +177,7 @@ pub fn extract_news_item_fields(item_html: &str) -> Option<AnnArticle> {
         ai_summary: String::new(),
         og_content: String::new(),
         snippet: String::new(),
-        enrichment_mode: "pending".to_string(),
+        status: "pending".to_string(),
     })
 }
 

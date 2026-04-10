@@ -152,8 +152,7 @@ export function CustomRssFeedModal({
       await onRefresh();
       setDraftName("");
       setDraftFeed("");
-    } catch (error) {
-      console.warn("Failed to add custom RSS feed", error);
+    } catch (_error) {
     } finally {
       setSaving(false);
     }
@@ -179,8 +178,7 @@ export function CustomRssFeedModal({
         request: { source_type: source.source_type, source_ref: source.source_ref, display_name: source.display_name, enabled: !source.enabled, tag_color: source.tag_color },
       });
       await onRefresh();
-    } catch (error) {
-      console.warn("Failed to toggle feed", error);
+    } catch (_error) {
     } finally {
       setSaving(false);
     }
@@ -206,8 +204,7 @@ export function CustomRssFeedModal({
       }
       await onRefresh();
       stopEditingFeed();
-    } catch (error) {
-      console.warn("Failed to save edited feed", error);
+    } catch (_error) {
     } finally {
       setSaving(false);
     }
@@ -220,8 +217,7 @@ export function CustomRssFeedModal({
         request: { source_type: source.source_type, source_ref: source.source_ref },
       });
       await onRefresh();
-    } catch (error) {
-      console.warn("Failed to delete custom RSS feed", error);
+    } catch (_error) {
     } finally {
       setSaving(false);
     }
@@ -236,8 +232,7 @@ export function CustomRssFeedModal({
         request: { source_type: source.source_type, source_ref: source.source_ref, display_name: source.display_name, enabled: source.enabled, tag_color: normalized },
       });
       await onRefresh();
-    } catch (error) {
-      console.warn("Failed to update tag color", error);
+    } catch (_error) {
     }
   };
 

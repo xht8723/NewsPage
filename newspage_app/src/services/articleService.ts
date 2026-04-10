@@ -31,6 +31,7 @@ export interface StartAllRequest {
   geminiModel?: string;
   deepseekApiKey?: string;
   deepseekModel?: string;
+  processPastDateArticles: boolean;
   [key: string]: unknown;
 }
 

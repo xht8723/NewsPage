@@ -13,7 +13,7 @@ export interface NewsArticle {
   category: string;
   articleType: "news" | "rss";
   language: string;
-  enrichmentMode: "pending" | "ai" | "none";
+  status: "pending" | "enriched" | "failed";
   title: string;
   snippet: string;
   aiSummary: string;
@@ -42,7 +42,7 @@ export interface BackendArticle {
   ai_summary: string;
   og_content: string;
   snippet: string;
-  enrichment_mode: "pending" | "ai" | "none";
+  status: "pending" | "enriched" | "failed";
   preference_score?: number;
 }
 
@@ -88,6 +88,7 @@ export interface UserSettings {
   liveTranslationEnabled: boolean;
   translationTargetLanguage: "en" | "zh-CN";
   concurrentLlmRequests: number;
+  processPastDateArticles: boolean;
 }
 
 export interface LocalEmbeddingStatus {

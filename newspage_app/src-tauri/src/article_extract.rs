@@ -4,7 +4,6 @@ use scraper::{Html, Selector};
 use trafilatura::{extract, Options};
 
 use crate::image_search::check_image_url;
-use crate::logging;
 
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -194,11 +193,6 @@ pub async fn decode_google_news_url(url: &str) -> Option<String> {
     }
 
     let article_id = extract_article_id(url)?;
-    logging::info(
-        "Extract",
-        format!("Decoding Google News redirect id {}", &article_id[..article_id.len().min(30)]),
-        None,
-    );
 
     // Tier 1: offline decode (instant, no network)
     if let Some(decoded) = decode_google_news_url_offline(article_id) {
@@ -239,19 +233,10 @@ fn build_client() -> reqwest::Client {
 pub async fn fetch_article_text_and_thumbnail(
     url: &str,
 ) -> Result<(String, Option<String>), String> {
-    logging::info("Extract", format!("Fetching article content for {}", url), None);
-
-    // If this is a Google News URL, decode it to the real publisher URL first.
     let effective_url = if is_google_news_url(url) {
         match decode_google_news_url(url).await {
-            Some(real_url) => {
-                logging::info("Extract", "Google News redirect decoded successfully", None);
-                real_url
-            }
-            None => {
-                logging::warn("Extract", "Google News redirect decode failed; using original URL", None);
-                url.to_string()
-            }
+            Some(real_url) => real_url,
+            None => url.to_string()
         }
     } else {
         url.to_string()
@@ -268,44 +253,18 @@ pub async fn fetch_article_text_and_thumbnail(
         .await
         .map_err(|e| format!("Failed to read response body: {}", e))?;
 
-    logging::info(
-        "Extract",
-        format!("Received HTML payload ({} bytes); extracting thumbnail and body", html.len()),
-        Some(html.len()),
-    );
     let thumbnail = extract_thumbnail_from_html(&html, &effective_url);
-
-    logging::info(
-        "Extract",
-        format!(
-            "Thumbnail extraction result for {}: {}",
-            effective_url,
-            if thumbnail.is_some() { "found" } else { "missing" }
-        ),
-        None,
-    );
 
     let result = extract(&html, &Options::default())
         .map_err(|e| format!("trafilatura failed to extract text from '{}': {}", effective_url, e))?;
 
     // Check if the extracted text is junk (JS wall, paywall, anti-bot, etc.)
     if let Some(reason) = is_junk_article_text(&result.content_text) {
-        logging::warn(
-            "Extract",
-            format!("Junk article text detected for {}: {}", effective_url, reason),
-            None,
-        );
         return Err(format!(
             "Extracted text from '{}' is not usable: {}",
             effective_url, reason
         ));
     }
-
-    logging::info(
-        "Extract",
-        format!("Article text extracted for {}", effective_url),
-        Some(result.content_text.len()),
-    );
 
     Ok((result.content_text, thumbnail))
 }

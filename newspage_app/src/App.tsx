@@ -94,6 +94,7 @@ function createDefaultSettings(): UserSettings {
     liveTranslationEnabled: false,
     translationTargetLanguage: "en",
     concurrentLlmRequests: 5,
+    processPastDateArticles: false,
   };
 }
 
@@ -207,6 +208,7 @@ function App(): React.JSX.Element {
       liveTranslationEnabled: false,
       translationTargetLanguage: "en" as const,
       concurrentLlmRequests: 5,
+      processPastDateArticles: false,
     };
     return defaults;
   });
@@ -360,6 +362,7 @@ function App(): React.JSX.Element {
             const n = Number(raw);
             return raw && !isNaN(n) ? Math.min(20, Math.max(1, n)) : defaults.concurrentLlmRequests;
           })(),
+          processPastDateArticles: saved.processPastDateArticles === "true",
         }));
         setSelectedEmbeddingModel(savedLocalEmbeddingModel || DEFAULT_EMBEDDING_MODEL);
         if (nextLayout) {
@@ -398,7 +401,6 @@ function App(): React.JSX.Element {
     if (settings.sortMode !== "score") {
       return;
     }
-    console.info(`Relevance sort unavailable: ${reason}`);
     setRelevanceWarning(reason);
     setSettings((current) => ({ ...current, sortMode: "date" as const }));
     saveSetting("sortMode", "date");
@@ -509,8 +511,7 @@ function App(): React.JSX.Element {
         setSettings((s) => ({ ...s, [modelKey]: nextModel }));
         saveSetting(modelKey as string, nextModel);
       }
-    } catch (e) {
-      console.error(`refreshCloudModels(${provider}) failed:`, e);
+    } catch (_e) {
     }
   }, [settings, saveSetting]);
 
@@ -532,8 +533,7 @@ function App(): React.JSX.Element {
     try {
       const rows = await feedService.list();
       setFeeds(rows);
-    } catch (error) {
-      console.warn("Failed to load feeds", error);
+    } catch (_error) {
     }
   }, []);
 
@@ -541,8 +541,7 @@ function App(): React.JSX.Element {
     try {
       const sources = await feedService.listSources();
       setFeedSources(sources);
-    } catch (error) {
-      console.warn("Failed to load RSS sources", error);
+    } catch (_error) {
     }
   }, []);
 
@@ -756,17 +755,16 @@ function App(): React.JSX.Element {
       }
     }
 
-    console.log("🚀 Starting enrichment pipeline...");
     try {
       await articleService.startAll({
         limit: settings.newsLimit,
         perCategoryLimitsJson: JSON.stringify(settings.perCategoryNewsLimits),
         cooldownHours: settings.scrapeCooldownHours,
         aiModeEnabled: settings.aiModeEnabled,
+        processPastDateArticles: settings.processPastDateArticles,
         ...llmArgs,
       });
     } catch (error) {
-      console.error("❌ Enrichment pipeline failed:", error);
       const message = error instanceof Error ? error.message : String(error);
       setEnrichmentError(message);
       setLoading(false);
@@ -909,8 +907,7 @@ function App(): React.JSX.Element {
               }
               return [scoredArticle, ...prev];
             });
-          } catch (err) {
-            console.warn("Failed to fetch enriched article:", err);
+          } catch (_err) {
           }
         });
         if (disposed) {
@@ -918,9 +915,7 @@ function App(): React.JSX.Element {
         } else {
           unlisteners.push(off);
         }
-        console.log("✅ Listener registered: enriched-articles-updated");
-      } catch (error) {
-        console.error("❌ Failed to register enriched-articles-updated listener:", error);
+      } catch (_error) {
       }
 
       try {
@@ -946,9 +941,7 @@ function App(): React.JSX.Element {
         } else {
           unlisteners.push(off);
         }
-        console.log("✅ Listener registered: enriched-news-sync-complete");
-      } catch (error) {
-        console.error("❌ Failed to register enriched-news-sync-complete listener:", error);
+      } catch (_error) {
       }
 
       try {
@@ -960,9 +953,7 @@ function App(): React.JSX.Element {
         } else {
           unlisteners.push(off);
         }
-        console.log("✅ Listener registered: process-log");
-      } catch (error) {
-        console.error("❌ Failed to register process-log listener:", error);
+      } catch (_error) {
       }
 
       try {
@@ -974,9 +965,7 @@ function App(): React.JSX.Element {
         } else {
           unlisteners.push(off);
         }
-        console.log("✅ Listener registered: process-stage");
-      } catch (error) {
-        console.error("❌ Failed to register process-stage listener:", error);
+      } catch (_error) {
       }
     };
 
@@ -1159,6 +1148,7 @@ function App(): React.JSX.Element {
     setIsFilterTransitioning(true);
     setTimeout(() => {
       setSelectedDate(date);
+      void fetchEnrichedNews(true, false, date);
       setTimeout(() => setIsFilterTransitioning(false), 50);
     }, 150);
   };
@@ -1235,24 +1225,19 @@ function App(): React.JSX.Element {
       const ids = currentNews.map((a) => a.id);
 
       try {
-        console.log("[score] Computing scores for", ids.length, "articles, model:", settings.localEmbeddingModel, "liked:", liked, "disliked:", disliked);
         const scorePairs = await articleService.computePreferenceScores({
           articleIds: ids,
           likedConcepts: liked,
           dislikedConcepts: disliked,
           localEmbeddingModel: settings.localEmbeddingModel,
         });
-        console.log("[score] Received", scorePairs.length, "score pairs:", scorePairs.slice(0, 5), "...");
         const scoreMap = Object.fromEntries(scorePairs);
-        const nonZero = scorePairs.filter(([, s]) => s !== 0).length;
-        console.log("[score]", nonZero, "of", ids.length, "articles have non-zero scores");
         setNews((prev) => prev.map((a) => ({
           ...a,
           preferenceScore: scoreMap[a.id] ?? a.preferenceScore,
         })));
         setRelevanceWarning(null);
       } catch (error) {
-        console.error("[score] Computation failed:", error);
         if (String(error).includes("RELEVANCE_EMBEDDING_UNAVAILABLE")) {
           disableRelevanceSort(String(error));
         }

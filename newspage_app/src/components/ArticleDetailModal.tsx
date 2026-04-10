@@ -36,7 +36,7 @@ export function ArticleDetailModal({
   const [articleSnapshot, setArticleSnapshot] = useState<NewsArticle | null>(null);
   const { isMounted, isClosing } = usePanelTransition(!!selectedArticle, 170);
   const activeArticle = selectedArticle ?? articleSnapshot;
-  const isTitleOnlyArticle = activeArticle?.enrichmentMode === "none";
+  const isTitleOnlyArticle = activeArticle?.status !== "enriched";
   const onThumbnailError = useImageFallback(ARTICLE_HERO_FALLBACK_URL);
 
   useEffect(() => {

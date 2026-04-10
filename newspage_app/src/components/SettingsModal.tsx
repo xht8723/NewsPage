@@ -393,6 +393,22 @@ export function SettingsModal({
                   </div>
                 </div>
                 <div>
+                  <label className="mb-1.5 block text-xs font-medium opacity-70">Process past date articles</label>
+                  <p className="mb-1.5 text-xs opacity-50">Only process current day articles</p>
+                  <label className="flex cursor-pointer items-center gap-2">
+                    <NeonCheckbox
+                      checked={settings.processPastDateArticles}
+                      onChange={(checked) => {
+                        setSettings((current) => ({ ...current, processPastDateArticles: checked }));
+                        saveSetting("processPastDateArticles", checked ? "true" : "false");
+                      }}
+                      isDarkMode={isDarkMode}
+                      ariaLabel="Process past date articles"
+                    />
+                    <span className="text-xs font-medium">Past articles</span>
+                  </label>
+                </div>
+                <div>
                   <label className="mb-1.5 block text-xs font-medium opacity-70">Scrape cooldown (hours)</label>
                   <p className="mb-1.5 text-xs opacity-50">Min time between website scrapes. 0 = always scrape.</p>
                   <div>
@@ -1252,8 +1268,7 @@ export function SettingsModal({
                         setIsPurging(true);
                         try {
                           await onPurgeDatabase();
-                        } catch (err) {
-                          console.error("Purge failed:", err);
+                        } catch (_err) {
                         } finally {
                           setIsPurging(false);
                           setPurgeConfirmStep(0);
