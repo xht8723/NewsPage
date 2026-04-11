@@ -1,11 +1,11 @@
 import { memo } from "react";
+import { useSettingsStore } from "../stores/settingsStore";
 
 interface PreferencePanelProps {
   className?: string;
   isDarkMode: boolean;
   sortMode: string;
   isRelevanceMode: boolean;
-  isEmbeddingReady: boolean;
   likedConcepts: string;
   dislikedConcepts: string;
   onSetSortMode: (mode: "date" | "score") => void;
@@ -17,12 +17,12 @@ function PreferencePanelComponent({
   isDarkMode,
   sortMode,
   isRelevanceMode,
-  isEmbeddingReady,
   likedConcepts,
   dislikedConcepts,
   onSetSortMode,
   onSetPreferenceConcepts,
 }: PreferencePanelProps): React.JSX.Element {
+  const isEmbeddingReady = useSettingsStore((s) => s.isEmbeddingReady);
   return (
     <div className={`rounded-2xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/50" : "border-zinc-200 bg-zinc-150"} ${className}`.trim()}>
       <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Sort by:</p>

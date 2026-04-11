@@ -1,31 +1,24 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
 import {
-  Calendar,
   Moon,
-  Sun,
   RefreshCw,
   Settings,
-  Languages,
-  SlidersHorizontal,
+  Sun,
   Sparkles,
+  Languages,
   LayoutList,
   X,
 } from "lucide-react";
-import {
-  DEFAULT_EMBEDDING_MODEL,
-  LOCAL_EMBEDDING_MODELS,
-  type LayoutMode,
-  type OllamaConnectionState,
-} from "./constants/article";
-import type { NewsArticle, UserSettings, CardContextMenuState, LocalEmbeddingStatus, ProcessLogEntry, ProcessStageEvent, FeedDefinition, EnrichedArticlesUpdatedEvent } from "./types/article";
-import { mapBackendArticle } from "./utils/articleMapper";
-import { formatDateLocal, offsetDateString, getProviderLabel } from "./utils/articleMeta";
-import { buildLLMArgs, getSelectedApiKey, getSelectedModel, getSelectedEndpoint } from "./utils/llmConfig";
+import type { CardContextMenuState, FeedDefinition } from "./types/article";
+import { formatDateLocal, getProviderLabel } from "./utils/articleMeta";
+import { getSelectedModel, getSelectedApiKey, getSelectedEndpoint } from "./utils/llmConfig";
 import { useEnrichedArticles } from "./hooks/useEnrichedArticles";
-import { useDebouncedSettingSaverController } from "./hooks/useDebouncedSettingSaver";
 import { usePanelTransition } from "./hooks/usePanelTransition";
-import { PreferencePanel } from "./components/PreferencePanel";
+import { useAppStartup } from "./hooks/useAppStartup";
+import { useLlmSettings } from "./hooks/useLlmSettings";
+import { useFeedManager } from "./hooks/useFeedManager";
+import { useNewsProcessor } from "./hooks/useNewsProcessor";
+import { useArticleFilter } from "./hooks/useArticleFilter";
 import { LayoutSwitcher } from "./components/LayoutSwitcher";
 import { CardContextMenu } from "./components/CardContextMenu";
 import { SettingsModal } from "./components/SettingsModal";
@@ -35,132 +28,81 @@ import { LogPanel } from "./components/LogPanel";
 import { CategoryLimitsModal } from "./components/CategoryLimitsModal";
 import { CustomRssFeedModal } from "./components/CustomRssFeedModal";
 import { FeedManagerPanel } from "./components/FeedManagerPanel";
-import { FeedNavigationList } from "./components/FeedNavigationList";
-import { DotsSpinner } from "./components/DotsSpinner";
 import { NeonCheckbox } from "./components/NeonCheckbox";
 import { VirtualizedArticleList } from "./components/VirtualizedArticleList";
 import { OnboardingGuide } from "./components/OnboardingGuide";
+import { StartupScreen } from "./components/StartupScreen";
+import { AppSidebar } from "./components/AppSidebar";
+import { FeedDeleteConfirmDialog } from "./components/FeedDeleteConfirmDialog";
+import { ConfigPopupDialog } from "./components/ConfigPopupDialog";
 import type { TranslationRuntimeConfig } from "./hooks/useLiveTranslation";
-import { addSourceToBlacklist, normalizeSourceName, parseSourceBlacklist, toNormalizedSourceSet } from "./utils/sourceBlacklist";
-import { feedService, articleService, settingsService, llmService } from "./services";
-import { useFeedStore, useNewsStore, useUIStore } from "./stores";
+import { normalizeSourceName, toNormalizedSourceSet } from "./utils/sourceBlacklist";
+import { articleService, llmService } from "./services";
+import { useFeedStore, useNewsStore, useUIStore, useSettingsStore } from "./stores";
+import { createDefaultSettings } from "./stores/settingsStore";
 import "./App.css";
 
-type StageKey = "scrape" | "extract" | "enrich" | "persist";
-type StageState = "idle" | "running" | "done" | "error" | "stopped";
-type StartupPhase = "loading-settings" | "preparing-embedding" | "ready" | "error";
-
-const STAGE_ORDER: StageKey[] = ["scrape", "extract", "enrich", "persist"];
-
-function makeInitialStageStatus(): Record<StageKey, { state: StageState; current?: number; total?: number; message?: string }> {
-  return {
-    scrape: { state: "idle" },
-    extract: { state: "idle" },
-    enrich: { state: "idle" },
-    persist: { state: "idle" },
-  };
-}
-
-function createDefaultSettings(): UserSettings {
-  return {
-    aiModeEnabled: false,
-    newsLimit: 5,
-    perCategoryNewsLimits: {},
-    scrapeCooldownHours: 2,
-    llmBatchSize: 3,
-    llmProvider: "ollama",
-    ollamaAddress: "http://127.0.0.1:11434",
-    ollamaModel: "qwen2.5:3b",
-    localEmbeddingModel: "",
-    embeddingInitialized: false,
-    embeddingModelLocked: false,
-    openaiApiKey: "",
-    openaiModel: "gpt-5.4-mini",
-    claudeApiKey: "",
-    claudeModel: "claude-sonnet-4-6",
-    geminiApiKey: "",
-    geminiModel: "gemini-2.5-flash",
-    deepseekApiKey: "",
-    deepseekModel: "deepseek-chat",
-    selectedRegions: [],
-    sourceBlacklist: [],
-    showFeedDeletionConfirmation: true,
-    likedConcepts: "",
-    dislikedConcepts: "",
-    sortMode: "date",
-    layout: "grid",
-    minSummaryPoints: 1,
-    maxSummaryPoints: 8,
-    liveTranslationEnabled: false,
-    translationTargetLanguage: "en",
-    concurrentLlmRequests: 5,
-    processPastDateArticles: false,
-  };
-}
+const STAGE_ORDER = ["scrape", "extract", "enrich", "persist"] as const;
 
 function App(): React.JSX.Element {
-  // UI Store state
-  const isDarkMode = useUIStore((state) => state.isDarkMode);
-  const showCalendar = useUIStore((state) => state.showCalendar);
-  const showSettings = useUIStore((state) => state.showSettings);
-  const showCategoryManager = useUIStore((state) => state.showCategoryManager);
-  const showCategoryLimitsManager = useUIStore((state) => state.showCategoryLimitsManager);
-  const showCustomRssFeedSettings = useUIStore((state) => state.showCustomRssFeedSettings);
-  const showLogPanel = useUIStore((state) => state.showLogPanel);
-  const showLayoutSwitcher = useUIStore((state) => state.showLayoutSwitcher);
-  const showConfigPopup = useUIStore((state) => state.showConfigPopup);
-  const showOnboardingGuide = useUIStore((state) => state.showOnboardingGuide);
-  const configPopupMessage = useUIStore((state) => state.configPopupMessage);
-  const contextMenu = useUIStore((state) => state.contextMenu);
-  const pendingFeedDeletion = useUIStore((state) => state.pendingFeedDeletion);
-  const isFilterTransitioning = useUIStore((state) => state.isFilterTransitioning);
-  const settingsScrollToEmbedding = useUIStore((state) => state.settingsScrollToEmbedding);
-  const showSettingsHints = useUIStore((state) => state.showSettingsHints);
+  const isDarkMode = useUIStore((s) => s.isDarkMode);
+  const showCalendar = useUIStore((s) => s.showCalendar);
+  const showSettings = useUIStore((s) => s.showSettings);
+  const showCategoryManager = useUIStore((s) => s.showCategoryManager);
+  const showCategoryLimitsManager = useUIStore((s) => s.showCategoryLimitsManager);
+  const showCustomRssFeedSettings = useUIStore((s) => s.showCustomRssFeedSettings);
+  const showLogPanel = useUIStore((s) => s.showLogPanel);
+  const showLayoutSwitcher = useUIStore((s) => s.showLayoutSwitcher);
+  const showConfigPopup = useUIStore((s) => s.showConfigPopup);
+  const showOnboardingGuide = useUIStore((s) => s.showOnboardingGuide);
+  const configPopupMessage = useUIStore((s) => s.configPopupMessage);
+  const contextMenu = useUIStore((s) => s.contextMenu);
+  const pendingFeedDeletion = useUIStore((s) => s.pendingFeedDeletion);
+  const isFilterTransitioning = useUIStore((s) => s.isFilterTransitioning);
+  const settingsScrollToEmbedding = useUIStore((s) => s.settingsScrollToEmbedding);
+  const showSettingsHints = useUIStore((s) => s.showSettingsHints);
 
-  // UI Store actions
-  const setIsDarkMode = useUIStore((state) => state.setIsDarkMode);
-  const setShowCalendar = useUIStore((state) => state.setShowCalendar);
-  const setShowSettings = useUIStore((state) => state.setShowSettings);
-  const setShowCategoryManager = useUIStore((state) => state.setShowCategoryManager);
-  const setShowCategoryLimitsManager = useUIStore((state) => state.setShowCategoryLimitsManager);
-  const setShowCustomRssFeedSettings = useUIStore((state) => state.setShowCustomRssFeedSettings);
-  const setShowLogPanel = useUIStore((state) => state.setShowLogPanel);
-  const setShowLayoutSwitcher = useUIStore((state) => state.setShowLayoutSwitcher);
-  const setConfigPopupMessage = useUIStore((state) => state.setConfigPopupMessage);
-  const setContextMenu = useUIStore((state) => state.setContextMenu);
-  const setPendingFeedDeletion = useUIStore((state) => state.setPendingFeedDeletion);
-  const setIsFilterTransitioning = useUIStore((state) => state.setIsFilterTransitioning);
-  const setSettingsScrollToEmbedding = useUIStore((state) => state.setSettingsScrollToEmbedding);
-  const setShowSettingsHints = useUIStore((state) => state.setShowSettingsHints);
-  const setShowOnboardingGuide = useUIStore((state) => state.setShowOnboardingGuide);
-  const setShowConfigPopup = useUIStore((state) => state.setShowConfigPopup);
+  const setIsDarkMode = useUIStore((s) => s.setIsDarkMode);
+  const setShowCalendar = useUIStore((s) => s.setShowCalendar);
+  const setShowSettings = useUIStore((s) => s.setShowSettings);
+  const setShowCategoryManager = useUIStore((s) => s.setShowCategoryManager);
+  const setShowCategoryLimitsManager = useUIStore((s) => s.setShowCategoryLimitsManager);
+  const setShowCustomRssFeedSettings = useUIStore((s) => s.setShowCustomRssFeedSettings);
+  const setShowLogPanel = useUIStore((s) => s.setShowLogPanel);
+  const setShowLayoutSwitcher = useUIStore((s) => s.setShowLayoutSwitcher);
+  const setConfigPopupMessage = useUIStore((s) => s.setConfigPopupMessage);
+  const setContextMenu = useUIStore((s) => s.setContextMenu);
+  const setPendingFeedDeletion = useUIStore((s) => s.setPendingFeedDeletion);
+  const setIsFilterTransitioning = useUIStore((s) => s.setIsFilterTransitioning);
+  const setSettingsScrollToEmbedding = useUIStore((s) => s.setSettingsScrollToEmbedding);
+  const setShowSettingsHints = useUIStore((s) => s.setShowSettingsHints);
+  const setShowOnboardingGuide = useUIStore((s) => s.setShowOnboardingGuide);
+  const setShowConfigPopup = useUIStore((s) => s.setShowConfigPopup);
 
-  // Feed Store state (use local callback functions for API calls, store for state read)
-  const feeds = useFeedStore((state) => state.feeds);
-  const feedSources = useFeedStore((state) => state.feedSources);
-  const selectedFeedId = useFeedStore((state) => state.selectedFeedId);
-  const setSelectedFeedId = useFeedStore((state) => state.setSelectedFeedId);
-  const setFeeds = useFeedStore((state) => state.setFeeds);
-  const setFeedSources = useFeedStore((state) => state.setFeedSources);
+  const feeds = useFeedStore((s) => s.feeds);
+  const feedSources = useFeedStore((s) => s.feedSources);
+  const selectedFeedId = useFeedStore((s) => s.selectedFeedId);
+  const setSelectedFeedId = useFeedStore((s) => s.setSelectedFeedId);
+  const setFeedSources = useFeedStore((s) => s.setFeedSources);
 
-  // News Store state (for enrichment progress and logs - not news list which comes from useEnrichedNews)
-  const enrichmentError = useNewsStore((state) => state.enrichmentError);
-  const relevanceWarning = useNewsStore((state) => state.relevanceWarning);
-  const selectedArticle = useNewsStore((state) => state.selectedArticle);
-  const reprocessingArticleId = useNewsStore((state) => state.reprocessingArticleId);
-  const stageStatus = useNewsStore((state) => state.stageStatus);
-  const processLogs = useNewsStore((state) => state.processLogs);
-  const setEnrichmentError = useNewsStore((state) => state.setEnrichmentError);
-  const setRelevanceWarning = useNewsStore((state) => state.setRelevanceWarning);
-  const setSelectedArticle = useNewsStore((state) => state.setSelectedArticle);
-  const setReprocessingArticleId = useNewsStore((state) => state.setReprocessingArticleId);
-  const setStageStatus = useNewsStore((state) => state.setStageStatus);
-  const setProcessLogs = useNewsStore((state) => state.setProcessLogs);
+  const enrichmentError = useNewsStore((s) => s.enrichmentError);
+  const relevanceWarning = useNewsStore((s) => s.relevanceWarning);
+  const selectedArticle = useNewsStore((s) => s.selectedArticle);
+  const reprocessingArticleId = useNewsStore((s) => s.reprocessingArticleId);
+  const stageStatus = useNewsStore((s) => s.stageStatus);
+  const processLogs = useNewsStore((s) => s.processLogs);
+  const setEnrichmentError = useNewsStore((s) => s.setEnrichmentError);
+  const setRelevanceWarning = useNewsStore((s) => s.setRelevanceWarning);
+  const setSelectedArticle = useNewsStore((s) => s.setSelectedArticle);
+  const setProcessLogs = useNewsStore((s) => s.setProcessLogs);
+  const setStageStatus = useNewsStore((s) => s.setStageStatus);
 
-  // Local component state (not in stores - transient UI state or complex async state)
-  const [loading, setLoading] = useState(false);
-  const [stopping, setStopping] = useState(false);
-  const [layout, setLayout] = useState<LayoutMode>("grid");
+  const settings = useSettingsStore((s) => s.settings);
+  const setSettings = useSettingsStore((s) => s.setSettings);
+  const resetSettings = useSettingsStore((s) => s.resetSettings);
+  const saveSetting = useSettingsStore((s) => s.saveSetting);
+  const cancelPendingSave = useSettingsStore((s) => s.cancelPendingSave);
+
   const [selectedDate, setSelectedDate] = useState(() => formatDateLocal(new Date()));
   const [showTranslatePanel, setShowTranslatePanel] = useState(false);
   const [contextMenuSnapshot, setContextMenuSnapshot] = useState<CardContextMenuState | null>(null);
@@ -168,668 +110,42 @@ function App(): React.JSX.Element {
   const [dontAskFeedDeleteAgain, setDontAskFeedDeleteAgain] = useState(false);
   const [purgeConfirmStep, setPurgeConfirmStep] = useState<0 | 1 | 2>(0);
   const [isPurging, setIsPurging] = useState(false);
-  
+
   const translatePanelRef = useRef<HTMLDivElement | null>(null);
-  const seenLogKeysRef = useRef<Map<string, number>>(new Map());
   const todayString = formatDateLocal(new Date());
   const canGoToNextDay = selectedDate < todayString;
 
-  // Settings state (still using local state - complex migration)
-  const [settings, setSettings] = useState<UserSettings>(() => {
-    const defaults = {
-      aiModeEnabled: false,
-      newsLimit: 5,
-      perCategoryNewsLimits: {},
-      scrapeCooldownHours: 2,
-      llmBatchSize: 3,
-      llmProvider: "ollama",
-      ollamaAddress: "http://127.0.0.1:11434",
-      ollamaModel: "qwen2.5:3b",
-      localEmbeddingModel: "",
-      embeddingInitialized: false,
-      embeddingModelLocked: false,
-      openaiApiKey: "",
-      openaiModel: "gpt-5.4-mini",
-      claudeApiKey: "",
-      claudeModel: "claude-sonnet-4-6",
-      geminiApiKey: "",
-    geminiModel: "gemini-2.5-flash",
-    deepseekApiKey: "",
-    deepseekModel: "deepseek-chat",
-      selectedRegions: [],
-      sourceBlacklist: [],
-      showFeedDeletionConfirmation: true,
-      likedConcepts: "",
-      dislikedConcepts: "",
-      sortMode: "date",
-      layout: "grid" as LayoutMode,
-      minSummaryPoints: 1,
-      maxSummaryPoints: 8,
-      liveTranslationEnabled: false,
-      translationTargetLanguage: "en" as const,
-      concurrentLlmRequests: 5,
-      processPastDateArticles: false,
-    };
-    return defaults;
-  });
-  const isRelevanceMode = settings.sortMode === "score";
-  const [ollamaConnectionState, setOllamaConnectionState] = useState<OllamaConnectionState>("unknown");
-  const [isTestingOllama, setIsTestingOllama] = useState(false);
-  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
-  const [isRefreshingModels, setIsRefreshingModels] = useState(false);
-  const [localEmbeddingModels, setLocalEmbeddingModels] = useState<string[]>(LOCAL_EMBEDDING_MODELS as unknown as string[]);
-  const [localEmbeddingStatus, setLocalEmbeddingStatus] = useState<LocalEmbeddingStatus | null>(null);
-  const [isPreparingLocalEmbeddingModel, setIsPreparingLocalEmbeddingModel] = useState(false);
-  const [isEmbeddingReady, setIsEmbeddingReady] = useState(false);
-  const [cloudModels, setCloudModels] = useState<Record<string, string[]>>({});
-  const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState(DEFAULT_EMBEDDING_MODEL);
-  const [startupPhase, setStartupPhase] = useState<StartupPhase>("loading-settings");
-  const [startupErrorMessage, setStartupErrorMessage] = useState("");
-  const isEmbeddingConfigured = settings.localEmbeddingModel.trim().length > 0;
+  const {
+    startupPhase,
+    startupErrorMessage,
+    localEmbeddingStatus: startupEmbeddingStatus,
+    isEmbeddingConfigured,
+    selectedEmbeddingModel,
+    setSelectedEmbeddingModel,
+    layout,
+    setLayout,
+    resetStartupState,
+    retryEmbeddingLoad,
+  } = useAppStartup();
 
-  const { saveSetting, cancelPendingSave } = useDebouncedSettingSaverController(500);
+  const { news, setNews, fetchEnrichedNews } = useEnrichedArticles({ selectedDate });
 
-  const translatePanelTransition = usePanelTransition(showTranslatePanel, 140);
-  const categoryManagerTransition = usePanelTransition(showCategoryManager, 170);
-  const configPopupTransition = usePanelTransition(showConfigPopup, 170);
-  const pendingFeedDeletionTransition = usePanelTransition(!!pendingFeedDeletion, 170);
-  const contextMenuTransition = usePanelTransition(!!contextMenu, 140);
+  const feedManager = useFeedManager();
 
-  // Show onboarding guide on first run (when embedding is not yet configured)
-  useEffect(() => {
-    if (startupPhase === "ready" && !isEmbeddingConfigured) {
-      setShowOnboardingGuide(true);
-    }
-  }, [startupPhase, isEmbeddingConfigured]);
-
-  useEffect(() => {
-    if (pendingFeedDeletion) {
-      setPendingFeedDeletionSnapshot(pendingFeedDeletion);
-      return;
-    }
-
-    if (!pendingFeedDeletionTransition.isMounted) {
-      setPendingFeedDeletionSnapshot(null);
-    }
-  }, [pendingFeedDeletion, pendingFeedDeletionTransition.isMounted]);
-
-  const pendingFeedDeletionView = pendingFeedDeletion ?? pendingFeedDeletionSnapshot;
-
-  useEffect(() => {
-    if (contextMenu) {
-      setContextMenuSnapshot(contextMenu);
-      return;
-    }
-
-    if (!contextMenuTransition.isMounted) {
-      setContextMenuSnapshot(null);
-    }
-  }, [contextMenu, contextMenuTransition.isMounted]);
-
-  const contextMenuView = contextMenu ?? contextMenuSnapshot;
-
-  const preloadEmbeddingOnStartup = useCallback(async (model: string) => {
-    const normalizedModel = model.trim().toLowerCase();
-    if (!normalizedModel) {
-      setIsEmbeddingReady(false);
-      setStartupErrorMessage("");
-      setStartupPhase("ready");
-      return;
-    }
-
-    setStartupPhase("preparing-embedding");
-    setStartupErrorMessage("");
-
-    try {
-      const status = await llmService.prepareLocalEmbeddingModel(model);
-      setLocalEmbeddingStatus(status);
-
-      const ready =
-        status.state === "ready"
-        && (status.active_model ?? "").toLowerCase() === normalizedModel;
-      if (!ready) {
-        throw new Error(status.message || `Failed to load embedding model '${model}'.`);
-      }
-
-      setIsEmbeddingReady(true);
-      setStartupPhase("ready");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setLocalEmbeddingStatus((current) => ({
-        state: "error",
-        active_model: model,
-        cache_dir: current?.cache_dir ?? "",
-        message,
-      }));
-      setIsEmbeddingReady(false);
-      setStartupErrorMessage(message);
-      setStartupPhase("error");
-    }
-  }, []);
-
-  // Load persisted settings on mount
-  useEffect(() => {
-    settingsService.load()
-      .then((saved) => {
-        const defaults = createDefaultSettings();
-        const savedLocalEmbeddingModel = saved.localEmbeddingModel?.trim() ? saved.localEmbeddingModel : "";
-        const savedLayout = saved.layout?.trim();
-        const nextLayout: LayoutMode | null =
-          savedLayout === "grid" || savedLayout === "list" || savedLayout === "compact_list"
-            ? savedLayout
-            : null;
-        const persistedSortMode = saved.sortMode?.trim() ? saved.sortMode : defaults.sortMode;
-        const nextSortMode = !savedLocalEmbeddingModel && persistedSortMode === "score"
-          ? "date"
-          : persistedSortMode;
-
-        setSettings(() => ({
-          ...defaults,
-          aiModeEnabled: saved.aiModeEnabled === "true",
-          newsLimit: saved.newsLimit ? Math.min(50, Math.max(1, Number(saved.newsLimit))) : defaults.newsLimit,
-          perCategoryNewsLimits: (() => { try { return saved.perCategoryNewsLimits ? JSON.parse(saved.perCategoryNewsLimits) as Record<string, number> : {}; } catch { return {}; } })(),
-          scrapeCooldownHours: saved.scrapeCooldownHours ? Math.min(24, Math.max(0, Number(saved.scrapeCooldownHours))) : defaults.scrapeCooldownHours,
-          llmBatchSize: saved.llmBatchSize ? Math.min(20, Math.max(1, Number(saved.llmBatchSize))) : defaults.llmBatchSize,
-          llmProvider: saved.llmProvider?.trim() ? saved.llmProvider : defaults.llmProvider,
-          ollamaAddress: saved.ollamaAddress?.trim() ? saved.ollamaAddress : defaults.ollamaAddress,
-          ollamaModel: saved.ollamaModel?.trim() ? saved.ollamaModel : defaults.ollamaModel,
-          localEmbeddingModel: savedLocalEmbeddingModel,
-          embeddingInitialized: savedLocalEmbeddingModel.length > 0,
-          embeddingModelLocked: savedLocalEmbeddingModel.length > 0,
-          openaiApiKey: saved.openaiApiKey ?? defaults.openaiApiKey,
-          openaiModel: saved.openaiModel?.trim() ? saved.openaiModel : defaults.openaiModel,
-          claudeApiKey: saved.claudeApiKey ?? defaults.claudeApiKey,
-          claudeModel: saved.claudeModel?.trim() ? saved.claudeModel : defaults.claudeModel,
-          geminiApiKey: saved.geminiApiKey ?? defaults.geminiApiKey,
-          geminiModel: saved.geminiModel?.trim() ? saved.geminiModel : defaults.geminiModel,
-          deepseekApiKey: saved.deepseekApiKey ?? defaults.deepseekApiKey,
-          deepseekModel: saved.deepseekModel?.trim() ? saved.deepseekModel : defaults.deepseekModel,
-          selectedRegions: saved.selectedRegions ? (() => { try { return JSON.parse(saved.selectedRegions) as string[]; } catch { return defaults.selectedRegions; } })() : defaults.selectedRegions,
-          sourceBlacklist: parseSourceBlacklist(saved.sourceBlacklist),
-          showFeedDeletionConfirmation: saved.showFeedDeletionConfirmation !== "false",
-          likedConcepts: saved.likedConcepts ?? defaults.likedConcepts,
-          dislikedConcepts: saved.dislikedConcepts ?? defaults.dislikedConcepts,
-          sortMode: nextSortMode,
-          layout: nextLayout ?? defaults.layout,
-          minSummaryPoints: saved.minSummaryPoints ? Math.min(20, Math.max(1, Number(saved.minSummaryPoints))) : defaults.minSummaryPoints,
-          maxSummaryPoints: saved.maxSummaryPoints ? Math.min(20, Math.max(1, Number(saved.maxSummaryPoints))) : defaults.maxSummaryPoints,
-          liveTranslationEnabled: saved.liveTranslationEnabled === "true",
-          translationTargetLanguage: saved.translationTargetLanguage === "zh-CN" ? "zh-CN" : "en",
-          concurrentLlmRequests: (() => {
-            const raw = saved.concurrentLlmRequests;
-            if (raw === "true") return 5;
-            if (raw === "false") return 1;
-            const n = Number(raw);
-            return raw && !isNaN(n) ? Math.min(20, Math.max(1, n)) : defaults.concurrentLlmRequests;
-          })(),
-          processPastDateArticles: saved.processPastDateArticles === "true",
-        }));
-        setSelectedEmbeddingModel(savedLocalEmbeddingModel || DEFAULT_EMBEDDING_MODEL);
-        if (nextLayout) {
-          setLayout(nextLayout);
-        } else {
-          setLayout(defaults.layout);
-        }
-        if (saved.selectedFeedId?.trim()) {
-          setSelectedFeedId(saved.selectedFeedId.trim());
-        }
-
-        if (persistedSortMode !== nextSortMode) {
-          void settingsService.save("sortMode", nextSortMode);
-        }
-
-        if (savedLocalEmbeddingModel.length > 0) {
-          void preloadEmbeddingOnStartup(savedLocalEmbeddingModel);
-        } else {
-          setLocalEmbeddingStatus(null);
-          setIsEmbeddingReady(false);
-          setStartupErrorMessage("");
-          setStartupPhase("ready");
-        }
-      })
-      .catch(() => {
-        setSettings(createDefaultSettings());
-        setSelectedEmbeddingModel(DEFAULT_EMBEDDING_MODEL);
-        setLocalEmbeddingStatus(null);
-        setIsEmbeddingReady(false);
-        setStartupErrorMessage("");
-        setStartupPhase("ready");
-      });
-  }, [preloadEmbeddingOnStartup]);
-
-  const disableRelevanceSort = useCallback((reason: string) => {
-    if (settings.sortMode !== "score") {
-      return;
-    }
-    setRelevanceWarning(reason);
-    setSettings((current) => ({ ...current, sortMode: "date" as const }));
-    saveSetting("sortMode", "date");
-  }, [settings.sortMode, saveSetting]);
-
-  const testOllamaConnection = useCallback(async (address: string) => {
-    setIsTestingOllama(true);
-    try {
-      await llmService.testOllamaConnection(address);
-      setOllamaConnectionState("ok");
-    } catch {
-      setOllamaConnectionState("fail");
-      disableRelevanceSort("Ollama connection test failed");
-    } finally {
-      setIsTestingOllama(false);
-    }
-  }, [disableRelevanceSort]);
-
-  const refreshOllamaModels = useCallback(async (address: string, preferredModel?: string) => {
-    setIsRefreshingModels(true);
-    try {
-      const models = await llmService.listOllamaModels(address);
-      setOllamaModels(models);
-      setOllamaConnectionState("ok");
-      if (models.length === 0) {
-        return;
-      }
-
-      const candidate = preferredModel ?? models[0];
-      const nextModel = models.includes(candidate) ? candidate : models[0];
-      setSettings((s) => {
-        if (s.ollamaModel === nextModel) {
-          return s;
-        }
-        saveSetting("ollamaModel", nextModel);
-        return { ...s, ollamaModel: nextModel };
-      });
-    } catch {
-      setOllamaConnectionState("fail");
-      setOllamaModels([]);
-      disableRelevanceSort("Ollama model refresh failed");
-    } finally {
-      setIsRefreshingModels(false);
-    }
-  }, [disableRelevanceSort, saveSetting]);
-
-  const refreshLocalEmbeddingStatus = useCallback(async (): Promise<LocalEmbeddingStatus | null> => {
-    try {
-      const status = await llmService.getLocalEmbeddingStatus();
-      setLocalEmbeddingStatus(status);
-      const configuredModel = settings.localEmbeddingModel.trim().toLowerCase();
-      setIsEmbeddingReady(
-        status.state === "ready" &&
-        (status.active_model ?? "").toLowerCase() === configuredModel,
-      );
-      return status;
-    } catch {
-      // Ignore transient status polling failures.
-      return null;
-    }
-  }, [settings.localEmbeddingModel]);
-
-  const prepareLocalEmbeddingModel = useCallback(async (model: string) => {
-    setIsPreparingLocalEmbeddingModel(true);
-    try {
-      const status = await llmService.prepareLocalEmbeddingModel(model);
-      setLocalEmbeddingStatus(status);
-      const ready =
-        status.state === "ready"
-        && (status.active_model ?? "").toLowerCase() === model.trim().toLowerCase();
-      if (ready) {
-        setIsEmbeddingReady(true);
-        setStartupErrorMessage("");
-        setStartupPhase("ready");
-        setSettings((current) => ({
-          ...current,
-          localEmbeddingModel: model,
-          embeddingInitialized: true,
-          embeddingModelLocked: true,
-        }));
-        setSelectedEmbeddingModel(model);
-        await settingsService.save("localEmbeddingModel", model);
-      } else {
-        throw new Error(status.message || `Failed to prepare embedding model '${model}'.`);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setLocalEmbeddingStatus((current) => ({
-        state: "error",
-        active_model: model,
-        cache_dir: current?.cache_dir ?? "",
-        message,
-      }));
-      setIsEmbeddingReady(false);
-    } finally {
-      setIsPreparingLocalEmbeddingModel(false);
-    }
-  }, [saveSetting]);
-
-  const refreshCloudModels = useCallback(async (provider: string) => {
-    try {
-      const models = await llmService.listCloudModels(provider);
-      setCloudModels((prev) => ({ ...prev, [provider]: models }));
-      const modelKey = `${provider}Model` as keyof UserSettings;
-      const currentModel = settings[modelKey] as string;
-      if (currentModel && !models.includes(currentModel) && models.length > 0) {
-        const nextModel = models[0];
-        setSettings((s) => ({ ...s, [modelKey]: nextModel }));
-        saveSetting(modelKey as string, nextModel);
-      }
-    } catch (_e) {
-    }
-  }, [settings, saveSetting]);
-
-  const initialCloudFetchDone = useRef(false);
-  useEffect(() => {
-    if (initialCloudFetchDone.current) return;
-    if (startupPhase === "loading-settings") return;
-    initialCloudFetchDone.current = true;
-    for (const p of ["openai", "claude", "gemini", "deepseek"]) {
-      void refreshCloudModels(p);
-    }
-  }, [startupPhase, refreshCloudModels]);
-
-  const { news, setNews, fetchEnrichedNews } = useEnrichedArticles({
-    selectedDate,
+  const newsProcessor = useNewsProcessor({
+    isEmbeddingConfigured,
+    news,
+    setNews,
+    fetchEnrichedNews,
+    disableRelevanceSort: () => {},
   });
 
-  const loadFeeds = useCallback(async () => {
-    try {
-      const rows = await feedService.list();
-      setFeeds(rows);
-    } catch (_error) {
-    }
-  }, []);
+  const llm = useLlmSettings({
+    startupPhase,
+    disableRelevanceSort: newsProcessor.disableRelevanceSort,
+  });
 
-  const loadRssSources = useCallback(async () => {
-    try {
-      const sources = await feedService.listSources();
-      setFeedSources(sources);
-    } catch (_error) {
-    }
-  }, []);
-
-  const createFeed = useCallback(async (name: string, newsCategories: string[], rssCategories: string[]) => {
-    const created = await feedService.create({ name, news_categories: newsCategories, rss_categories: rssCategories });
-    await loadFeeds();
-    return created;
-  }, [loadFeeds]);
-
-  const renameFeed = useCallback(async (feedId: string, name: string) => {
-    await feedService.rename({ feed_id: feedId, name });
-    await loadFeeds();
-  }, [loadFeeds]);
-
-  const deleteFeed = useCallback(async (feedId: string) => {
-    await feedService.delete({ feed_id: feedId });
-    await loadFeeds();
-  }, [loadFeeds]);
-
-  const requestDeleteFeed = useCallback(async (feedId: string) => {
-    const target = feeds.find((feed) => feed.id === feedId);
-    if (!target) {
-      return;
-    }
-
-    if (!settings.showFeedDeletionConfirmation) {
-      await deleteFeed(feedId);
-      return;
-    }
-
-    setDontAskFeedDeleteAgain(false);
-    setPendingFeedDeletion(target);
-  }, [deleteFeed, feeds, settings.showFeedDeletionConfirmation]);
-
-  const toggleFeedVisibility = useCallback(async (feedId: string, isVisible: boolean) => {
-    await feedService.setVisibility({ feed_id: feedId, is_visible: isVisible });
-    await loadFeeds();
-  }, [loadFeeds]);
-
-  const updateFeedCategories = useCallback(async (feedId: string, newsCategories: string[], rssCategories: string[]) => {
-    await feedService.setCategories({ feed_id: feedId, news_categories: newsCategories, rss_categories: rssCategories });
-    await loadFeeds();
-  }, [loadFeeds]);
-
-  const reorderFeed = useCallback(async (feedId: string, direction: "up" | "down") => {
-    const ordered = [...feeds].sort((left, right) => left.sort_order - right.sort_order);
-    const index = ordered.findIndex((feed) => feed.id === feedId);
-    if (index < 0) {
-      return;
-    }
-    const targetIndex = direction === "up" ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= ordered.length) {
-      return;
-    }
-
-    const next = [...ordered];
-    [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
-    await feedService.reorder({ feed_ids: next.map((feed) => feed.id) });
-    await loadFeeds();
-  }, [feeds, loadFeeds]);
-
-  const reorderFeedByDrag = useCallback(async (orderedFeedIds: string[]) => {
-    if (orderedFeedIds.length === 0) {
-      return;
-    }
-    await feedService.reorder({ feed_ids: orderedFeedIds });
-    await loadFeeds();
-  }, [loadFeeds]);
-
-  const fetchEnrichedNewsRef = useRef(fetchEnrichedNews);
-  const setNewsRef = useRef(setNews);
-  const selectedDateRef = useRef(selectedDate);
-  const settingsRef = useRef(settings);
-  const newsRef = useRef(news);
-
-  useEffect(() => {
-    fetchEnrichedNewsRef.current = fetchEnrichedNews;
-  }, [fetchEnrichedNews]);
-
-  useEffect(() => {
-    settingsRef.current = settings;
-  }, [settings]);
-
-  useEffect(() => {
-    newsRef.current = news;
-  }, [news]);
-
-  useEffect(() => {
-    setNewsRef.current = setNews;
-  }, [setNews]);
-
-  useEffect(() => {
-    selectedDateRef.current = selectedDate;
-  }, [selectedDate]);
-
-  useEffect(() => {
-    void loadFeeds();
-    void loadRssSources();
-  }, [loadFeeds, loadRssSources]);
-
-  const handleCleanReset = useCallback(async () => {
-    cancelPendingSave();
-    await articleService.purgeDatabase();
-
-    const defaults = createDefaultSettings();
-    setNews([]);
-    setLoading(false);
-    setEnrichmentError(null);
-    setRelevanceWarning(null);
-    setStageStatus(makeInitialStageStatus());
-    setSelectedArticle(null);
-    setContextMenu(null);
-    setSettings(defaults);
-    setLayout(defaults.layout);
-    setSelectedFeedId("feed-all");
-    setSelectedEmbeddingModel(DEFAULT_EMBEDDING_MODEL);
-    setLocalEmbeddingStatus(null);
-    setIsEmbeddingReady(false);
-    setShowConfigPopup(false);
-    setConfigPopupMessage("");
-    setStartupErrorMessage("");
-    setStartupPhase("ready");
-    setFeedSources([]);
-    await Promise.all([loadFeeds(), loadRssSources()]);
-  }, [cancelPendingSave, loadFeeds, loadRssSources, setNews]);
-
-  const appendUniqueProcessLog = useCallback((entry: ProcessLogEntry) => {
-    const key = `${entry.timestamp_utc}|${entry.level}|${entry.category}|${entry.message}`;
-    const now = Date.now();
-    const seenMap = seenLogKeysRef.current;
-    const seenAt = seenMap.get(key);
-    if (seenAt && now - seenAt < 4000) {
-      return;
-    }
-    seenMap.set(key, now);
-
-    if (seenMap.size > 1500) {
-      for (const [k, ts] of seenMap) {
-        if (now - ts > 60000) {
-          seenMap.delete(k);
-        }
-      }
-    }
-
-    setProcessLogs((current) => {
-      const next = [...current, entry];
-      return next.length > 500 ? next.slice(next.length - 500) : next;
-    });
-  }, []);
-
-  const updateStageFromEvent = useCallback((event: ProcessStageEvent) => {
-    const stage = event.stage.toLowerCase() as StageKey;
-    if (!STAGE_ORDER.includes(stage)) {
-      return;
-    }
-
-    const nextState: StageState =
-      event.state === "running" || event.state === "done" || event.state === "error" || event.state === "stopped"
-        ? event.state
-        : "idle";
-
-    setStageStatus((current) => ({
-      ...current,
-      [stage]: {
-        state: nextState,
-        current: event.current ?? undefined,
-        total: event.total ?? undefined,
-        message: event.message,
-      },
-    }));
-  }, []);
-
-  const generateNews = async () => {
-    if (!isEmbeddingConfigured || !isEmbeddingReady) {
-      setConfigPopupMessage("Embedding model not set up. Open Settings → Embedding Settings and click Download Model.");
-      setShowConfigPopup(true);
-      return;
-    }
-
-    const llmArgs = buildLLMArgs(settings);
-    const selectedApiKey = getSelectedApiKey(settings);
-    const selectedModel = getSelectedModel(settings);
-    const selectedEndpoint = getSelectedEndpoint(settings);
-
-    setLoading(true);
-    setEnrichmentError(null);
-    setRelevanceWarning(null);
-    setStageStatus(makeInitialStageStatus());
-
-    if (settings.aiModeEnabled) {
-      if (settings.llmProvider !== "ollama" && !selectedApiKey?.trim()) {
-        setLoading(false);
-        setConfigPopupMessage(`${getProviderLabel(settings.llmProvider)} API key is not configured. Open Settings to add your key.`);
-        setShowConfigPopup(true);
-        return;
-      }
-
-      try {
-        await llmService.testProviderConnection({
-          provider: settings.llmProvider,
-          apiKey: selectedApiKey || null,
-          endpoint: selectedEndpoint || null,
-          model: selectedModel,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setLoading(false);
-        setConfigPopupMessage(message);
-        setShowConfigPopup(true);
-        return;
-      }
-    }
-
-    try {
-      await articleService.startAll({
-        limit: settings.newsLimit,
-        perCategoryLimitsJson: JSON.stringify(settings.perCategoryNewsLimits),
-        cooldownHours: settings.scrapeCooldownHours,
-        aiModeEnabled: settings.aiModeEnabled,
-        processPastDateArticles: settings.processPastDateArticles,
-        ...llmArgs,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setEnrichmentError(message);
-      setLoading(false);
-    }
-    setLoading(false);
-    setStopping(false);
-  };
-
-  const stopGenerate = async () => {
-    if (stopping) return;
-    setStopping(true);
-    await articleService.requestStop();
-  };
-
-  const reprocessArticle = useCallback(async (article: NewsArticle) => {
-    if (reprocessingArticleId !== null) {
-      return;
-    }
-
-    setReprocessingArticleId(article.id);
-    setEnrichmentError(null);
-    const llmArgs = buildLLMArgs(settings);
-
-    try {
-      const updatedItem = await articleService.reprocessArticle({
-        articleId: article.id,
-        ...llmArgs,
-      });
-
-      const mapped = mapBackendArticle(updatedItem);
-      setNews((current) => current.map((item) => (item.id === mapped.id ? mapped : item)));
-      setSelectedArticle((current) => (current && current.id === mapped.id ? mapped : current));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setEnrichmentError(message);
-    } finally {
-      setReprocessingArticleId(null);
-      setContextMenu(null);
-    }
-  }, [reprocessingArticleId, settings]);
-
-  useEffect(() => {
-    if (!showTranslatePanel) {
-      return;
-    }
-
-    const handleDocumentMouseDown = (event: MouseEvent) => {
-      const panel = translatePanelRef.current;
-      if (panel && !panel.contains(event.target as Node)) {
-        setShowTranslatePanel(false);
-      }
-    };
-
-    document.addEventListener("mousedown", handleDocumentMouseDown);
-    return () => {
-      document.removeEventListener("mousedown", handleDocumentMouseDown);
-    };
-  }, [showTranslatePanel]);
-
-  const translationRuntime = useMemo<TranslationRuntimeConfig>(() => ({
-    provider: settings.llmProvider,
-    model: getSelectedModel(settings),
-    apiKey: getSelectedApiKey(settings),
-    endpoint: getSelectedEndpoint(settings),
-  }), [settings]);
+  const articleFilter = useArticleFilter({ news, setNews, selectedDate });
 
   const availableFeeds = useMemo(
     () => [...feeds]
@@ -843,146 +159,68 @@ function App(): React.JSX.Element {
     [availableFeeds, selectedFeedId],
   );
 
+  const isRelevanceMode = settings.sortMode === "score";
+
+  const translatePanelTransition = usePanelTransition(showTranslatePanel, 140);
+  const categoryManagerTransition = usePanelTransition(showCategoryManager, 170);
+  const configPopupTransition = usePanelTransition(showConfigPopup, 170);
+  const pendingFeedDeletionTransition = usePanelTransition(!!pendingFeedDeletion, 170);
+  const contextMenuTransition = usePanelTransition(!!contextMenu, 140);
+
+  const translationRuntime = useMemo<TranslationRuntimeConfig>(() => ({
+    provider: settings.llmProvider,
+    model: getSelectedModel(settings),
+    apiKey: getSelectedApiKey(settings),
+    endpoint: getSelectedEndpoint(settings),
+  }), [settings]);
+
+  const blacklistedSources = useMemo(
+    () => toNormalizedSourceSet(settings.sourceBlacklist),
+    [settings.sourceBlacklist],
+  );
+
   useEffect(() => {
-    if (startupPhase !== "ready") {
+    if (startupPhase === "ready" && !isEmbeddingConfigured) {
+      setShowOnboardingGuide(true);
+    }
+  }, [startupPhase, isEmbeddingConfigured]);
+
+  useEffect(() => {
+    if (pendingFeedDeletion) {
+      setPendingFeedDeletionSnapshot(pendingFeedDeletion);
       return;
     }
+    if (!pendingFeedDeletionTransition.isMounted) {
+      setPendingFeedDeletionSnapshot(null);
+    }
+  }, [pendingFeedDeletion, pendingFeedDeletionTransition.isMounted]);
+
+  const pendingFeedDeletionView = pendingFeedDeletion ?? pendingFeedDeletionSnapshot;
+
+  useEffect(() => {
+    if (contextMenu) {
+      setContextMenuSnapshot(contextMenu);
+      return;
+    }
+    if (!contextMenuTransition.isMounted) {
+      setContextMenuSnapshot(null);
+    }
+  }, [contextMenu, contextMenuTransition.isMounted]);
+
+  const contextMenuView = contextMenu ?? contextMenuSnapshot;
+
+  useEffect(() => {
+    if (startupPhase !== "ready") return;
     void fetchEnrichedNews();
   }, [fetchEnrichedNews, startupPhase]);
 
   useEffect(() => {
-    let disposed = false;
-    const unlisteners: Array<() => void> = [];
-
-    const initListeners = async () => {
-      try {
-        const persisted = await articleService.loadProcessLogs(300);
-        if (!disposed) {
-          seenLogKeysRef.current.clear();
-          for (const entry of persisted) {
-            const key = `${entry.timestamp_utc}|${entry.level}|${entry.category}|${entry.message}`;
-            seenLogKeysRef.current.set(key, Date.now());
-          }
-          setProcessLogs(persisted);
-        }
-      } catch {
-        // Ignore missing or unreadable persisted logs.
-      }
-
-      try {
-        const off = await listen<EnrichedArticlesUpdatedEvent>("enriched-articles-updated", async (event) => {
-          try {
-            const backendArticle = await articleService.getEnrichedById(event.payload.id);
-            const article = mapBackendArticle(backendArticle);
-
-            const currentSettings = settingsRef.current;
-            const needsScore = currentSettings.sortMode === "score";
-            let scoredArticle = article;
-
-            if (needsScore) {
-              const liked = currentSettings.likedConcepts.split(",").map((s) => s.trim()).filter(Boolean);
-              const disliked = currentSettings.dislikedConcepts.split(",").map((s) => s.trim()).filter(Boolean);
-              if (liked.length > 0 || disliked.length > 0) {
-                try {
-                  const scorePairs = await articleService.computePreferenceScores({
-                    articleIds: [article.id],
-                    likedConcepts: liked,
-                    dislikedConcepts: disliked,
-                    localEmbeddingModel: currentSettings.localEmbeddingModel,
-                  });
-                  const scoreMap = Object.fromEntries(scorePairs);
-                  scoredArticle = { ...article, preferenceScore: scoreMap[article.id] ?? article.preferenceScore };
-                } catch {
-                  // Score computation failed — article enters cache with score 0.0
-                }
-              }
-            }
-
-            setNewsRef.current((prev) => {
-              const idx = prev.findIndex((a) => a.id === scoredArticle.id);
-              if (idx >= 0) {
-                const updated = [...prev];
-                updated[idx] = scoredArticle;
-                return updated;
-              }
-              return [scoredArticle, ...prev];
-            });
-          } catch (_err) {
-          }
-        });
-        if (disposed) {
-          off();
-        } else {
-          unlisteners.push(off);
-        }
-      } catch (_error) {
-      }
-
-      try {
-        const off = await listen<{total: number; enriched_count: number; failed_count: number; error_sample?: string; stopped: boolean}>("enriched-news-sync-complete", (event) => {
-          setStageStatus((current) => {
-            const completionState = event.payload.stopped ? "stopped" : "done";
-            return {
-              ...current,
-              scrape: { ...current.scrape, state: current.scrape.state === "idle" ? completionState : current.scrape.state },
-              extract: { ...current.extract, state: current.extract.state === "idle" ? completionState : current.extract.state },
-              enrich: { ...current.enrich, state: event.payload.failed_count > 0 && event.payload.enriched_count === 0 ? "error" : completionState },
-              persist: { ...current.persist, state: event.payload.failed_count > 0 && event.payload.enriched_count === 0 ? "error" : completionState },
-            };
-          });
-          if (event.payload.error_sample && event.payload.enriched_count === 0 && event.payload.failed_count > 0) {
-            setEnrichmentError(event.payload.error_sample);
-          } else {
-            setEnrichmentError(null);
-          }
-        });
-        if (disposed) {
-          off();
-        } else {
-          unlisteners.push(off);
-        }
-      } catch (_error) {
-      }
-
-      try {
-        const off = await listen<ProcessLogEntry>("process-log", (event) => {
-          appendUniqueProcessLog(event.payload);
-        });
-        if (disposed) {
-          off();
-        } else {
-          unlisteners.push(off);
-        }
-      } catch (_error) {
-      }
-
-      try {
-        const off = await listen<ProcessStageEvent>("process-stage", (event) => {
-          updateStageFromEvent(event.payload);
-        });
-        if (disposed) {
-          off();
-        } else {
-          unlisteners.push(off);
-        }
-      } catch (_error) {
-      }
-    };
-
-    void initListeners();
-
-    return () => {
-      disposed = true;
-      for (const unlisten of unlisteners) {
-        unlisten();
-      }
-    };
-  }, [appendUniqueProcessLog, updateStageFromEvent]);
+    void feedManager.loadFeeds();
+    void feedManager.loadRssSources();
+  }, [feedManager.loadFeeds, feedManager.loadRssSources]);
 
   useEffect(() => {
-    if (availableFeeds.length === 0) {
-      return;
-    }
+    if (availableFeeds.length === 0) return;
     const selectedStillVisible = availableFeeds.some((feed) => feed.id === selectedFeedId);
     if (!selectedStillVisible) {
       setSelectedFeedId(availableFeeds[0].id);
@@ -990,80 +228,62 @@ function App(): React.JSX.Element {
   }, [availableFeeds, selectedFeedId]);
 
   useEffect(() => {
-    if (!showSettings) {
-      return;
-    }
+    if (!showSettings) return;
 
     if (settings.llmProvider === "ollama") {
-      const address = settings.ollamaAddress;
-      const model = settings.ollamaModel;
-      void testOllamaConnection(address);
-      void refreshOllamaModels(address, model);
+      void llm.testOllamaConnection(settings.ollamaAddress);
+      void llm.refreshOllamaModels(settings.ollamaAddress, settings.ollamaModel);
     }
 
-    void llmService.listLocalEmbeddingModels()
-      .then((models) => {
-        if (models.length > 0) {
-          setLocalEmbeddingModels(models);
-        }
-      })
-      .catch(() => {
-        setLocalEmbeddingModels(LOCAL_EMBEDDING_MODELS as unknown as string[]);
-      });
+    void (async () => {
+      void llmService.listLocalEmbeddingModels()
+        .then((models) => {
+          if (models.length > 0) {
+            llm.setLocalEmbeddingModels(models);
+          }
+        })
+        .catch(() => {});
+    })();
 
-    void refreshLocalEmbeddingStatus();
+    void llm.refreshLocalEmbeddingStatus();
     const timer = window.setInterval(() => {
-      void refreshLocalEmbeddingStatus();
+      void llm.refreshLocalEmbeddingStatus();
     }, 1500);
 
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [showSettings, settings.llmProvider, settings.ollamaAddress, settings.ollamaModel, testOllamaConnection, refreshOllamaModels, refreshLocalEmbeddingStatus]);
+    return () => { window.clearInterval(timer); };
+  }, [showSettings, settings.llmProvider, settings.ollamaAddress, settings.ollamaModel, llm.testOllamaConnection, llm.refreshOllamaModels, llm.refreshLocalEmbeddingStatus]);
 
-  // Handler: open Settings from the onboarding guide, with scroll + hints
-  const openSettingsFromGuide = useCallback(() => {
-    setShowOnboardingGuide(false);
-    setShowSettings(true);
-    setSettingsScrollToEmbedding(true);
-    setShowSettingsHints(true);
-    void refreshLocalEmbeddingStatus();
-  }, [refreshLocalEmbeddingStatus]);
+  useEffect(() => {
+    if (!showTranslatePanel) return;
+    const handleDocumentMouseDown = (event: MouseEvent) => {
+      const panel = translatePanelRef.current;
+      if (panel && !panel.contains(event.target as Node)) {
+        setShowTranslatePanel(false);
+      }
+    };
+    document.addEventListener("mousedown", handleDocumentMouseDown);
+    return () => { document.removeEventListener("mousedown", handleDocumentMouseDown); };
+  }, [showTranslatePanel]);
 
   useEffect(() => {
     const handleContextMenu = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.closest("[data-card-context-menu='true']")) {
-        return;
-      }
+      if (target?.closest("[data-card-context-menu='true']")) return;
       event.preventDefault();
       setContextMenu(null);
     };
-
     document.addEventListener("contextmenu", handleContextMenu);
-
-    return () => {
-      document.removeEventListener("contextmenu", handleContextMenu);
-    };
+    return () => { document.removeEventListener("contextmenu", handleContextMenu); };
   }, []);
 
   useEffect(() => {
-    if (!contextMenu) {
-      return;
-    }
-
+    if (!contextMenu) return;
     const closeMenu = () => setContextMenu(null);
-    const onEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setContextMenu(null);
-      }
-    };
-
+    const onEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setContextMenu(null); };
     window.addEventListener("scroll", closeMenu, true);
     window.addEventListener("resize", closeMenu);
     document.addEventListener("click", closeMenu);
     document.addEventListener("keydown", onEscape);
-
     return () => {
       window.removeEventListener("scroll", closeMenu, true);
       window.removeEventListener("resize", closeMenu);
@@ -1074,17 +294,12 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     const coarsePointerQuery = window.matchMedia("(pointer: coarse)");
-    const updateByPointerType = () => {
-      setShowLayoutSwitcher(coarsePointerQuery.matches);
-    };
+    const updateByPointerType = () => { setShowLayoutSwitcher(coarsePointerQuery.matches); };
 
     updateByPointerType();
 
     const handleMouseMove = (event: MouseEvent) => {
-      if (coarsePointerQuery.matches) {
-        return;
-      }
-
+      if (coarsePointerQuery.matches) return;
       const nearBottom = window.innerHeight - event.clientY <= 140;
       setShowLayoutSwitcher((current) => (current === nearBottom ? current : nearBottom));
     };
@@ -1098,7 +313,6 @@ function App(): React.JSX.Element {
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseout", handleMouseLeaveWindow);
     coarsePointerQuery.addEventListener("change", updateByPointerType);
-
     return () => {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseout", handleMouseLeaveWindow);
@@ -1106,119 +320,13 @@ function App(): React.JSX.Element {
     };
   }, []);
 
-  const setSortMode = (mode: "date" | "score") => {
-    if (mode === "score" && !isEmbeddingReady) {
-      return;
-    }
-    if (settings.sortMode === mode) {
-      return;
-    }
-    
-    // Smooth transition: fade out → change → fade in
-    setIsFilterTransitioning(true);
-    setTimeout(() => {
-      setSettings((current) => (current.sortMode === mode ? current : { ...current, sortMode: mode }));
-      setRelevanceWarning(null);
-      saveSetting("sortMode", mode);
-      setTimeout(() => setIsFilterTransitioning(false), 50);
-    }, 150);
-  };
-
-  const handleSetLayout = (mode: LayoutMode) => {
-    if (layout === mode) {
-      return;
-    }
-    
-    // Smooth transition for layout switch
-    setIsFilterTransitioning(true);
-    setTimeout(() => {
-      setLayout(mode);
-      saveSetting("layout", mode);
-      setSettings((current) => (current.layout === mode ? current : { ...current, layout: mode }));
-      setTimeout(() => setIsFilterTransitioning(false), 50);
-    }, 150);
-  };
-
-  const handleSetDate = (date: string) => {
-    if (selectedDate === date) {
-      return;
-    }
-    
-    // Smooth transition when changing date
-    setIsFilterTransitioning(true);
-    setTimeout(() => {
-      setSelectedDate(date);
-      void fetchEnrichedNews(true, false, date);
-      setTimeout(() => setIsFilterTransitioning(false), 50);
-    }, 150);
-  };
-
-  const setPreferenceConcepts = (field: "likedConcepts" | "dislikedConcepts", value: string) => {
-    setSettings((current) => ({ ...current, [field]: value }));
-    saveSetting(field, value);
-  };
-
-  const handleHideSourceFromFutureNews = useCallback((sourceName: string) => {
-    const normalizedSource = normalizeSourceName(sourceName);
-    if (!normalizedSource) {
-      setContextMenu(null);
-      return;
-    }
-
-    setSettings((current) => {
-      const nextBlacklist = addSourceToBlacklist(current.sourceBlacklist, sourceName);
-      saveSetting("sourceBlacklist", JSON.stringify(nextBlacklist));
-      return { ...current, sourceBlacklist: nextBlacklist };
-    });
-
-    setNews((current) => current.filter((item) => normalizeSourceName(item.sourceName) !== normalizedSource));
-    setSelectedArticle((current) => {
-      if (!current) {
-        return null;
-      }
-      return normalizeSourceName(current.sourceName) === normalizedSource ? null : current;
-    });
-    setContextMenu(null);
-  }, [saveSetting, setNews]);
-
-  const blacklistedSources = useMemo(() => toNormalizedSourceSet(settings.sourceBlacklist), [settings.sourceBlacklist]);
-
-  // Memoized sort comparators for performance optimization
-  const scoreComparator = useCallback((a: NewsArticle, b: NewsArticle) => {
-    const diff = b.preferenceScore - a.preferenceScore;
-    if (Math.abs(diff) > 0.0001) return diff;
-    if (a.date === b.date) return b.timestamp - a.timestamp;
-    return b.date.localeCompare(a.date);
-  }, []);
-
-  const dateComparator = useCallback((a: NewsArticle, b: NewsArticle) => {
-    if (a.date === b.date) return b.timestamp - a.timestamp;
-    return b.date.localeCompare(a.date);
-  }, []);
-
-  const filteredNews = useMemo(() => {
-    const sortedNews = [...news].sort(settings.sortMode === "score" ? scoreComparator : dateComparator);
-
-    const activeFeed = availableFeeds.find((f) => f.id === selectedFeedId);
-
-    return sortedNews
-      .filter((item) => item.date === selectedDate)
-      .filter((item) => {
-        if (!activeFeed || selectedFeedId === "feed-all") return true;
-        const categoryLower = item.category.toLowerCase();
-        return item.articleType === "rss"
-          ? activeFeed.rss_categories.some((c) => c.toLowerCase() === categoryLower)
-          : activeFeed.news_categories.some((c) => c.toLowerCase() === categoryLower);
-      })
-      .filter((item) => !blacklistedSources.has(normalizeSourceName(item.sourceName)));
-  }, [news, selectedDate, selectedFeedId, availableFeeds, settings.sortMode, blacklistedSources, scoreComparator, dateComparator]);
-
   useEffect(() => {
     if (settings.sortMode !== "score") return;
     const liked = settings.likedConcepts.split(",").map((s) => s.trim()).filter(Boolean);
     const disliked = settings.dislikedConcepts.split(",").map((s) => s.trim()).filter(Boolean);
     if (liked.length === 0 && disliked.length === 0) return;
 
+    const newsRef = { current: news };
     const timeout = window.setTimeout(async () => {
       const currentNews = newsRef.current;
       if (currentNews.length === 0) return;
@@ -1239,160 +347,94 @@ function App(): React.JSX.Element {
         setRelevanceWarning(null);
       } catch (error) {
         if (String(error).includes("RELEVANCE_EMBEDDING_UNAVAILABLE")) {
-          disableRelevanceSort(String(error));
+          newsProcessor.disableRelevanceSort(String(error));
         }
       }
     }, 300);
 
     return () => window.clearTimeout(timeout);
-  }, [settings.sortMode, settings.likedConcepts, settings.dislikedConcepts, settings.localEmbeddingModel, news.length, disableRelevanceSort]);
+  }, [settings.sortMode, settings.likedConcepts, settings.dislikedConcepts, settings.localEmbeddingModel, news.length]);
+
+  const openSettingsFromGuide = useCallback(() => {
+    setShowOnboardingGuide(false);
+    setShowSettings(true);
+    setSettingsScrollToEmbedding(true);
+    setShowSettingsHints(true);
+    void llm.refreshLocalEmbeddingStatus();
+  }, [llm.refreshLocalEmbeddingStatus]);
+
+  const handleCleanReset = useCallback(async () => {
+    cancelPendingSave();
+    await articleService.purgeDatabase();
+    const defaults = createDefaultSettings();
+    resetSettings();
+    setNews([]);
+    setLayout(defaults.layout);
+    setEnrichmentError(null);
+    setRelevanceWarning(null);
+    setStageStatus({
+      scrape: { state: "idle" },
+      extract: { state: "idle" },
+      enrich: { state: "idle" },
+      persist: { state: "idle" },
+    });
+    setSelectedArticle(null);
+    setContextMenu(null);
+    setSelectedFeedId("feed-all");
+    setShowConfigPopup(false);
+    setConfigPopupMessage("");
+    resetStartupState();
+    setFeedSources([]);
+    await Promise.all([feedManager.loadFeeds(), feedManager.loadRssSources()]);
+  }, [cancelPendingSave, resetSettings, setNews, setLayout, setEnrichmentError, setRelevanceWarning, setStageStatus, setSelectedArticle, setContextMenu, setSelectedFeedId, setShowConfigPopup, setConfigPopupMessage, resetStartupState, setFeedSources, feedManager.loadFeeds, feedManager.loadRssSources]);
+
+  const handleSetDate = useCallback((date: string) => {
+    if (selectedDate === date) return;
+    setIsFilterTransitioning(true);
+    setTimeout(() => {
+      setSelectedDate(date);
+      void fetchEnrichedNews(true, false, date);
+      setTimeout(() => setIsFilterTransitioning(false), 50);
+    }, 150);
+  }, [selectedDate, fetchEnrichedNews, setIsFilterTransitioning]);
 
   if (startupPhase !== "ready") {
-    const startupMessage = startupPhase === "loading-settings"
-      ? "Loading settings..."
-      : startupPhase === "preparing-embedding"
-        ? `Loading embedding model '${settings.localEmbeddingModel}'...`
-        : startupErrorMessage;
-
     return (
-      <div className={`min-h-screen ${isDarkMode ? "bg-zinc-950 text-zinc-200" : "bg-white text-zinc-900"} flex items-center justify-center p-6`}>
-        <div className={`w-full max-w-lg rounded-3xl border p-8 shadow-2xl ${isDarkMode ? "border-zinc-800 bg-zinc-900" : "border-zinc-200 bg-zinc-50"}`}>
-          <p className={`mb-2 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-            {startupPhase === "error" ? "Embedding load failed" : "Starting NewsPage"}
-          </p>
-          <h1 className={`mb-3 text-2xl font-black ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>
-            {startupPhase === "error" ? "Embedding model could not be loaded" : "Preparing your workspace"}
-          </h1>
-          <p className={`text-sm leading-relaxed ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>
-            {startupMessage}
-          </p>
-          {localEmbeddingStatus?.message && startupPhase !== "error" ? (
-            <p className={`mt-3 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-              {localEmbeddingStatus.message}
-            </p>
-          ) : null}
-          {startupPhase !== "error" ? (
-            <DotsSpinner size={32} className="mt-6 text-zinc-500" />
-          ) : (
-            <div className="mt-6 flex flex-wrap gap-3">
-              <button
-                type="button"
-                onClick={() => void preloadEmbeddingOnStartup(settings.localEmbeddingModel)}
-                className={`rounded-lg border px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
-                  isDarkMode ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700" : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
-                }`}
-              >
-                Retry Load
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleCleanReset()}
-                className="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-red-700"
-              >
-                Clean Reset
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
+      <StartupScreen
+        isDarkMode={isDarkMode}
+        startupPhase={startupPhase}
+        startupErrorMessage={startupErrorMessage}
+        localEmbeddingStatus={startupEmbeddingStatus}
+        settingsLocalEmbeddingModel={settings.localEmbeddingModel}
+        onRetry={retryEmbeddingLoad}
+        onCleanReset={() => void handleCleanReset()}
+      />
     );
   }
 
   return (
     <div className={`min-h-screen transition-colors duration-300 ${isDarkMode ? "bg-zinc-950 text-zinc-400" : "bg-zinc-100 text-zinc-800"}`}>
-      <aside className={`fixed left-0 top-0 z-20 hidden h-full w-64 flex-col border-r transition-colors md:flex ${isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-zinc-100 border-zinc-200"}`}>
-        <div className="flex items-center gap-3 border-b border-inherit p-6">
-          <div className={`${isDarkMode ? "bg-zinc-800 text-black" : "bg-zinc-150 text-white"} rounded-lg p-1 shadow-sm`}>
-            <img src="/icon.svg" alt="NewsPage logo" className="h-8 w-8 block scale-110" />
-          </div>
-          <h1 className={`text-xl font-bold tracking-tight ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>NewsPage</h1>
-        </div>
-
-        <nav className="hide-scrollbar flex-1 space-y-1.5 overflow-y-auto p-4">
-          <div className="mb-3 flex items-center justify-between px-3">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Feeds</p>
-            <button
-              onClick={() => setShowCategoryManager((current) => !current)}
-              className={`inline-flex items-center rounded-full border p-1.5 transition-colors ${
-                isDarkMode ? "border-zinc-800 text-zinc-400 hover:bg-zinc-800" : "border-zinc-200 text-zinc-600 hover:bg-zinc-200"
-              }`}
-              aria-label="Manage feeds"
-            >
-              <SlidersHorizontal size={12} />
-            </button>
-          </div>
-
-          <FeedNavigationList
-            feeds={availableFeeds}
-            selectedFeedId={selectedFeedId}
-            isDarkMode={isDarkMode}
-            onSelectFeed={(feedId) => {
-              setSelectedFeedId(feedId);
-              saveSetting("selectedFeedId", feedId);
-            }}
-            onReorderFeedByDrag={reorderFeedByDrag}
-            onRenameFeed={renameFeed}
-            onToggleFeedVisibility={toggleFeedVisibility}
-          />
-
-          {availableFeeds.length === 0 && (
-            <div className="rounded-2xl border border-dashed border-zinc-700 px-3 py-4 text-xs text-zinc-500">
-              Create or show at least one feed.
-            </div>
-          )}
-        </nav>
-
-        <div className="space-y-4 border-t border-inherit p-4">
-          <PreferencePanel
-            isDarkMode={isDarkMode}
-            sortMode={settings.sortMode}
-            isRelevanceMode={isRelevanceMode}
-            isEmbeddingReady={isEmbeddingReady}
-            likedConcepts={settings.likedConcepts}
-            dislikedConcepts={settings.dislikedConcepts}
-            onSetSortMode={setSortMode}
-            onSetPreferenceConcepts={setPreferenceConcepts}
-          />
-          <button
-            onClick={() => setShowCalendar(true)}
-            className={`w-full rounded-xl border px-3 py-3 transition-all ${
-              isDarkMode
-                ? "border-zinc-800 bg-zinc-950/50 text-zinc-400 hover:bg-zinc-800"
-                : "border-zinc-200 bg-zinc-150 text-zinc-600 hover:bg-zinc-200"
-            } flex items-center gap-3`}
-          >
-            <Calendar size={18} />
-            <div className="text-left">
-              <p className="text-[10px] font-bold uppercase tracking-tighter opacity-60">Browse Date</p>
-              <p className="text-xs font-bold">{selectedDate}</p>
-            </div>
-          </button>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => handleSetDate(offsetDateString(selectedDate, -1))}
-              className={`rounded-xl border px-3 py-2 text-[10px] font-black uppercase tracking-widest transition-all ${
-                isDarkMode
-                  ? "border-zinc-800 bg-zinc-950/50 text-zinc-300 hover:bg-zinc-800"
-                  : "border-zinc-200 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
-              }`}
-            >
-              Yesterday
-            </button>
-            {canGoToNextDay && (
-              <button
-                onClick={() => handleSetDate(offsetDateString(selectedDate, 1))}
-                className={`rounded-xl border px-3 py-2 text-[10px] font-black uppercase tracking-widest transition-all ${
-                  isDarkMode
-                    ? "border-zinc-800 bg-zinc-950/50 text-zinc-300 hover:bg-zinc-800"
-                    : "border-zinc-200 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
-                }`}
-              >
-                Next day
-              </button>
-            )}
-          </div>
-        </div>
-      </aside>
+      <AppSidebar
+        isDarkMode={isDarkMode}
+        availableFeeds={availableFeeds}
+        selectedFeedId={selectedFeedId}
+        selectedDate={selectedDate}
+        canGoToNextDay={canGoToNextDay}
+        settings={settings}
+        isRelevanceMode={isRelevanceMode}
+        onSelectFeed={(feedId) => {
+          setSelectedFeedId(feedId);
+          saveSetting("selectedFeedId", feedId);
+        }}
+        onReorderFeedByDrag={feedManager.reorderFeedByDrag}
+        onRenameFeed={feedManager.renameFeed}
+        onToggleFeedVisibility={feedManager.toggleFeedVisibility}
+        onToggleCategoryManager={() => setShowCategoryManager((current) => !current)}
+        onSetSortMode={articleFilter.setSortMode}
+        onSetPreferenceConcepts={articleFilter.setPreferenceConcepts}
+        onSetDate={handleSetDate}
+        onShowCalendar={() => setShowCalendar(true)}
+      />
 
       <main className="flex h-screen flex-col overflow-hidden p-4 pb-24 md:ml-64 md:p-8">
         <header
@@ -1460,7 +502,7 @@ function App(): React.JSX.Element {
 
           <div className="relative flex items-center gap-2">
             <button
-              onClick={() => { setShowSettings(true); void refreshLocalEmbeddingStatus(); }}
+              onClick={() => { setShowSettings(true); void llm.refreshLocalEmbeddingStatus(); }}
               className={`rounded-full border p-2 transition-colors ${isDarkMode ? "border-zinc-800 hover:bg-zinc-800" : "border-zinc-300 bg-white hover:bg-zinc-200"}`}
             >
               <Settings size={18} />
@@ -1521,48 +563,35 @@ function App(): React.JSX.Element {
             </button>
             <div className="relative ml-2">
               <button
-                onClick={generateNews}
-                disabled={loading}
+                onClick={() => void newsProcessor.generateNews()}
+                disabled={newsProcessor.loading}
                 className={`flex items-center gap-2 whitespace-nowrap rounded-full px-5 py-2.5 text-xs font-bold uppercase tracking-widest shadow-md transition-all ${
                   isDarkMode ? "bg-zinc-300 text-zinc-900 hover:bg-amber-300" : "bg-white text-black hover:bg-zinc-300"
                 } disabled:opacity-50`}
               >
-                {loading ? <RefreshCw className="animate-spin" size={16} /> : <Sparkles size={16} />}
+                {newsProcessor.loading ? <RefreshCw className="animate-spin" size={16} /> : <Sparkles size={16} />}
                 Get news!
               </button>
-              {loading ? (
+              {newsProcessor.loading ? (
                 <button
                   type="button"
-                  onClick={stopGenerate}
-                  disabled={stopping}
+                  onClick={() => void newsProcessor.stopGenerate()}
+                  disabled={newsProcessor.stopping}
                   className={`absolute left-1/2 top-full mt-1 -translate-x-1/2 inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest whitespace-nowrap transition-colors disabled:opacity-50 ${
                     isDarkMode ? "border-zinc-700 bg-zinc-800/60 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/60" : "border-zinc-300 bg-zinc-100/70 text-zinc-500 hover:text-zinc-700 hover:bg-zinc-200/70"
                   }`}
                 >
                   <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-500" />
-                  {stopping ? "Stopping..." : "Stop"}
+                  {newsProcessor.stopping ? "Stopping..." : "Stop"}
                 </button>
               ) : null}
             </div>
           </div>
         </header>
 
-        <div className="mb-6 md:hidden">
-          <PreferencePanel
-            isDarkMode={isDarkMode}
-            sortMode={settings.sortMode}
-            isRelevanceMode={isRelevanceMode}
-            isEmbeddingReady={isEmbeddingReady}
-            likedConcepts={settings.likedConcepts}
-            dislikedConcepts={settings.dislikedConcepts}
-            onSetSortMode={setSortMode}
-            onSetPreferenceConcepts={setPreferenceConcepts}
-          />
-        </div>
-
         <section className={`news-scroll min-h-0 flex-1 overflow-y-auto pb-24 pr-1 ${isDarkMode ? "news-scroll-dark" : "news-scroll-light"}`}>
           <VirtualizedArticleList
-            articles={filteredNews}
+            articles={articleFilter.filteredNews}
             feedSources={feedSources}
             layout={layout}
             isDarkMode={isDarkMode}
@@ -1578,7 +607,7 @@ function App(): React.JSX.Element {
           />
         </section>
 
-        <LayoutSwitcher show={showLayoutSwitcher} isDarkMode={isDarkMode} layout={layout} onSetLayout={handleSetLayout} />
+        <LayoutSwitcher show={showLayoutSwitcher} isDarkMode={isDarkMode} layout={layout} onSetLayout={articleFilter.handleSetLayout} />
       </main>
 
       {contextMenuTransition.isMounted && contextMenuView && (
@@ -1592,10 +621,10 @@ function App(): React.JSX.Element {
           onReprocess={(articleId) => {
             const article = news.find((item) => item.id === articleId);
             if (article) {
-              void reprocessArticle(article);
+              void newsProcessor.reprocessArticle(article);
             }
           }}
-          onHideSource={handleHideSourceFromFutureNews}
+          onHideSource={articleFilter.handleHideSourceFromFutureNews}
         />
       )}
 
@@ -1605,30 +634,30 @@ function App(): React.JSX.Element {
         settings={settings}
         setSettings={setSettings}
         saveSetting={saveSetting}
-        ollamaConnectionState={ollamaConnectionState}
-        setOllamaConnectionState={setOllamaConnectionState}
-        isTestingOllama={isTestingOllama}
-        testOllamaConnection={testOllamaConnection}
-        ollamaModels={ollamaModels}
-        isRefreshingModels={isRefreshingModels}
-        refreshOllamaModels={refreshOllamaModels}
-        localEmbeddingModels={localEmbeddingModels}
+        ollamaConnectionState={llm.ollamaConnectionState}
+        setOllamaConnectionState={() => {}}
+        isTestingOllama={llm.isTestingOllama}
+        testOllamaConnection={llm.testOllamaConnection}
+        ollamaModels={llm.ollamaModels}
+        isRefreshingModels={llm.isRefreshingModels}
+        refreshOllamaModels={llm.refreshOllamaModels}
+        localEmbeddingModels={llm.localEmbeddingModels}
         selectedEmbeddingModel={selectedEmbeddingModel}
         onSelectEmbeddingModel={setSelectedEmbeddingModel}
-        localEmbeddingStatus={localEmbeddingStatus}
-        isPreparingLocalEmbeddingModel={isPreparingLocalEmbeddingModel}
-        onPrepareLocalEmbeddingModel={prepareLocalEmbeddingModel}
+        localEmbeddingStatus={llm.localEmbeddingStatus}
+        isPreparingLocalEmbeddingModel={llm.isPreparingLocalEmbeddingModel}
+        onPrepareLocalEmbeddingModel={llm.prepareLocalEmbeddingModel}
         isEmbeddingConfigured={isEmbeddingConfigured}
         purgeConfirmStep={purgeConfirmStep}
         setPurgeConfirmStep={setPurgeConfirmStep}
         isPurging={isPurging}
         setIsPurging={setIsPurging}
-        onPurgeDatabase={handleCleanReset}
+        onPurgeDatabase={() => handleCleanReset()}
         onOpenCategoryLimits={() => setShowCategoryLimitsManager(true)}
         feedSources={feedSources}
         onOpenCustomRssFeedSettings={() => setShowCustomRssFeedSettings(true)}
-        cloudModels={cloudModels}
-        refreshCloudModels={refreshCloudModels}
+        cloudModels={llm.cloudModels}
+        refreshCloudModels={llm.refreshCloudModels}
         onClose={() => {
           setShowSettings(false);
           setPurgeConfirmStep(0);
@@ -1651,7 +680,7 @@ function App(): React.JSX.Element {
         show={showCustomRssFeedSettings}
         isDarkMode={isDarkMode}
         feedSources={feedSources}
-        onRefresh={loadRssSources}
+        onRefresh={feedManager.loadRssSources}
         onClose={() => setShowCustomRssFeedSettings(false)}
       />
 
@@ -1687,7 +716,7 @@ function App(): React.JSX.Element {
                 isDarkMode={isDarkMode}
                 onCreateFeed={async (name, newsCategories, rssCategories) => {
                   try {
-                    return await createFeed(name, newsCategories, rssCategories);
+                    return await feedManager.createFeed(name, newsCategories, rssCategories);
                   } catch (error) {
                     setConfigPopupMessage(String(error));
                     setShowConfigPopup(true);
@@ -1696,7 +725,7 @@ function App(): React.JSX.Element {
                 }}
                 onRenameFeed={async (feedId, name) => {
                   try {
-                    await renameFeed(feedId, name);
+                    await feedManager.renameFeed(feedId, name);
                   } catch (error) {
                     setConfigPopupMessage(String(error));
                     setShowConfigPopup(true);
@@ -1704,7 +733,7 @@ function App(): React.JSX.Element {
                 }}
                 onDeleteFeed={async (feedId) => {
                   try {
-                    await requestDeleteFeed(feedId);
+                    await feedManager.requestDeleteFeed(feedId);
                   } catch (error) {
                     setConfigPopupMessage(String(error));
                     setShowConfigPopup(true);
@@ -1712,7 +741,7 @@ function App(): React.JSX.Element {
                 }}
                 onToggleFeedVisibility={async (feedId, isVisible) => {
                   try {
-                    await toggleFeedVisibility(feedId, isVisible);
+                    await feedManager.toggleFeedVisibility(feedId, isVisible);
                   } catch (error) {
                     setConfigPopupMessage(String(error));
                     setShowConfigPopup(true);
@@ -1720,7 +749,7 @@ function App(): React.JSX.Element {
                 }}
                 onSetFeedCategories={async (feedId, newsCategories, rssCategories) => {
                   try {
-                    await updateFeedCategories(feedId, newsCategories, rssCategories);
+                    await feedManager.updateFeedCategories(feedId, newsCategories, rssCategories);
                   } catch (error) {
                     setConfigPopupMessage(String(error));
                     setShowConfigPopup(true);
@@ -1728,7 +757,7 @@ function App(): React.JSX.Element {
                 }}
                 onReorderFeed={async (feedId, direction) => {
                   try {
-                    await reorderFeed(feedId, direction);
+                    await feedManager.reorderFeed(feedId, direction);
                   } catch (error) {
                     setConfigPopupMessage(String(error));
                     setShowConfigPopup(true);
@@ -1736,7 +765,7 @@ function App(): React.JSX.Element {
                 }}
                 onReorderFeedByDrag={async (orderedFeedIds) => {
                   try {
-                    await reorderFeedByDrag(orderedFeedIds);
+                    await feedManager.reorderFeedByDrag(orderedFeedIds);
                   } catch (error) {
                     setConfigPopupMessage(String(error));
                     setShowConfigPopup(true);
@@ -1757,12 +786,8 @@ function App(): React.JSX.Element {
         translationTargetLanguage={settings.translationTargetLanguage}
         translationRuntime={translationRuntime}
         onClose={() => setSelectedArticle(null)}
-        onOpenUrl={(url) => {
-          void articleService.openUrl(url);
-        }}
-        onReprocessArticle={(article) => {
-          void reprocessArticle(article);
-        }}
+        onOpenUrl={(url) => { void articleService.openUrl(url); }}
+        onReprocessArticle={(article) => { void newsProcessor.reprocessArticle(article); }}
       />
 
       <CalendarModal
@@ -1774,102 +799,37 @@ function App(): React.JSX.Element {
       />
 
       {configPopupTransition.isMounted && (
-        <div
-          className={`${configPopupTransition.isClosing ? "popup-overlay-out" : "popup-overlay"} fixed inset-0 z-[130] flex items-center justify-center bg-black/60 p-4`}
-          onClick={() => setShowConfigPopup(false)}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className={`${configPopupTransition.isClosing ? "popup-panel-out" : "popup-panel"} w-full max-w-sm rounded-2xl border p-6 shadow-2xl ${
-              isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-100" : "border-zinc-300 bg-zinc-150 text-zinc-900"
-            }`}
-          >
-            <p className={`mb-1 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>
-              Setup required
-            </p>
-            <p className={`mb-5 text-sm leading-relaxed ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>
-              {configPopupMessage}
-            </p>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setShowConfigPopup(false)}
-                className={`rounded-lg border px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
-                  isDarkMode
-                    ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                    : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
-                }`}
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfigPopupDialog
+          isDarkMode={isDarkMode}
+          isClosing={configPopupTransition.isClosing}
+          message={configPopupMessage}
+          onDismiss={() => setShowConfigPopup(false)}
+        />
       )}
 
       {pendingFeedDeletionTransition.isMounted && pendingFeedDeletionView && (
-        <div
-          className={`${pendingFeedDeletionTransition.isClosing ? "popup-overlay-out" : "popup-overlay"} fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4`}
-          onClick={() => setPendingFeedDeletion(null)}
-        >
-          <div
-            onClick={(event) => event.stopPropagation()}
-            className={`${pendingFeedDeletionTransition.isClosing ? "popup-panel-out" : "popup-panel"} w-full max-w-md rounded-2xl border p-6 shadow-2xl ${
-              isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-100" : "border-zinc-300 bg-zinc-150 text-zinc-900"
-            }`}
-          >
-            <p className={`mb-1 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>
-              Confirm deletion
-            </p>
-            <h4 className="mb-3 text-sm font-bold">Delete feed "{pendingFeedDeletionView.name}"?</h4>
-            <p className={`mb-4 text-xs leading-relaxed ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>
-              This removes the feed definition and its topic mapping. Articles remain in the database.
-            </p>
-
-            <label className="mb-5 flex cursor-pointer items-center gap-2">
-              <NeonCheckbox
-                checked={dontAskFeedDeleteAgain}
-                onChange={setDontAskFeedDeleteAgain}
-                isDarkMode={isDarkMode}
-                ariaLabel="Do not ask again for feed deletion"
-              />
-              <span className="text-xs">Don't show this again</span>
-            </label>
-
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setPendingFeedDeletion(null)}
-                className={`rounded-lg border px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
-                  isDarkMode
-                    ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                    : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
-                }`}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    await deleteFeed(pendingFeedDeletionView.id);
-                    if (dontAskFeedDeleteAgain) {
-                      setSettings((current) => ({ ...current, showFeedDeletionConfirmation: false }));
-                      saveSetting("showFeedDeletionConfirmation", "false");
-                    }
-                    setPendingFeedDeletion(null);
-                  } catch (error) {
-                    setPendingFeedDeletion(null);
-                    setConfigPopupMessage(String(error));
-                    setShowConfigPopup(true);
-                  }
-                }}
-                className="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-red-700"
-              >
-                Delete Feed
-              </button>
-            </div>
-          </div>
-        </div>
+        <FeedDeleteConfirmDialog
+          isDarkMode={isDarkMode}
+          isClosing={pendingFeedDeletionTransition.isClosing}
+          feed={pendingFeedDeletionView}
+          dontAskAgain={dontAskFeedDeleteAgain}
+          onSetDontAskAgain={setDontAskFeedDeleteAgain}
+          onConfirm={async () => {
+            try {
+              await feedManager.deleteFeed(pendingFeedDeletionView.id);
+              if (dontAskFeedDeleteAgain) {
+                setSettings((current) => ({ ...current, showFeedDeletionConfirmation: false }));
+                saveSetting("showFeedDeletionConfirmation", "false");
+              }
+              setPendingFeedDeletion(null);
+            } catch (error) {
+              setPendingFeedDeletion(null);
+              setConfigPopupMessage(String(error));
+              setShowConfigPopup(true);
+            }
+          }}
+          onCancel={() => setPendingFeedDeletion(null)}
+        />
       )}
 
       <LogPanel
@@ -1878,7 +838,6 @@ function App(): React.JSX.Element {
         logs={processLogs}
         onClear={() => {
           setProcessLogs([]);
-          seenLogKeysRef.current.clear();
         }}
         onClose={() => setShowLogPanel(false)}
       />
@@ -1889,7 +848,6 @@ function App(): React.JSX.Element {
         onDismiss={() => setShowOnboardingGuide(false)}
         onGoToSettings={openSettingsFromGuide}
       />
-
     </div>
   );
 }

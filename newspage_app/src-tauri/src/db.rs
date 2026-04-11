@@ -45,7 +45,7 @@ const DEFAULT_FEED_TOPICS: &[DefaultFeedSeed] = &[
     },
     DefaultFeedSeed {
         id: "feed-business",
-        name: "Bussiness",
+        name: "Business",
         slug: "business",
         categories: &["business"],
         rss_categories: &[],
@@ -543,7 +543,7 @@ VALUES (?1, ?2, ?3, 1, ?4)",
     Ok(())
 }
 
-pub async fn list_feeds(pool: &SqlitePool) -> Result<Vec<FeedDefinition>, sqlx::Error> {
+pub(crate) async fn list_feeds(pool: &SqlitePool) -> Result<Vec<FeedDefinition>, sqlx::Error> {
     let rows = sqlx::query(
         "SELECT id, name, slug, is_visible, sort_order
  FROM feed_definitions
@@ -554,7 +554,7 @@ pub async fn list_feeds(pool: &SqlitePool) -> Result<Vec<FeedDefinition>, sqlx::
     Ok(rows.iter().map(row_to_feed).collect())
 }
 
-pub async fn list_feed_categories(pool: &SqlitePool, feed_id: &str) -> Result<(Vec<String>, Vec<String>), sqlx::Error> {
+pub(crate) async fn list_feed_categories(pool: &SqlitePool, feed_id: &str) -> Result<(Vec<String>, Vec<String>), sqlx::Error> {
     let rows = sqlx::query(
         "SELECT category, article_type
  FROM feed_topic_map

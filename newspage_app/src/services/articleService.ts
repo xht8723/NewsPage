@@ -75,4 +75,6 @@ export const articleService = {
     invoke("load_process_logs", { limit }),
 
   purgeDatabase: (): Promise<void> => invoke("purge_database"),
+
+  openAppDataDir: (): Promise<void> => invoke("open_app_data_dir"),
 };

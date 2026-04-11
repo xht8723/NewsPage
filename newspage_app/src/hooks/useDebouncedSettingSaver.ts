@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { settingsService } from "../services/settingsService";
 
 export interface DebouncedSettingSaverController {
   saveSetting: (key: string, value: string) => void;
@@ -15,7 +15,7 @@ export function useDebouncedSettingSaverController(delayMs: number = 500): Debou
     }
 
     timerRef.current = window.setTimeout(() => {
-      void invoke("save_setting", { key, value });
+      void settingsService.save(key, value);
       timerRef.current = null;
     }, delayMs);
   }, [delayMs]);

@@ -59,10 +59,6 @@ pub fn warn(category: &str, message: impl Into<String>, count: Option<usize>) {
     write_log("WARN", category, message.into(), count);
 }
 
-pub fn error(category: &str, message: impl Into<String>, count: Option<usize>) {
-    write_log("ERROR", category, message.into(), count);
-}
-
 pub fn load_recent(limit: usize) -> Vec<ProcessLogEvent> {
     let state = logger_state().lock().unwrap();
     let Some(log_dir) = state.log_dir.as_ref() else {

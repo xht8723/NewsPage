@@ -602,7 +602,7 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
 }
 
 fn build_llm_config(settings: &ResolvedLlmSettings) -> platform_llm::LLMConfig {
-    let selected_provider = platform_llm::LLMProvider::from_str(&settings.llm_provider);
+    let selected_provider: platform_llm::LLMProvider = settings.llm_provider.parse().unwrap_or(platform_llm::LLMProvider::Ollama);
 
     match selected_provider {
         platform_llm::LLMProvider::Ollama => platform_llm::LLMConfig {
@@ -2571,22 +2571,8 @@ async fn reprocess_article(
 }
 
 #[tauri::command]
-async fn list_provider_models(provider: String, api_key: Option<String>, endpoint: Option<String>) -> Result<Vec<String>, String> {
-    let llm_provider = platform_llm::LLMProvider::from_str(&provider);
-    let config = platform_llm::LLMConfig {
-        provider: llm_provider,
-        api_key: api_key.clone(),
-        endpoint: endpoint.clone(),
-        model: "default".to_string(),
-    };
-    
-    let llm = platform_llm::create_provider(&config)?;
-    llm.list_models().await
-}
-
-#[tauri::command]
 async fn test_provider_connection(provider: String, api_key: Option<String>, endpoint: Option<String>, model: Option<String>) -> Result<bool, String> {
-    let llm_provider = platform_llm::LLMProvider::from_str(&provider);
+    let llm_provider: platform_llm::LLMProvider = provider.parse().unwrap_or(platform_llm::LLMProvider::Ollama);
     let config = platform_llm::LLMConfig {
         provider: llm_provider,
         api_key: api_key.clone(),
@@ -2653,7 +2639,7 @@ async fn translate_text(
         return Ok(cached);
     }
 
-    let llm_provider = platform_llm::LLMProvider::from_str(&provider);
+    let llm_provider: platform_llm::LLMProvider = provider.parse().unwrap_or(platform_llm::LLMProvider::Ollama);
     let config = platform_llm::LLMConfig {
         provider: llm_provider,
         api_key,
@@ -2672,11 +2658,6 @@ async fn translate_text(
     cache.insert(key, translated.clone());
 
     Ok(translated)
-}
-
-#[tauri::command]
-fn get_provider_options() -> Vec<&'static str> {
-    platform_llm::LLMProvider::options()
 }
 
 #[tauri::command]
@@ -2778,10 +2759,8 @@ pub fn run() {
             start_all_action,
             test_ollama_connection,
             list_ollama_models,
-            list_provider_models,
             test_provider_connection,
             translate_text,
-            get_provider_options,
             list_local_embedding_models,
             get_local_embedding_status,
             prepare_local_embedding_model,

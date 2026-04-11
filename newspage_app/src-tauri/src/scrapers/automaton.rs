@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use crate::id_generator::generate_article_id;
 use crate::article::Article;
 
+use super::rss_common::{first_img_src, strip_cdata, xml_tag_content};
 use super::{ScrapeContext, ScraperStage};
 
 // ---------------------------------------------------------------------------
@@ -23,7 +24,7 @@ const SOURCE_NAME: &str = "AUTOMATON";
 const SOURCE_ICON: &str = "";
 const CATEGORY: &str = "gaming";
 
-pub type AutomatonArticle = Article;
+
 
 // ---------------------------------------------------------------------------
 // RSS strategy — primary
@@ -40,34 +41,6 @@ async fn fetch_rss_from_url(rss_url: &str) -> Result<String, String> {
         .text()
         .await
         .map_err(|e| format!("Automaton RSS body read failed for {}: {}", rss_url, e))
-}
-
-/// Light XML extraction: pull text between `<open>` and `</open>` tags.
-/// Uses simple string search — no XML crate needed.
-fn xml_tag_content<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let open = format!("<{}", tag);
-    let close = format!("</{}>", tag);
-    let start = xml.find(&open)?;
-    let after_open = &xml[start + open.len()..];
-    // skip past the closing `>` of the opening tag (handles attributes)
-    let content_start = after_open.find('>')? + 1;
-    let content = &after_open[content_start..];
-    let end = content.find(&close)?;
-    Some(content[..end].trim())
-}
-
-/// Extract CDATA or plain text content from an XML text node.
-fn strip_cdata(s: &str) -> String {
-    let s = s.trim();
-    if let Some(inner) = s.strip_prefix("<![CDATA[") {
-        inner
-            .strip_suffix("]]>")
-            .unwrap_or(inner)
-            .trim()
-            .to_string()
-    } else {
-        s.to_string()
-    }
 }
 
 /// Decode common HTML/XML numeric and named character references.
@@ -118,21 +91,7 @@ fn decode_html_entities(s: &str) -> String {
     out
 }
 
-/// Extract the first `src="..."` value from an HTML/XML snippet.
-fn first_img_src(html: &str) -> Option<String> {
-    let marker = "src=\"";
-    let idx = html.find(marker)?;
-    let rest = &html[idx + marker.len()..];
-    let end = rest.find('"')?;
-    let url = rest[..end].trim();
-    if url.is_empty() {
-        None
-    } else {
-        Some(url.to_string())
-    }
-}
-
-fn parse_rss_items(xml: &str) -> Vec<AutomatonArticle> {
+fn parse_rss_items(xml: &str) -> Vec<Article> {
     let mut items = Vec::new();
     let mut remaining = xml;
 
@@ -182,7 +141,7 @@ fn parse_rss_items(xml: &str) -> Vec<AutomatonArticle> {
 
         let id = generate_article_id(&url, &title);
 
-        items.push(AutomatonArticle {
+        items.push(Article {
             id,
             title,
             url,
@@ -211,7 +170,7 @@ fn normalize_rss_date(date_str: &str) -> String {
         .unwrap_or_else(|_| date_str.to_string())
 }
 
-async fn scrape_via_rss_from_url(rss_url: &str) -> Result<Vec<AutomatonArticle>, String> {
+async fn scrape_via_rss_from_url(rss_url: &str) -> Result<Vec<Article>, String> {
     let xml = fetch_rss_from_url(rss_url).await?;
     let items = parse_rss_items(&xml);
     if items.is_empty() {
@@ -237,7 +196,7 @@ async fn fetch_html_from_url(html_url: &str) -> Result<String, String> {
         .map_err(|e| format!("Automaton HTML body read failed for {}: {}", html_url, e))
 }
 
-fn parse_html_items(html: &str) -> Vec<AutomatonArticle> {
+fn parse_html_items(html: &str) -> Vec<Article> {
     let document = Html::parse_document(html);
 
     // Each article card on the listing page is an <article> element
@@ -319,7 +278,7 @@ fn parse_html_items(html: &str) -> Vec<AutomatonArticle> {
 
         let id = generate_article_id(&url, &title);
 
-        items.push(AutomatonArticle {
+        items.push(Article {
             id,
             title,
             url,
@@ -341,7 +300,7 @@ fn parse_html_items(html: &str) -> Vec<AutomatonArticle> {
     items
 }
 
-async fn scrape_via_html_from_url(html_url: &str) -> Result<Vec<AutomatonArticle>, String> {
+async fn scrape_via_html_from_url(html_url: &str) -> Result<Vec<Article>, String> {
     let html = fetch_html_from_url(html_url).await?;
     let items = parse_html_items(&html);
     if items.is_empty() {
@@ -360,15 +319,15 @@ fn parse_automaton_timestamp(date: &str) -> Option<i64> {
         .map(|dt| dt.timestamp())
 }
 
-fn sort_key(item: &AutomatonArticle) -> (Option<i64>, String) {
+fn sort_key(item: &Article) -> (Option<i64>, String) {
     (parse_automaton_timestamp(&item.date), item.date.clone())
 }
 
-fn sort_by_date_desc(items: &mut [AutomatonArticle]) {
+fn sort_by_date_desc(items: &mut [Article]) {
     items.sort_by(|a, b| sort_key(b).cmp(&sort_key(a)));
 }
 
-fn dedup_by_id(items: Vec<AutomatonArticle>) -> Vec<AutomatonArticle> {
+fn dedup_by_id(items: Vec<Article>) -> Vec<Article> {
     let mut seen = HashSet::new();
     items
         .into_iter()
@@ -376,19 +335,15 @@ fn dedup_by_id(items: Vec<AutomatonArticle>) -> Vec<AutomatonArticle> {
         .collect()
 }
 
-pub async fn scrape_automaton(limit: Option<usize>) -> Result<Vec<AutomatonArticle>, String> {
-    scrape_automaton_for_urls(limit, RSS_FEED_URL, HTML_NEWS_URL).await
-}
-
 pub async fn scrape_automaton_for_urls(
     limit: Option<usize>,
     rss_url: &str,
     html_url: &str,
-) -> Result<Vec<AutomatonArticle>, String> {
+) -> Result<Vec<Article>, String> {
     // Strategy order: RSS first, HTML fallback.
     // Each strategy is only attempted if the previous one fails, so the HTML
     // request is never made when RSS succeeds.
-    let finalize = |items: Vec<AutomatonArticle>| {
+    let finalize = |items: Vec<Article>| {
         let mut items = dedup_by_id(items);
         sort_by_date_desc(&mut items);
         items.truncate(limit.unwrap_or(DEFAULT_ITEM_LIMIT));

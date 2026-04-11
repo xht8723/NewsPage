@@ -7,15 +7,10 @@ use crate::logging;
 use crate::article::Article;
 
 use super::{ScrapeContext, ScraperStage};
-pub use super::rss_common::{
-    decode_entities,
-    extract_rss_thumbnail,
+use super::rss_common::{
     fetch_rss_feed,
-    parse_pub_date,
     parse_rss_items,
     rss_item_to_article,
-    strip_cdata,
-    RssItem,
 };
 
 // ---------------------------------------------------------------------------
@@ -177,7 +172,7 @@ async fn scrape_region(
     }
 }
 
-pub async fn scrape_rss_regions(region_ids: &[String], subscribed_news_categories: &HashSet<String>) -> Result<Vec<Article>, String> {
+async fn scrape_rss_regions(region_ids: &[String], subscribed_news_categories: &HashSet<String>) -> Result<Vec<Article>, String> {
     let client = Client::new();
     let mut all_items: Vec<Article> = Vec::new();
     let mut seen_ids: HashSet<String> = HashSet::new();

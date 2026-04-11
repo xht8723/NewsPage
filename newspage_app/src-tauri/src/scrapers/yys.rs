@@ -6,31 +6,13 @@ use crate::db::FeedSource;
 use crate::id_generator::generate_article_id;
 use crate::article::Article;
 
-use super::rss_common::{decode_entities, fetch_rss_feed, parse_pub_date, strip_cdata};
+use super::rss_common::{decode_entities, fetch_rss_feed, first_img_src, parse_pub_date, strip_cdata, xml_tag_content};
 use super::{ScrapeContext, ScraperStage};
 
 const YYS_FEED_URL: &str = "https://www.yystv.cn/rss/feed";
 
 pub struct YysScraperStage;
 
-// ---------------------------------------------------------------------------
-// XML helpers
-// ---------------------------------------------------------------------------
-
-/// Extract the text content between the first matching `<tag…>` and `</tag>`.
-fn xml_inner<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let open = format!("<{}", tag);
-    let close = format!("</{}>", tag);
-    let start = xml.find(&open)?;
-    let after_open = &xml[start + open.len()..];
-    let content_start = after_open.find('>')? + 1;
-    let content = &after_open[content_start..];
-    let end = content.find(&close)?;
-    Some(content[..end].trim())
-}
-
-/// Strip HTML tags from a string, returning plain text.
-/// Also collapses consecutive whitespace/newlines to single spaces.
 fn strip_html_tags(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut in_tag = false;
@@ -42,30 +24,9 @@ fn strip_html_tags(html: &str) -> String {
             _ => {}
         }
     }
-    // Collapse whitespace
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Return the `src` attribute value of the first `<img …>` tag in `html`.
-fn first_img_src(html: &str) -> Option<String> {
-    let start = html.find("<img ")?;
-    let rest = &html[start..];
-    let end = rest.find('>')?;
-    let tag = &rest[..end];
-    let needle = "src=\"";
-    let s = tag.find(needle)?;
-    let after = &tag[s + needle.len()..];
-    let e = after.find('"')?;
-    let url = &after[..e];
-    if url.starts_with("http") {
-        Some(url.to_string())
-    } else {
-        None
-    }
-}
-
-/// Parse the `<source …>` element text into an author name.
-/// The text looks like "游研社 by AuthorName"; we strip the prefix.
 fn parse_author_from_source(source_text: &str) -> Option<String> {
     let decoded = decode_entities(&strip_cdata(source_text));
     let trimmed = decoded.trim().to_string();
@@ -92,15 +53,15 @@ fn parse_yys_item(
     category: &str,
     source_name: &str,
 ) -> Option<Article> {
-    let title = xml_inner(item_xml, "title")
+    let title = xml_tag_content(item_xml, "title")
         .map(|s| decode_entities(&strip_cdata(s)))
         .filter(|s| !s.is_empty())?;
 
-    let link = xml_inner(item_xml, "link")
+    let link = xml_tag_content(item_xml, "link")
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())?;
 
-    let pub_date_raw = xml_inner(item_xml, "pubDate")
+    let pub_date_raw = xml_tag_content(item_xml, "pubDate")
         .unwrap_or("")
         .to_string();
     let pub_date_parsed = parse_pub_date(&pub_date_raw);
@@ -109,13 +70,13 @@ fn parse_yys_item(
         .unwrap_or(pub_date_raw);
 
     // Author: extracted from the <source> element text ("游研社 by Name")
-    let authors: Vec<String> = xml_inner(item_xml, "source")
+    let authors: Vec<String> = xml_tag_content(item_xml, "source")
         .and_then(parse_author_from_source)
         .map(|a| vec![a])
         .unwrap_or_default();
 
     // Description: used for both thumbnail extraction and RSS fallback text (og_content)
-    let description_html = xml_inner(item_xml, "description")
+    let description_html = xml_tag_content(item_xml, "description")
         .map(|desc| strip_cdata(&decode_entities(desc)))
         .unwrap_or_default();
 

@@ -31,6 +31,19 @@ export interface ReorderFeedsRequest {
   feed_ids: string[];
 }
 
+export interface UpsertFeedSourceRequest {
+  source_type: string;
+  source_ref: string;
+  display_name: string;
+  enabled: boolean;
+  tag_color: string;
+}
+
+export interface RemoveFeedSourceRequest {
+  source_type: string;
+  source_ref: string;
+}
+
 export const feedService = {
   list: (): Promise<FeedDefinition[]> => invoke("list_feeds"),
 
@@ -53,4 +66,10 @@ export const feedService = {
 
   reorder: (request: ReorderFeedsRequest): Promise<void> =>
     invoke("reorder_feeds_action", { request }),
+
+  upsertSource: (request: UpsertFeedSourceRequest): Promise<void> =>
+    invoke("upsert_feed_source_action", { request }),
+
+  removeSource: (request: RemoveFeedSourceRequest): Promise<void> =>
+    invoke("remove_feed_source_action", { request }),
 };

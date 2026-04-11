@@ -16,7 +16,7 @@ pub struct RssItem {
 }
 
 /// Extract text between the first `<tag...>` and `</tag>` in `xml`.
-fn xml_tag_content<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
+pub fn xml_tag_content<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
     let open = format!("<{}", tag);
     let close = format!("</{}>", tag);
     let start = xml.find(&open)?;
@@ -121,22 +121,6 @@ pub fn parse_pub_date(date_str: &str) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
-/// Google News RSS wraps the real article URL in a redirect link.
-/// Extract the real URL from the `<link>` value if possible.
-fn clean_google_news_link(raw: &str) -> String {
-    // Google News links look like: https://news.google.com/rss/articles/...
-    // The actual article URL is in the redirect; however the RSS <link> is the
-    // Google redirect URL itself. We keep it as-is (article_extract will follow
-    // redirects when fetching content).
-    raw.trim().to_string()
-}
-
-/// Extract a thumbnail URL from an RSS `<item>` block.
-///
-/// Priority:
-/// 1. `<media:content url="..." />` (Google News standard)
-/// 2. `<enclosure url="..." />` (generic RSS)
-/// 3. First `<img src="...">` inside `<description>` CDATA
 pub fn extract_rss_thumbnail(item_xml: &str) -> String {
     // 1. <media:content url="..." />
     if let Some(url) = extract_media_content_url(item_xml) {
@@ -172,7 +156,7 @@ fn extract_enclosure_url(xml: &str) -> Option<String> {
     extract_attr(tag, "url").filter(|u| u.starts_with("http"))
 }
 
-fn first_img_src(html: &str) -> Option<String> {
+pub fn first_img_src(html: &str) -> Option<String> {
     let start = html.find("<img ")?;
     let rest = &html[start..];
     let end = rest.find('>')?;
@@ -199,7 +183,7 @@ pub fn parse_rss_items(xml: &str) -> Vec<RssItem> {
             .map(|s| strip_trailing_source(&decode_entities(&strip_cdata(s))))
             .unwrap_or_default();
         let link = xml_tag_content(item_xml, "link")
-            .map(clean_google_news_link)
+            .map(|s| s.trim().to_string())
             .unwrap_or_default();
         let pub_date_raw = xml_tag_content(item_xml, "pubDate")
             .unwrap_or("")

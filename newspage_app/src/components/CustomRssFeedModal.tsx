@@ -1,12 +1,12 @@
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { Check, Pencil, Plus, Rss, Trash2, X } from "lucide-react";
 import { NeonCheckbox } from "./NeonCheckbox";
 import type { FeedSource } from "../types/article";
 import { normalizeRssFeedUrl } from "../utils/rssSettings";
 import { usePanelTransition } from "../hooks/usePanelTransition";
 import { TAG_COLOR_PRESETS } from "../utils/articleMeta";
+import { feedService } from "../services/feedService";
 
 interface CustomRssFeedModalProps {
   show: boolean;
@@ -146,8 +146,8 @@ export function CustomRssFeedModal({
     if (customFeeds.some((s) => s.source_ref === url)) return;
     setSaving(true);
     try {
-      await invoke("upsert_feed_source_action", {
-        request: { source_type: "custom_rss", source_ref: url, display_name: name, enabled: true, tag_color: "" },
+      await feedService.upsertSource({
+        source_type: "custom_rss", source_ref: url, display_name: name, enabled: true, tag_color: "",
       });
       await onRefresh();
       setDraftName("");
@@ -174,8 +174,8 @@ export function CustomRssFeedModal({
   const toggleFeedEnabled = async (source: FeedSource) => {
     setSaving(true);
     try {
-      await invoke("upsert_feed_source_action", {
-        request: { source_type: source.source_type, source_ref: source.source_ref, display_name: source.display_name, enabled: !source.enabled, tag_color: source.tag_color },
+      await feedService.upsertSource({
+        source_type: source.source_type, source_ref: source.source_ref, display_name: source.display_name, enabled: !source.enabled, tag_color: source.tag_color,
       });
       await onRefresh();
     } catch (_error) {
@@ -191,15 +191,15 @@ export function CustomRssFeedModal({
     setSaving(true);
     try {
       if (source.source_ref !== newUrl) {
-        await invoke("remove_feed_source_action", {
-          request: { source_type: source.source_type, source_ref: source.source_ref },
+        await feedService.removeSource({
+          source_type: source.source_type, source_ref: source.source_ref,
         });
-        await invoke("upsert_feed_source_action", {
-          request: { source_type: source.source_type, source_ref: newUrl, display_name: newName, enabled: source.enabled, tag_color: source.tag_color },
+        await feedService.upsertSource({
+          source_type: source.source_type, source_ref: newUrl, display_name: newName, enabled: source.enabled, tag_color: source.tag_color,
         });
       } else {
-        await invoke("upsert_feed_source_action", {
-          request: { source_type: source.source_type, source_ref: source.source_ref, display_name: newName, enabled: source.enabled, tag_color: source.tag_color },
+        await feedService.upsertSource({
+          source_type: source.source_type, source_ref: source.source_ref, display_name: newName, enabled: source.enabled, tag_color: source.tag_color,
         });
       }
       await onRefresh();
@@ -213,8 +213,8 @@ export function CustomRssFeedModal({
   const deleteFeed = async (source: FeedSource) => {
     setSaving(true);
     try {
-      await invoke("remove_feed_source_action", {
-        request: { source_type: source.source_type, source_ref: source.source_ref },
+      await feedService.removeSource({
+        source_type: source.source_type, source_ref: source.source_ref,
       });
       await onRefresh();
     } catch (_error) {
@@ -228,8 +228,8 @@ export function CustomRssFeedModal({
     const normalized = color.trim();
     if (normalized !== "" && !/^#[0-9a-fA-F]{6}$/.test(normalized)) return;
     try {
-      await invoke("upsert_feed_source_action", {
-        request: { source_type: source.source_type, source_ref: source.source_ref, display_name: source.display_name, enabled: source.enabled, tag_color: normalized },
+      await feedService.upsertSource({
+        source_type: source.source_type, source_ref: source.source_ref, display_name: source.display_name, enabled: source.enabled, tag_color: normalized,
       });
       await onRefresh();
     } catch (_error) {

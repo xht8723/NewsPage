@@ -15,9 +15,9 @@ const DEFAULT_ANN_ITEM_LIMIT: usize = 100;
 const ANN_SOURCE_NAME: &str = "ANN";
 const ANN_SOURCE_ICON: &str = "src/assets/favicon.ico";
 
-pub type AnnArticle = Article;
 
-pub async fn get_news_html_for_url(news_url: &str) -> Result<String, String> {
+
+async fn get_news_html_for_url(news_url: &str) -> Result<String, String> {
     let client = Client::new();
 
     match client.get(news_url).send().await {
@@ -29,7 +29,7 @@ pub async fn get_news_html_for_url(news_url: &str) -> Result<String, String> {
     }
 }
 
-pub async fn get_news_items_for_url(news_url: &str) -> Result<Vec<String>, String> {
+async fn get_news_items_for_url(news_url: &str) -> Result<Vec<String>, String> {
     let html_content = get_news_html_for_url(news_url).await?;
     let document = Html::parse_document(&html_content);
 
@@ -93,7 +93,7 @@ fn article_date_from_url(url: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(date_segment, "%Y-%m-%d").ok()
 }
 
-fn ann_sort_key(item: &AnnArticle) -> (Option<i64>, String) {
+fn ann_sort_key(item: &Article) -> (Option<i64>, String) {
     let timestamp = DateTime::parse_from_rfc3339(&item.date)
         .ok()
         .map(|datetime| datetime.timestamp())
@@ -106,16 +106,16 @@ fn ann_sort_key(item: &AnnArticle) -> (Option<i64>, String) {
     (timestamp, item.date.clone())
 }
 
-fn sort_ann_news_items_by_date_desc(items: &mut [AnnArticle]) {
+fn sort_ann_news_items_by_date_desc(items: &mut [Article]) {
     items.sort_by(|left, right| ann_sort_key(right).cmp(&ann_sort_key(left)));
 }
 
-fn truncate_ann_news_items(items: &mut Vec<AnnArticle>, limit: Option<usize>) {
+fn truncate_ann_news_items(items: &mut Vec<Article>, limit: Option<usize>) {
     let limit = limit.unwrap_or(DEFAULT_ANN_ITEM_LIMIT);
     items.truncate(limit);
 }
 
-pub fn extract_news_item_fields(item_html: &str) -> Option<AnnArticle> {
+fn extract_news_item_fields(item_html: &str) -> Option<Article> {
     let fragment = Html::parse_fragment(item_html);
 
     let root_selector = Selector::parse("div.herald.box.news.t-news, div.wrap, div.thumbnail").ok()?;
@@ -162,7 +162,7 @@ pub fn extract_news_item_fields(item_html: &str) -> Option<AnnArticle> {
     };
     let id = generate_article_id(&url, &title);
 
-    Some(AnnArticle {
+    Some(Article {
         id,
         title,
         url,
@@ -181,7 +181,7 @@ pub fn extract_news_item_fields(item_html: &str) -> Option<AnnArticle> {
     })
 }
 
-pub async fn scrape_ann_for_url(limit: Option<usize>, news_url: &str) -> Result<Vec<AnnArticle>, String> {
+pub async fn scrape_ann_for_url(limit: Option<usize>, news_url: &str) -> Result<Vec<Article>, String> {
     let news_items_html = get_news_items_for_url(news_url).await?;
     let mut items: Vec<_> = news_items_html
         .iter()

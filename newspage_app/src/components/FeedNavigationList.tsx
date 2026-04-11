@@ -1,22 +1,17 @@
 import type React from "react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   DndContext,
-  PointerSensor,
   closestCenter,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-  type DragOverEvent,
-  type DragStartEvent,
   type DraggableAttributes,
   type DraggableSyntheticListeners,
 } from "@dnd-kit/core";
-import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ChevronRight, EyeOff, GripVertical, Pencil } from "lucide-react";
 import type { FeedDefinition } from "../types/article";
 import { usePanelTransition } from "../hooks/usePanelTransition";
+import { useFeedDragReorder } from "../hooks/useFeedDragReorder";
 
 interface FeedNavigationListProps {
   feeds: FeedDefinition[];
@@ -80,11 +75,6 @@ export const FeedNavigationList = memo(function FeedNavigationListComponent({
   onRenameFeed,
   onToggleFeedVisibility,
 }: FeedNavigationListProps): React.JSX.Element {
-  const [activeFeedId, setActiveFeedId] = useState<string | null>(null);
-  const [overFeedId, setOverFeedId] = useState<string | null>(null);
-  const [previewFeeds, setPreviewFeeds] = useState<FeedDefinition[] | null>(null);
-  const [isReleasing, setIsReleasing] = useState(false);
-
   const [feedContextMenu, setFeedContextMenu] = useState<{ feedId: string; x: number; y: number } | null>(null);
   const [feedContextMenuClosing, setFeedContextMenuClosing] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
@@ -95,87 +85,17 @@ export const FeedNavigationList = memo(function FeedNavigationListComponent({
   const { isMounted: renameModalMounted, isClosing: renameModalClosing } = usePanelTransition(renameOpen, 160);
   const renameInputRef = useRef<HTMLInputElement>(null);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 4 },
-    }),
-  );
-
-  const orderedFeeds = useMemo(
-    () => previewFeeds ?? feeds,
-    [feeds, previewFeeds],
-  );
-
-  const dragStartOrderRef = useRef<string[]>([]);
-  const orderedFeedsRef = useRef<FeedDefinition[]>(orderedFeeds);
-
-  useEffect(() => {
-    orderedFeedsRef.current = orderedFeeds;
-  }, [orderedFeeds]);
-
-  const clearDragState = () => {
-    setIsReleasing(false);
-    setActiveFeedId(null);
-    setOverFeedId(null);
-    setPreviewFeeds(null);
-    dragStartOrderRef.current = [];
-  };
-
-  const handleDragStart = (event: DragStartEvent) => {
-    const startedId = String(event.active.id);
-    setIsReleasing(false);
-    setActiveFeedId(startedId);
-    setOverFeedId(startedId);
-    setPreviewFeeds(orderedFeedsRef.current);
-    dragStartOrderRef.current = orderedFeedsRef.current.map((feed) => feed.id);
-  };
-
-  const handleDragOver = (event: DragOverEvent) => {
-    const overId = event.over ? String(event.over.id) : null;
-    setOverFeedId(overId);
-    if (!event.over || activeFeedId === null) {
-      return;
-    }
-
-    const activeId = String(event.active.id);
-    if (activeId === overId) {
-      return;
-    }
-
-    setPreviewFeeds((current) => {
-      const base = current ?? orderedFeedsRef.current;
-      const sourceIndex = base.findIndex((feed) => feed.id === activeId);
-      const targetIndex = base.findIndex((feed) => feed.id === overId);
-      if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {
-        return base;
-      }
-      return arrayMove(base, sourceIndex, targetIndex);
-    });
-  };
-
-  const handleDragEnd = async (event: DragEndEvent) => {
-    const finalizedOrder = orderedFeedsRef.current.map((feed) => feed.id);
-    const startOrder = dragStartOrderRef.current;
-    const changed =
-      event.over
-      && startOrder.length === finalizedOrder.length
-      && finalizedOrder.some((feedId, index) => feedId !== startOrder[index]);
-
-    if (!changed) {
-      clearDragState();
-      return;
-    }
-
-    setIsReleasing(true);
-    setActiveFeedId(null);
-    setOverFeedId(null);
-
-    try {
-      await onReorderFeedByDrag(finalizedOrder);
-    } finally {
-      clearDragState();
-    }
-  };
+  const {
+    activeFeedId,
+    overFeedId,
+    isReleasing,
+    orderedFeeds,
+    sensors,
+    handleDragStart,
+    handleDragOver,
+    handleDragEnd,
+    clearDragState,
+  } = useFeedDragReorder(feeds, onReorderFeedByDrag);
 
   const closeContextMenu = useCallback(() => {
     setFeedContextMenuClosing(true);

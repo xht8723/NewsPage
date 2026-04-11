@@ -273,7 +273,7 @@ pub async fn fetch_article_text_and_thumbnail(
 ///
 /// Priority: `og:image` meta tag → first `<img>` in `<body>`.
 /// Filters out data URIs, SVGs, tracking pixels, and Google News logos.
-pub fn extract_thumbnail_from_html(html: &str, base_url: &str) -> Option<String> {
+pub(crate) fn extract_thumbnail_from_html(html: &str, base_url: &str) -> Option<String> {
     let document = Html::parse_document(html);
 
     // Helper: resolve relative/protocol-relative URLs against the article URL
@@ -386,7 +386,7 @@ const JUNK_PHRASES: &[&str] = &[
 
 /// Returns `Some(reason)` if the extracted article text looks like junk
 /// (JS wall, paywall, anti-bot page, etc.), or `None` if it looks legit.
-pub fn is_junk_article_text(text: &str) -> Option<&'static str> {
+pub(crate) fn is_junk_article_text(text: &str) -> Option<&'static str> {
     let trimmed = text.trim();
     if trimmed.len() < MIN_ARTICLE_TEXT_LEN {
         return Some("extracted text too short (< 80 chars)");

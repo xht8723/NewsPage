@@ -6,48 +6,10 @@ use crate::db::FeedSource;
 use crate::id_generator::generate_article_id;
 use crate::article::Article;
 
-use super::rss_common::{decode_entities, fetch_rss_feed, parse_pub_date, strip_cdata};
+use super::rss_common::{decode_entities, fetch_rss_feed, first_img_src, parse_pub_date, strip_cdata, xml_tag_content};
 use super::{ScrapeContext, ScraperStage};
 
 pub struct GcoresScraperStage;
-
-// ---------------------------------------------------------------------------
-// XML helpers (scoped to GCores — avoid pulling in rss_common internals)
-// ---------------------------------------------------------------------------
-
-/// Extract the text content between the first matching `<tag…>` and `</tag>`.
-fn xml_inner<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let open = format!("<{}", tag);
-    let close = format!("</{}>", tag);
-    let start = xml.find(&open)?;
-    let after_open = &xml[start + open.len()..];
-    let content_start = after_open.find('>')? + 1;
-    let content = &after_open[content_start..];
-    let end = content.find(&close)?;
-    Some(content[..end].trim())
-}
-
-/// Return the `src` attribute value of the first `<img …>` tag in `html`.
-fn first_img_src(html: &str) -> Option<String> {
-    let start = html.find("<img ")?;
-    let rest = &html[start..];
-    let end = rest.find('>')?;
-    let tag = &rest[..end];
-    let needle = "src=\"";
-    let s = tag.find(needle)?;
-    let after = &tag[s + needle.len()..];
-    let e = after.find('"')?;
-    let url = &after[..e];
-    if url.starts_with("http") {
-        Some(url.to_string())
-    } else {
-        None
-    }
-}
-
-// ---------------------------------------------------------------------------
-// GCores-specific item parser
-// ---------------------------------------------------------------------------
 
 fn parse_gcores_item(
     item_xml: &str,
@@ -55,15 +17,15 @@ fn parse_gcores_item(
     source_name: &str,
     source_icon: &str,
 ) -> Option<Article> {
-    let title = xml_inner(item_xml, "title")
+    let title = xml_tag_content(item_xml, "title")
         .map(|s| decode_entities(&strip_cdata(s)))
         .filter(|s| !s.is_empty())?;
 
-    let link = xml_inner(item_xml, "link")
+    let link = xml_tag_content(item_xml, "link")
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())?;
 
-    let pub_date_raw = xml_inner(item_xml, "pubDate")
+    let pub_date_raw = xml_tag_content(item_xml, "pubDate")
         .unwrap_or("")
         .to_string();
     let pub_date_parsed = parse_pub_date(&pub_date_raw);
@@ -72,7 +34,7 @@ fn parse_gcores_item(
         .unwrap_or(pub_date_raw);
 
     // Authors: GCores uses comma-separated names in <author>
-    let authors: Vec<String> = xml_inner(item_xml, "author")
+    let authors: Vec<String> = xml_tag_content(item_xml, "author")
         .map(|s| {
             let decoded = decode_entities(&strip_cdata(s));
             decoded
@@ -84,11 +46,11 @@ fn parse_gcores_item(
         .unwrap_or_default();
 
     // Thumbnail: prefer dedicated <thumb> tag, fall back to first <img> in description CDATA
-    let thumbnail = xml_inner(item_xml, "thumb")
+    let thumbnail = xml_tag_content(item_xml, "thumb")
         .map(|s| s.trim().to_string())
         .filter(|s| s.starts_with("http"))
         .or_else(|| {
-            xml_inner(item_xml, "description").and_then(|desc| {
+            xml_tag_content(item_xml, "description").and_then(|desc| {
                 let decoded = strip_cdata(&decode_entities(desc));
                 first_img_src(&decoded)
             })

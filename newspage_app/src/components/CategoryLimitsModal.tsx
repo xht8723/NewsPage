@@ -1,5 +1,4 @@
 import type React from "react";
-import type { Dispatch, SetStateAction } from "react";
 import { SlidersHorizontal, X } from "lucide-react";
 import type { UserSettings } from "../types/article";
 import { TOPIC_CATEGORIES } from "../constants/article";
@@ -9,7 +8,7 @@ interface CategoryLimitsModalProps {
   show: boolean;
   isDarkMode: boolean;
   settings: UserSettings;
-  setSettings: Dispatch<SetStateAction<UserSettings>>;
+  setSettings: (updater: (prev: UserSettings) => UserSettings) => void;
   saveSetting: (key: string, value: string) => void;
   onClose: () => void;
 }

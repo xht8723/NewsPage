@@ -1,8 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
 import { FolderOpen, RefreshCw, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
 import { DotsSpinner } from "./DotsSpinner";
 import type React from "react";
-import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { addSourceToBlacklist, normalizeSourceName, removeSourceFromBlacklist } from "../utils/sourceBlacklist";
 import { NeonCheckbox } from "./NeonCheckbox";
 import {
@@ -12,15 +11,17 @@ import {
 } from "../constants/article";
 import type { FeedSource, LocalEmbeddingStatus, UserSettings } from "../types/article";
 import { usePanelTransition } from "../hooks/usePanelTransition";
+import { articleService } from "../services/articleService";
+import { LLMProviderSection } from "./LLMProviderSection";
 
 interface SettingsModalProps {
   showSettings: boolean;
   isDarkMode: boolean;
   settings: UserSettings;
-  setSettings: Dispatch<SetStateAction<UserSettings>>;
+  setSettings: (updater: (prev: UserSettings) => UserSettings) => void;
   saveSetting: (key: string, value: string) => void;
   ollamaConnectionState: OllamaConnectionState;
-  setOllamaConnectionState: Dispatch<SetStateAction<OllamaConnectionState>>;
+  setOllamaConnectionState: (state: OllamaConnectionState) => void;
   isTestingOllama: boolean;
   testOllamaConnection: (address: string) => Promise<void>;
   ollamaModels: string[];
@@ -28,15 +29,15 @@ interface SettingsModalProps {
   refreshOllamaModels: (address: string, preferredModel?: string) => Promise<void>;
   localEmbeddingModels: string[];
   selectedEmbeddingModel: string;
-  onSelectEmbeddingModel: Dispatch<SetStateAction<string>>;
+  onSelectEmbeddingModel: (model: string) => void;
   localEmbeddingStatus: LocalEmbeddingStatus | null;
   isPreparingLocalEmbeddingModel: boolean;
   onPrepareLocalEmbeddingModel: (model: string) => Promise<void>;
   isEmbeddingConfigured: boolean;
   purgeConfirmStep: 0 | 1 | 2;
-  setPurgeConfirmStep: Dispatch<SetStateAction<0 | 1 | 2>>;
+  setPurgeConfirmStep: (step: 0 | 1 | 2) => void;
   isPurging: boolean;
-  setIsPurging: Dispatch<SetStateAction<boolean>>;
+  setIsPurging: (purging: boolean) => void;
   onPurgeDatabase: () => Promise<void>;
   onOpenCategoryLimits: () => void;
   onOpenCustomRssFeedSettings: () => void;
@@ -340,7 +341,7 @@ export function SettingsModal({
                     <button
                       type="button"
                       onClick={() => {
-                        void invoke("open_url", { url: REPO_URL });
+                        void articleService.openUrl(REPO_URL);
                       }}
                       className={`text-[11px] font-semibold underline-offset-4 hover:underline ${
                         isDarkMode
@@ -831,7 +832,7 @@ export function SettingsModal({
                   <div>
                     <button
                       type="button"
-                      onClick={() => void invoke("open_app_data_dir")}
+                      onClick={() => void articleService.openAppDataDir()}
                       className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
                         isDarkMode
                           ? "border-zinc-700 bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
@@ -965,247 +966,75 @@ export function SettingsModal({
                     )}
 
                     {settings.llmProvider === "openai" && (
-                      <>
-                        <div>
-                          <label className="mb-1.5 block text-xs font-medium opacity-70">OpenAI API Key</label>
-                          <input
-                            type="password"
-                            placeholder="sk-..."
-                            value={settings.openaiApiKey}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setSettings((s) => ({ ...s, openaiApiKey: val }));
-                              saveSetting("openaiApiKey", val);
-                            }}
-                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                              isDarkMode
-                                ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                                : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
-                            }`}
-                          />
-                        </div>
-                         <div>
-                           <div className="mb-2 flex items-center justify-between gap-2">
-                             <label className="text-xs font-medium opacity-70">OpenAI Model</label>
-                             <button
-                               type="button"
-                               onClick={() => void refreshCloudModels("openai")}
-                               className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
-                                 isDarkMode
-                                   ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                                   : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
-                               } disabled:opacity-50`}
-                             >
-                               <RefreshCw size={12} />
-                               Refresh
-                             </button>
-                           </div>
-                           <select
-                             value={settings.openaiModel}
-                             onChange={(e) => {
-                               const val = e.target.value;
-                               setSettings((s) => ({ ...s, openaiModel: val }));
-                               saveSetting("openaiModel", val);
-                             }}
-                             className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                               isDarkMode
-                                 ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                                 : "border-zinc-300 bg-zinc-200 text-zinc-900"
-                             }`}
-                           >
-                             {(cloudModels["openai"] || []).length === 0 ? (
-                               <option value={settings.openaiModel}>{settings.openaiModel}</option>
-                             ) : (
-                               (cloudModels["openai"] || []).map((model) => (
-                                 <option key={model} value={model}>{model}</option>
-                               ))
-                             )}
-                           </select>
-                         </div>
-                      </>
+                      <LLMProviderSection
+                        label="OpenAI"
+                        apiKeyLabel="OpenAI API Key"
+                        apiKeyPlaceholder="sk-..."
+                        apiKey={settings.openaiApiKey}
+                        apiKeySettingKey="openaiApiKey"
+                        modelName={settings.openaiModel}
+                        modelSettingKey="openaiModel"
+                        providerId="openai"
+                        isDarkMode={isDarkMode}
+                        cloudModels={cloudModels}
+                        onRefreshModels={refreshCloudModels}
+                        setSettings={setSettings}
+                        saveSetting={saveSetting}
+                      />
                     )}
 
                     {settings.llmProvider === "claude" && (
-                      <>
-                        <div>
-                          <label className="mb-1.5 block text-xs font-medium opacity-70">Claude API Key</label>
-                          <input
-                            type="password"
-                            placeholder="sk-ant-..."
-                            value={settings.claudeApiKey}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setSettings((s) => ({ ...s, claudeApiKey: val }));
-                              saveSetting("claudeApiKey", val);
-                            }}
-                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                              isDarkMode
-                                ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                                : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
-                            }`}
-                          />
-                        </div>
-                         <div>
-                           <div className="mb-2 flex items-center justify-between gap-2">
-                             <label className="text-xs font-medium opacity-70">Claude Model</label>
-                             <button
-                               type="button"
-                               onClick={() => void refreshCloudModels("claude")}
-                               className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
-                                 isDarkMode
-                                   ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                                   : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
-                               } disabled:opacity-50`}
-                             >
-                               <RefreshCw size={12} />
-                               Refresh
-                             </button>
-                           </div>
-                           <select
-                             value={settings.claudeModel}
-                             onChange={(e) => {
-                               const val = e.target.value;
-                               setSettings((s) => ({ ...s, claudeModel: val }));
-                               saveSetting("claudeModel", val);
-                             }}
-                             className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                               isDarkMode
-                                 ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                                 : "border-zinc-300 bg-zinc-200 text-zinc-900"
-                             }`}
-                           >
-                             {(cloudModels["claude"] || []).length === 0 ? (
-                               <option value={settings.claudeModel}>{settings.claudeModel}</option>
-                             ) : (
-                               (cloudModels["claude"] || []).map((model) => (
-                                 <option key={model} value={model}>{model}</option>
-                               ))
-                             )}
-                           </select>
-                         </div>
-                      </>
+                      <LLMProviderSection
+                        label="Claude"
+                        apiKeyLabel="Claude API Key"
+                        apiKeyPlaceholder="sk-ant-..."
+                        apiKey={settings.claudeApiKey}
+                        apiKeySettingKey="claudeApiKey"
+                        modelName={settings.claudeModel}
+                        modelSettingKey="claudeModel"
+                        providerId="claude"
+                        isDarkMode={isDarkMode}
+                        cloudModels={cloudModels}
+                        onRefreshModels={refreshCloudModels}
+                        setSettings={setSettings}
+                        saveSetting={saveSetting}
+                      />
                     )}
 
                     {settings.llmProvider === "gemini" && (
-                      <>
-                        <div>
-                          <label className="mb-1.5 block text-xs font-medium opacity-70">Google Gemini API Key</label>
-                          <input
-                            type="password"
-                            placeholder="AIza..."
-                            value={settings.geminiApiKey}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setSettings((s) => ({ ...s, geminiApiKey: val }));
-                              saveSetting("geminiApiKey", val);
-                            }}
-                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                              isDarkMode
-                                ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                                : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
-                            }`}
-                          />
-                        </div>
-                         <div>
-                           <div className="mb-2 flex items-center justify-between gap-2">
-                             <label className="text-xs font-medium opacity-70">Gemini Model</label>
-                             <button
-                               type="button"
-                               onClick={() => void refreshCloudModels("gemini")}
-                               className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
-                                 isDarkMode
-                                   ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                                   : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
-                               } disabled:opacity-50`}
-                             >
-                               <RefreshCw size={12} />
-                               Refresh
-                             </button>
-                           </div>
-                           <select
-                             value={settings.geminiModel}
-                             onChange={(e) => {
-                               const val = e.target.value;
-                               setSettings((s) => ({ ...s, geminiModel: val }));
-                               saveSetting("geminiModel", val);
-                             }}
-                             className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                               isDarkMode
-                                 ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                                 : "border-zinc-300 bg-zinc-200 text-zinc-900"
-                             }`}
-                           >
-                             {(cloudModels["gemini"] || []).length === 0 ? (
-                               <option value={settings.geminiModel}>{settings.geminiModel}</option>
-                             ) : (
-                               (cloudModels["gemini"] || []).map((model) => (
-                                 <option key={model} value={model}>{model}</option>
-                               ))
-                             )}
-                           </select>
-                         </div>
-                       </>
-                     )}
+                      <LLMProviderSection
+                        label="Gemini"
+                        apiKeyLabel="Google Gemini API Key"
+                        apiKeyPlaceholder="AIza..."
+                        apiKey={settings.geminiApiKey}
+                        apiKeySettingKey="geminiApiKey"
+                        modelName={settings.geminiModel}
+                        modelSettingKey="geminiModel"
+                        providerId="gemini"
+                        isDarkMode={isDarkMode}
+                        cloudModels={cloudModels}
+                        onRefreshModels={refreshCloudModels}
+                        setSettings={setSettings}
+                        saveSetting={saveSetting}
+                      />
+                    )}
 
                     {settings.llmProvider === "deepseek" && (
-                      <>
-                        <div>
-                          <label className="mb-1.5 block text-xs font-medium opacity-70">DeepSeek API Key</label>
-                          <input
-                            type="password"
-                            placeholder="sk-..."
-                            value={settings.deepseekApiKey}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setSettings((s) => ({ ...s, deepseekApiKey: val }));
-                              saveSetting("deepseekApiKey", val);
-                            }}
-                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                              isDarkMode
-                                ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                                : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
-                            }`}
-                          />
-                        </div>
-                        <div>
-                          <div className="mb-2 flex items-center justify-between gap-2">
-                            <label className="text-xs font-medium opacity-70">DeepSeek Model</label>
-                            <button
-                              type="button"
-                              onClick={() => void refreshCloudModels("deepseek")}
-                              className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest transition-colors ${
-                                isDarkMode
-                                  ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                                  : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
-                              } disabled:opacity-50`}
-                            >
-                              <RefreshCw size={12} />
-                              Refresh
-                            </button>
-                          </div>
-                          <select
-                            value={settings.deepseekModel}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setSettings((s) => ({ ...s, deepseekModel: val }));
-                              saveSetting("deepseekModel", val);
-                            }}
-                            className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                              isDarkMode
-                                ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                                : "border-zinc-300 bg-zinc-200 text-zinc-900"
-                            }`}
-                          >
-                            {(cloudModels["deepseek"] || []).length === 0 ? (
-                              <option value={settings.deepseekModel}>{settings.deepseekModel}</option>
-                            ) : (
-                              (cloudModels["deepseek"] || []).map((model) => (
-                                <option key={model} value={model}>{model}</option>
-                              ))
-                            )}
-                          </select>
-                        </div>
-                      </>
+                      <LLMProviderSection
+                        label="DeepSeek"
+                        apiKeyLabel="DeepSeek API Key"
+                        apiKeyPlaceholder="sk-..."
+                        apiKey={settings.deepseekApiKey}
+                        apiKeySettingKey="deepseekApiKey"
+                        modelName={settings.deepseekModel}
+                        modelSettingKey="deepseekModel"
+                        providerId="deepseek"
+                        isDarkMode={isDarkMode}
+                        cloudModels={cloudModels}
+                        onRefreshModels={refreshCloudModels}
+                        setSettings={setSettings}
+                        saveSetting={saveSetting}
+                      />
                     )}
                    </div>
                  </div>
