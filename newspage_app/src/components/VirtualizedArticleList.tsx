@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
 import { List } from "react-window";
 import { ArticleCard } from "./ArticleCard";
 import { Search } from "lucide-react";
@@ -16,15 +16,11 @@ interface VirtualizedArticleListProps {
   translationTargetLanguage: "en" | "zh-CN";
   translationRuntime: TranslationRuntimeConfig;
   isTransitioning: boolean;
+  shiftingArticleId?: string | null;
   onSelectArticle: (article: NewsArticle) => void;
   onOpenContextMenu: (article: NewsArticle, x: number, y: number) => void;
 }
 
-/**
- * Virtual scrolling component for rendering large article lists efficiently.
- * Automatically switches between virtual rendering (100+ articles) and standard rendering for smaller lists.
- * Only renders visible items in viewport + buffer for smooth scrolling.
- */
 export function VirtualizedArticleList({
   articles,
   feedSources,
@@ -35,25 +31,78 @@ export function VirtualizedArticleList({
   translationTargetLanguage,
   translationRuntime,
   isTransitioning,
+  shiftingArticleId,
   onSelectArticle,
   onOpenContextMenu,
 }: VirtualizedArticleListProps) {
-  // Use virtualization for 100+ articles, standard rendering for smaller lists
   const useVirtualization = articles.length > 100;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const prevPositions = useRef<Map<string, DOMRect>>(new Map());
 
-  // Calculate item height based on layout
   const itemHeight = useMemo(() => {
     switch (layout) {
       case "compact_list":
-        return 80; // ~1.5 lines of text + padding
+        return 80;
       case "list":
-        return 240; // Horizontal layout with image
-      default: // grid
-        return 360; // Square cards with full content
+        return 240;
+      default:
+        return 360;
     }
   }, [layout]);
 
-  // Render empty state
+  useLayoutEffect(() => {
+    if (!containerRef.current) return;
+
+    const container = containerRef.current;
+    const children = container.querySelectorAll<HTMLElement>("[data-article-id]");
+
+    if (shiftingArticleId) {
+      for (const child of children) {
+        const id = child.dataset.articleId;
+        if (!id || id === shiftingArticleId) continue;
+
+        const oldRect = prevPositions.current.get(id);
+        if (!oldRect) continue;
+
+        const newRect = child.getBoundingClientRect();
+        const dx = oldRect.left - newRect.left;
+        const dy = oldRect.top - newRect.top;
+
+        if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+
+        child.style.transition = "none";
+        child.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
+        child.style.willChange = "transform";
+        child.style.zIndex = "1";
+
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            child.style.transition = "transform 300ms cubic-bezier(0.33, 1, 0.68, 1)";
+            child.style.transform = "translate3d(0, 0, 0)";
+            const onDone = () => {
+              child.style.transition = "";
+              child.style.transform = "";
+              child.style.willChange = "";
+              child.style.zIndex = "";
+              child.removeEventListener("transitionend", onDone);
+            };
+            child.addEventListener("transitionend", onDone);
+            setTimeout(onDone, 350);
+          });
+        });
+      }
+    }
+
+    const nextPositions = new Map<string, DOMRect>();
+    for (const child of children) {
+      const id = child.dataset.articleId;
+      if (id) {
+        nextPositions.set(id, child.getBoundingClientRect());
+      }
+    }
+    prevPositions.current = nextPositions;
+  });
+
   if (articles.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center space-y-4 py-32 text-center opacity-40">
@@ -65,10 +114,10 @@ export function VirtualizedArticleList({
     );
   }
 
-  // Standard rendering for small lists (<100 articles)
   if (!useVirtualization) {
     return (
       <div
+        ref={containerRef}
         className={`
           filter-content ${isTransitioning ? "filter-content-transitioning" : "filter-content-ready"}
           ${layout === "grid" ? "grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3" : ""}
@@ -87,16 +136,16 @@ export function VirtualizedArticleList({
             liveTranslationEnabled={liveTranslationEnabled}
             translationTargetLanguage={translationTargetLanguage}
             translationRuntime={translationRuntime}
+            isNew={shiftingArticleId === item.id}
             onSelect={onSelectArticle}
             onOpenContextMenu={onOpenContextMenu}
+            dataArticleId={item.id}
           />
         ))}
       </div>
     );
   }
 
-  // Virtualized rendering for large lists (100+ articles)
-  // Calculate available height dynamically
   const containerHeight = typeof window !== "undefined" ? window.innerHeight - 200 : 600;
 
   return (
@@ -120,6 +169,7 @@ export function VirtualizedArticleList({
               liveTranslationEnabled={liveTranslationEnabled}
               translationTargetLanguage={translationTargetLanguage}
               translationRuntime={translationRuntime}
+              isNew={shiftingArticleId === item.id}
               onSelect={onSelectArticle}
               onOpenContextMenu={onOpenContextMenu}
             />

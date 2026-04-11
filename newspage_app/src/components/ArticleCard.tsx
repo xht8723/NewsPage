@@ -15,6 +15,8 @@ interface ArticleCardProps {
   liveTranslationEnabled: boolean;
   translationTargetLanguage: "en" | "zh-CN";
   translationRuntime: TranslationRuntimeConfig;
+  isNew?: boolean;
+  dataArticleId?: string;
   onSelect: (article: NewsArticle) => void;
   onOpenContextMenu: (article: NewsArticle, x: number, y: number) => void;
 }
@@ -28,6 +30,8 @@ function ArticleCardComponent({
   liveTranslationEnabled,
   translationTargetLanguage,
   translationRuntime,
+  isNew,
+  dataArticleId,
   onSelect,
   onOpenContextMenu,
 }: ArticleCardProps): React.JSX.Element {
@@ -54,6 +58,7 @@ function ArticleCardComponent({
 
   return (
     <div
+      data-article-id={dataArticleId}
       data-card-context-menu="true"
       onClick={() => onSelect(item)}
       onContextMenu={(event) => {
@@ -62,7 +67,7 @@ function ArticleCardComponent({
       }}
       className={`group cursor-pointer rounded-2xl border transition-all hover:shadow-lg ${
         isDarkMode ? "border-zinc-800 bg-zinc-900 hover:border-zinc-600" : "border-zinc-200 bg-white hover:border-zinc-300"
-      } ${isListLayout ? "flex flex-col gap-4 p-4 md:flex-row" : isCompactListLayout ? "flex flex-col gap-2 px-3 py-2.5" : "flex flex-col"}`}
+      } ${isListLayout ? "flex flex-col gap-4 p-4 md:flex-row" : isCompactListLayout ? "flex flex-col gap-2 px-3 py-2.5" : "flex flex-col"}${isNew ? " article-new-marker" : ""}`}
     >
       {!isCompactListLayout && (
         <div
@@ -173,6 +178,8 @@ function areEqual(prevProps: ArticleCardProps, nextProps: ArticleCardProps): boo
     prevProps.translationRuntime.provider === nextProps.translationRuntime.provider &&
     prevProps.translationRuntime.model === nextProps.translationRuntime.model &&
     prevProps.translationRuntime.endpoint === nextProps.translationRuntime.endpoint &&
+    prevProps.isNew === nextProps.isNew &&
+    prevProps.dataArticleId === nextProps.dataArticleId &&
     prevProps.onSelect === nextProps.onSelect &&
     prevProps.onOpenContextMenu === nextProps.onOpenContextMenu
   );

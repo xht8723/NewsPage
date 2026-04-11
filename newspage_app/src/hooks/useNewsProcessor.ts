@@ -33,6 +33,7 @@ interface UseNewsProcessorDeps {
 interface UseNewsProcessorReturn {
   loading: boolean;
   stopping: boolean;
+  shiftingArticleId: string | null;
   generateNews: () => Promise<void>;
   stopGenerate: () => Promise<void>;
   reprocessArticle: (article: NewsArticle) => Promise<void>;
@@ -55,6 +56,7 @@ export function useNewsProcessor(deps: UseNewsProcessorDeps): UseNewsProcessorRe
 
   const [loading, setLoading] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [shiftingArticleId, setShiftingArticleId] = useState<string | null>(null);
 
   const seenLogKeysRef = useRef<Map<string, number>>(new Map());
   const settingsRef = useRef(settings);
@@ -267,6 +269,11 @@ export function useNewsProcessor(deps: UseNewsProcessorDeps): UseNewsProcessorRe
                 updated[idx] = scoredArticle;
                 return updated;
               }
+              const id = scoredArticle.id;
+              setShiftingArticleId(id);
+              setTimeout(() => {
+                setShiftingArticleId((current) => current === id ? null : current);
+              }, 350);
               return [scoredArticle, ...prev];
             });
           } catch (_err) {
@@ -344,6 +351,7 @@ export function useNewsProcessor(deps: UseNewsProcessorDeps): UseNewsProcessorRe
   return {
     loading,
     stopping,
+    shiftingArticleId,
     generateNews,
     stopGenerate,
     reprocessArticle,

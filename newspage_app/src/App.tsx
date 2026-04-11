@@ -600,6 +600,7 @@ function App(): React.JSX.Element {
             translationTargetLanguage={settings.translationTargetLanguage}
             translationRuntime={translationRuntime}
             isTransitioning={isFilterTransitioning}
+            shiftingArticleId={newsProcessor.shiftingArticleId}
             onSelectArticle={setSelectedArticle}
             onOpenContextMenu={(article, x, y) => {
               setContextMenu({ article, x, y });

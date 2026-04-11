@@ -180,9 +180,23 @@
 	.popup-panel,
 	.popup-panel-out,
 	.popup-panel-pop,
-	.popup-panel-pop-out {
+	.popup-panel-pop-out,
+	.article-new-marker {
 		animation: none;
 	}
+}
+
+@keyframes article-fade-in {
+	0% {
+		opacity: 0;
+	}
+	100% {
+		opacity: 1;
+	}
+}
+
+.article-new-marker {
+	animation: article-fade-in 200ms ease-out both;
 }
 
 /* Scroll performance optimization */
