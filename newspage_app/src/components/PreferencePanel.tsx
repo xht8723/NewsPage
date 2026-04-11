@@ -60,7 +60,7 @@ function PreferencePanelComponent({
                 : "text-zinc-500 hover:text-zinc-700"
           }`}
         >
-          Vector
+          Topic
         </button>
       </div>
 

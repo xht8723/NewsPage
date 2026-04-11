@@ -55,58 +55,123 @@ pub fn is_low_quality_thumbnail(url: &Option<String>) -> bool {
     false
 }
 
-/// Fills in a missing or low-quality thumbnail by searching DuckDuckGo.
-/// Mutates `thumbnail` in place if a better image is found.
-pub async fn fill_thumbnail_if_missing(thumbnail: &mut String, query: &str) {
-    if is_low_quality_thumbnail(&Some(thumbnail.clone())) {
-        if let Some(url) = search_image_by_title(query).await {
-            *thumbnail = url;
+/// Async check combining URL pattern heuristics with a HEAD request to
+/// verify the image is not suspiciously small (<10 KB).
+/// Returns `true` when the thumbnail should be replaced via DDG search.
+pub async fn should_fallback_to_ddg(url: &str) -> bool {
+    if is_low_quality_thumbnail(&Some(url.to_string())) {
+        return true;
+    }
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return true,
+    };
+
+    let resolved = if url.starts_with("//") {
+        format!("https:{}", url)
+    } else {
+        url.to_string()
+    };
+
+    if !(resolved.starts_with("http://") || resolved.starts_with("https://")) {
+        return true;
+    }
+
+    match client.head(&resolved).send().await {
+        Ok(resp) => {
+            let content_length = resp
+                .headers()
+                .get(reqwest::header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok());
+
+            match content_length {
+                Some(len) => len < 10_240,
+                None => false,
+            }
         }
+        Err(_) => true,
+    }
+}
+
+/// Fills in a missing or low-quality thumbnail by searching DuckDuckGo.
+/// Returns candidate image URLs (best first). Mutates `thumbnail` to the
+/// first candidate so callers that don't need fallbacks still work.
+pub async fn fill_thumbnail_if_missing(thumbnail: &mut String, query: &str) -> Vec<String> {
+    if should_fallback_to_ddg(thumbnail).await {
+        let candidates = search_image_by_title(query).await;
+        if let Some(first) = candidates.first() {
+            *thumbnail = first.clone();
+        }
+        candidates
+    } else {
+        Vec::new()
     }
 }
 
 /// Search DuckDuckGo Images for a relevant image based on the article title.
-/// Returns the URL of the best image result, or None. No API key required.
-pub async fn search_image_by_title(title: &str) -> Option<String> {
+/// Returns a list of candidate image URLs (best first). No API key required.
+pub async fn search_image_by_title(title: &str) -> Vec<String> {
     let client = reqwest::Client::new();
     let encoded_query = urlencoding::encode(title);
 
-    // Step 1: Fetch the DDG search page to extract the vqd token
     let page_url = format!(
         "https://duckduckgo.com/?q={}&iax=images&ia=images",
         encoded_query
     );
-    let page_resp = client
+    let page_resp = match client
         .get(&page_url)
         .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
         .send()
         .await
-        .ok()?;
+    {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
 
-    let page_text = page_resp.text().await.ok()?;
+    let page_text = match page_resp.text().await {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
 
-    // Extract vqd token: appears as vqd='...' or vqd="..." or vqd=4-...
-    let vqd = extract_vqd(&page_text)?;
+    let vqd = match extract_vqd(&page_text) {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
 
-    // Step 2: Query the image API
     let api_url = format!(
         "https://duckduckgo.com/i.js?l=us-en&o=json&q={}&vqd={}&f=,,,,,&p=1",
         encoded_query, vqd
     );
-    let api_resp = client
+    let api_resp = match client
         .get(&api_url)
         .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
         .header("Referer", "https://duckduckgo.com/")
         .send()
         .await
-        .ok()?;
+    {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
 
     if !api_resp.status().is_success() {
-        return None;
+        return Vec::new();
     }
 
-    let body: serde_json::Value = api_resp.json().await.ok()?;
-    let results = body.get("results")?.as_array()?;
+    let body: serde_json::Value = match api_resp.json().await {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let results = match body.get("results").and_then(|v| v.as_array()) {
+        Some(r) => r,
+        None => return Vec::new(),
+    };
+
+    let mut candidates = Vec::new();
 
     for result in results.iter().take(10) {
         let image_url = result.get("image").and_then(|v| v.as_str()).unwrap_or("");
@@ -118,19 +183,18 @@ pub async fn search_image_by_title(title: &str) -> Option<String> {
             .get("width")
             .and_then(|w| w.as_u64())
             .unwrap_or(0);
-        // Skip small images
         if width > 0 && width < 300 {
             continue;
         }
 
-        // Skip SVGs, data URIs, and tracking pixels
         if check_image_url(image_url).is_err() {
             continue;
         }
 
-        return Some(image_url.to_string());
+        candidates.push(image_url.to_string());
     }
-    None
+
+    candidates
 }
 
 /// Extract the vqd token from DuckDuckGo HTML page content.

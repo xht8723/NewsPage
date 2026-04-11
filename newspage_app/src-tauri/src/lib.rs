@@ -193,6 +193,13 @@ async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str
         ));
     }
 
+    if bytes.len() < 10_240 {
+        return Err(format!(
+            "thumbnail is only {} bytes (<10 KB), likely a tracking pixel or placeholder",
+            bytes.len()
+        ));
+    }
+
     let ext = content_type
         .as_deref()
         .and_then(file_ext_from_content_type)
@@ -221,14 +228,26 @@ async fn enrich_media_and_embedding(
     } else {
         enriched.snippet.clone()
     };
-    image_search::fill_thumbnail_if_missing(&mut enriched.thumbnail, &search_query).await;
+    let candidates = image_search::fill_thumbnail_if_missing(&mut enriched.thumbnail, &search_query).await;
 
     if !enriched.thumbnail.trim().is_empty() {
-        match cache_thumbnail(image_cache_dir, &enriched.id, &enriched.thumbnail).await {
-            Ok(cached_path) => {
-                enriched.thumbnail = cached_path;
+        if !candidates.is_empty() {
+            for url in &candidates {
+                match cache_thumbnail(image_cache_dir, &enriched.id, url).await {
+                    Ok(cached_path) => {
+                        enriched.thumbnail = cached_path;
+                        break;
+                    }
+                    Err(_) => continue,
+                }
             }
-            Err(_) => {}
+        } else {
+            match cache_thumbnail(image_cache_dir, &enriched.id, &enriched.thumbnail).await {
+                Ok(cached_path) => {
+                    enriched.thumbnail = cached_path;
+                }
+                Err(_) => {}
+            }
         }
     }
 
@@ -1214,7 +1233,18 @@ async fn run_enrichment_stage_sequential(
                     }
                     let mut failed = item.clone();
                     failed.status = "failed".to_string();
+                    let failed_embedding = enrich_media_and_embedding(
+                        image_cache_dir,
+                        &mut failed,
+                        &settings.local_embedding_model,
+                    )
+                    .await;
                     persist_enriched_article(&state.db, &failed).await?;
+                    if let Some(vec) = failed_embedding {
+                        if let Err(e) = db::save_embedding(&state.db, &failed.id, &vec).await {
+                            logging::warn("Embedding", format!("Failed to save embedding for '{}': {}", failed.title, e), None);
+                        }
+                    }
                     emit_enriched_articles_updated(app, &failed.id, global_index, total, enriched_count)?;
                     continue;
                 }
@@ -1279,7 +1309,18 @@ async fn run_enrichment_stage_sequential(
                         }
                         let mut failed = item.clone();
                         failed.status = "failed".to_string();
+                        let failed_embedding = enrich_media_and_embedding(
+                            image_cache_dir,
+                            &mut failed,
+                            &settings.local_embedding_model,
+                        )
+                        .await;
                         persist_enriched_article(&state.db, &failed).await?;
+                        if let Some(vec) = failed_embedding {
+                            if let Err(e) = db::save_embedding(&state.db, &failed.id, &vec).await {
+                                logging::warn("Embedding", format!("Failed to save embedding for '{}': {}", failed.title, e), None);
+                            }
+                        }
                         emit_enriched_articles_updated(app, &failed.id, global_index, total, enriched_count)?;
                     }
                 }
@@ -1563,7 +1604,18 @@ async fn run_enrichment_stage_concurrent(
                         }
                         let mut failed = item.clone();
                         failed.status = "failed".to_string();
+                        let failed_embedding = enrich_media_and_embedding(
+                            image_cache_dir,
+                            &mut failed,
+                            &settings.local_embedding_model,
+                        )
+                        .await;
                         persist_enriched_article(&state.db, &failed).await?;
+                        if let Some(vec) = failed_embedding {
+                            if let Err(e) = db::save_embedding(&state.db, &failed.id, &vec).await {
+                                logging::warn("Embedding", format!("Failed to save embedding for '{}': {}", failed.title, e), None);
+                            }
+                        }
                         emit_enriched_articles_updated(app, &failed.id, global_index, total, enriched_count)?;
                     }
                     None => {
@@ -1572,7 +1624,18 @@ async fn run_enrichment_stage_concurrent(
                         }
                         let mut failed = item.clone();
                         failed.status = "failed".to_string();
+                        let failed_embedding = enrich_media_and_embedding(
+                            image_cache_dir,
+                            &mut failed,
+                            &settings.local_embedding_model,
+                        )
+                        .await;
                         persist_enriched_article(&state.db, &failed).await?;
+                        if let Some(vec) = failed_embedding {
+                            if let Err(e) = db::save_embedding(&state.db, &failed.id, &vec).await {
+                                logging::warn("Embedding", format!("Failed to save embedding for '{}': {}", failed.title, e), None);
+                            }
+                        }
                         emit_enriched_articles_updated(app, &failed.id, global_index, total, enriched_count)?;
                     }
                 }
