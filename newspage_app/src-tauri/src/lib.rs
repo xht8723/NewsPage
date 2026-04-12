@@ -1069,6 +1069,16 @@ async fn run_enrichment_stage(
         ),
         Some(total),
     );
+
+    if total == 0 {
+        return Ok(EnrichmentStageResult {
+            total: 0,
+            enriched_count: 0,
+            first_error: None,
+            stopped: false,
+        });
+    }
+
     emit_process_stage(
         app,
         "extract",

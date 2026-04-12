@@ -934,7 +934,7 @@ pub async fn upsert_article(pool: &SqlitePool, article: &Article) -> Result<(), 
     .bind(&article.source_name)
     .bind(&article.source_icon)
     .bind(encode_string_list(&article.authors))
-    .bind(&article.language)
+    .bind(if article.language.is_empty() { "unknown".to_string() } else { article.language.clone() })
     .bind(&article.thumbnail)
     .bind(&article.category)
     .bind(&article.article_type)

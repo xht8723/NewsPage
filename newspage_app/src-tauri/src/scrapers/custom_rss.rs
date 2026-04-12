@@ -31,7 +31,10 @@ async fn scrape_custom_rss_sources(sources: &[&FeedSource]) -> Result<Vec<Articl
                             continue;
                         }
                     }
-                    let article = rss_item_to_article(rss_item, &category, "", "rss");
+                    let mut article = rss_item_to_article(rss_item, &category, "unknown", "rss");
+                    if article.source_name.is_empty() {
+                        article.source_name = source.display_name.clone();
+                    }
                     if seen_ids.insert(article.id.clone()) {
                         out.push(article);
                     }
