@@ -1,12 +1,14 @@
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
-import { Check, Pencil, Plus, Rss, Trash2, X } from "lucide-react";
+import { Check, FileCode, Pencil, Plus, Rss, Sparkles, Trash2, X } from "lucide-react";
 import { NeonCheckbox } from "./NeonCheckbox";
-import type { FeedSource } from "../types/article";
+import type { BackendArticle, FeedSource } from "../types/article";
 import { normalizeRssFeedUrl } from "../utils/rssSettings";
 import { usePanelTransition } from "../hooks/usePanelTransition";
 import { TAG_COLOR_PRESETS } from "../utils/articleMeta";
 import { feedService } from "../services/feedService";
+import { useSettingsStore } from "../stores/settingsStore";
+import { getSelectedModel, getSelectedApiKey, getSelectedEndpoint } from "../utils/llmConfig";
 
 interface CustomRssFeedModalProps {
   show: boolean;
@@ -99,6 +101,8 @@ function ColorPicker({ value, isDarkMode, disabled, onChange }: ColorPickerProps
   );
 }
 
+const DEFAULT_SOURCE_TYPES = ["ann", "automaton", "gcores", "yys"];
+
 // ─── Main modal ───────────────────────────────────────────────────────────────
 
 export function CustomRssFeedModal({
@@ -115,10 +119,34 @@ export function CustomRssFeedModal({
   const [editingFeedUrl, setEditingFeedUrl] = useState("");
   const [saving, setSaving] = useState(false);
   const [colorPickerOpen, setColorPickerOpen] = useState<string | null>(null);
+  const [showHtmlToRss, setShowHtmlToRss] = useState(false);
+  const [htmlToRssUrl, setHtmlToRssUrl] = useState("");
+  const [htmlToRssName, setHtmlToRssName] = useState("");
+  const [htmlToRssContainerSelector, setHtmlToRssContainerSelector] = useState("");
+  const [htmlToRssTitleSelector, setHtmlToRssTitleSelector] = useState("");
+  const [htmlToRssLinkSelector, setHtmlToRssLinkSelector] = useState("");
+  const [htmlToRssDateSelector, setHtmlToRssDateSelector] = useState("");
+  const [htmlToRssThumbnailSelector, setHtmlToRssThumbnailSelector] = useState("");
+  const [htmlToRssSnippetSelector, setHtmlToRssSnippetSelector] = useState("");
+  const [htmlToRssAuthorSelector, setHtmlToRssAuthorSelector] = useState("");
+  const [htmlToRssLoading, setHtmlToRssLoading] = useState(false);
+  const [htmlToRssAiLoading, setHtmlToRssAiLoading] = useState(false);
+  const [htmlToRssAiError, setHtmlToRssAiError] = useState("");
+  const [showHtmlToRssPreview, setShowHtmlToRssPreview] = useState(false);
+  const [htmlToRssPreviewArticles, setHtmlToRssPreviewArticles] = useState<BackendArticle[]>([]);
+  const [htmlToRssPreviewError, setHtmlToRssPreviewError] = useState("");
+  const [htmlToRssSaving, setHtmlToRssSaving] = useState(false);
 
-  const DEFAULT_SOURCE_TYPES = ["ann", "automaton", "gcores", "yys"];
+  const settings = useSettingsStore((s) => s.settings);
+
+  const inputCls = `w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
+    isDarkMode
+      ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+      : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
+  }`;
+
   const customFeeds = feedSources.filter((s) =>
-    ["ann", "automaton", "gcores", "yys", "custom_rss"].includes(s.source_type),
+    ["ann", "automaton", "gcores", "yys", "custom_rss", "html_to_rss"].includes(s.source_type),
   );
   const canAddFeed = draftName.trim().length > 0 && normalizeRssFeedUrl(draftFeed).length > 0;
   const canSaveEdit = editingName.trim().length > 0 && normalizeRssFeedUrl(editingFeedUrl).length > 0;
@@ -130,6 +158,21 @@ export function CustomRssFeedModal({
       setEditingUrl(null);
       setEditingName("");
       setEditingFeedUrl("");
+      setShowHtmlToRss(false);
+      setHtmlToRssUrl("");
+      setHtmlToRssName("");
+      setHtmlToRssContainerSelector("");
+      setHtmlToRssTitleSelector("");
+      setHtmlToRssLinkSelector("");
+      setHtmlToRssDateSelector("");
+      setHtmlToRssThumbnailSelector("");
+      setHtmlToRssSnippetSelector("");
+      setHtmlToRssAuthorSelector("");
+      setHtmlToRssAiError("");
+      setShowHtmlToRssPreview(false);
+      setHtmlToRssPreviewArticles([]);
+      setHtmlToRssPreviewError("");
+      setHtmlToRssSaving(false);
     }
   }, [show]);
 
@@ -271,11 +314,7 @@ export function CustomRssFeedModal({
                   void addFeed();
                 }
               }}
-              className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                isDarkMode
-                  ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                  : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
-              }`}
+              className={inputCls}
             />
             <input
               type="text"
@@ -289,11 +328,7 @@ export function CustomRssFeedModal({
                   void addFeed();
                 }
               }}
-              className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
-                isDarkMode
-                  ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
-                  : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
-              }`}
+              className={inputCls}
             />
             <button
               type="button"
@@ -308,6 +343,17 @@ export function CustomRssFeedModal({
               <Plus size={12} /> Add Feed
             </button>
           </div>
+          <button
+            type="button"
+            onClick={() => setShowHtmlToRss(true)}
+            className={`inline-flex items-center justify-center gap-1 rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+              isDarkMode
+                ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
+            }`}
+          >
+            <FileCode size={12} /> HTML to RSS
+          </button>
           <p className={`text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
             Each custom RSS feed needs a display name and a feed URL.
           </p>
@@ -348,7 +394,7 @@ export function CustomRssFeedModal({
                           <input
                             type="text"
                             value={editingFeedUrl}
-                            onChange={(event) => setEditingFeedUrl(event.target.value)}
+                            onChange={source.source_type === "html_to_rss" ? undefined : (event) => setEditingFeedUrl(event.target.value)}
                             onBlur={() => setEditingFeedUrl((current) => normalizeRssFeedUrl(current))}
                             onKeyDown={(event) => {
                               if (event.key === "Enter") {
@@ -493,6 +539,420 @@ export function CustomRssFeedModal({
           </div>
         </div>
       </div>
+
+      {showHtmlToRss && (
+        <div className="popup-overlay fixed inset-0 z-[130] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/65 backdrop-blur-sm" onClick={() => setShowHtmlToRss(false)} />
+          <div
+            className={`relative w-full max-w-4xl overflow-hidden rounded-3xl border shadow-2xl ${
+              isDarkMode ? "border-zinc-800 bg-zinc-900 text-zinc-300" : "border-zinc-200 bg-zinc-150 text-zinc-800"
+            }`}
+          >
+            <div
+              className={`flex items-center justify-between border-b p-5 ${
+                isDarkMode ? "border-zinc-800 bg-zinc-950/50" : "border-zinc-200 bg-zinc-150"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <FileCode size={18} className="text-zinc-500" />
+                <h3 className="text-base font-bold uppercase tracking-widest">HTML to RSS</h3>
+              </div>
+              <button type="button" onClick={() => setShowHtmlToRss(false)} className="hover:opacity-60" aria-label="Close HTML to RSS">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className={`max-h-[calc(100vh-12rem)] space-y-4 overflow-y-auto p-5 news-scroll ${isDarkMode ? "news-scroll-dark" : "news-scroll-light"}`}>
+              <div>
+                <label className="mb-1 block text-sm font-semibold">Source Name <span className="text-red-400 font-normal text-xs">(required)</span></label>
+                <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+                  A display name for this feed source.
+                </p>
+                <input
+                  type="text"
+                  placeholder="My News Site"
+                  value={htmlToRssName}
+                  onChange={(e) => setHtmlToRssName(e.target.value)}
+                  className={inputCls}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-semibold">URL <span className="text-red-400 font-normal text-xs">(required)</span></label>
+                <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+                  The webpage to scrape for article links.
+                </p>
+                <input
+                  type="text"
+                  placeholder="https://example.com/news"
+                  value={htmlToRssUrl}
+                  onChange={(e) => setHtmlToRssUrl(e.target.value)}
+                  className={inputCls}
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={htmlToRssAiLoading || !htmlToRssUrl.trim() || !htmlToRssName.trim()}
+                    onClick={() => {
+                      if (htmlToRssAiLoading) return;
+                      setHtmlToRssAiLoading(true);
+      setHtmlToRssAiError("");
+      setShowHtmlToRssPreview(false);
+      setHtmlToRssPreviewArticles([]);
+      setHtmlToRssPreviewError("");
+                      feedService
+                        .suggestHtmlToRssSelectors({
+                          url: htmlToRssUrl.trim(),
+                          provider: settings.llmProvider,
+                          model: getSelectedModel(settings),
+                          api_key: getSelectedApiKey(settings).trim() || null,
+                          endpoint: getSelectedEndpoint(settings).trim() || null,
+                        })
+                        .then((result) => {
+                          setHtmlToRssContainerSelector(result.container_selector);
+                          setHtmlToRssTitleSelector(result.title_selector);
+                          setHtmlToRssLinkSelector(result.link_selector);
+                          setHtmlToRssDateSelector(result.date_selector);
+                          setHtmlToRssThumbnailSelector(result.thumbnail_selector);
+                          setHtmlToRssSnippetSelector(result.snippet_selector);
+                          setHtmlToRssAuthorSelector(result.author_selector);
+                        })
+                        .catch((err) => {
+                          setHtmlToRssAiError(String(err));
+                        })
+                        .finally(() => setHtmlToRssAiLoading(false));
+                    }}
+                    className={`inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+                      isDarkMode
+                        ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                        : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
+                    } disabled:cursor-not-allowed disabled:opacity-50`}
+                  >
+                    <Sparkles size={12} /> {htmlToRssAiLoading ? "Analyzing..." : "Use AI"}
+                  </button>
+                  <span className={`text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+                    {htmlToRssAiLoading
+                      ? `Fetching page and analyzing with ${settings.llmProvider}...`
+                      : "Auto-fill all selectors below by letting AI analyze the page structure."}
+                  </span>
+                </div>
+                {htmlToRssAiError && (
+                  <p className="mt-1.5 text-xs text-red-400">{htmlToRssAiError}</p>
+                )}
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-semibold">Container CSS Selector <span className="text-red-400 font-normal text-xs">(required)</span></label>
+                <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+                  CSS selector matching each repeating article block on the page. Each matched element is treated as one article.
+                </p>
+                <input
+                  type="text"
+                  placeholder="table tbody tr, article, div.news-item"
+                  value={htmlToRssContainerSelector}
+                  onChange={(e) => setHtmlToRssContainerSelector(e.target.value)}
+                  className={`w-full rounded-lg border px-3 py-2 font-mono text-sm focus:outline-none ${
+                    isDarkMode
+                      ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                      : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
+                  }`}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-x-4 gap-y-4 md:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-sm font-semibold">Title CSS Selector <span className="text-red-400 font-normal text-xs">(required)</span></label>
+                  <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+                    CSS selector matching the article title element. The inner text will be used as the title.
+                  </p>
+                  <input
+                    type="text"
+                    placeholder="h2.article-title"
+                    value={htmlToRssTitleSelector}
+                    onChange={(e) => setHtmlToRssTitleSelector(e.target.value)}
+                    className={`w-full rounded-lg border px-3 py-2 font-mono text-sm focus:outline-none ${
+                      isDarkMode
+                        ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                        : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-sm font-semibold">Link CSS Selector <span className="text-red-400 font-normal text-xs">(required)</span></label>
+                  <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+                    CSS selector matching the anchor (&lt;a&gt;) element. The href attribute will be used as the article link.
+                  </p>
+                  <input
+                    type="text"
+                    placeholder="h2.article-title a"
+                    value={htmlToRssLinkSelector}
+                    onChange={(e) => setHtmlToRssLinkSelector(e.target.value)}
+                    className={`w-full rounded-lg border px-3 py-2 font-mono text-sm focus:outline-none ${
+                      isDarkMode
+                        ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                        : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-sm font-semibold">PubDate CSS Selector <span className="text-zinc-500 font-normal text-xs">(optional)</span></label>
+                  <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+                    CSS selector matching the publication date element. The inner text or datetime attribute will be parsed as the date.
+                  </p>
+                  <input
+                    type="text"
+                    placeholder="time.pub-date, span.date"
+                    value={htmlToRssDateSelector}
+                    onChange={(e) => setHtmlToRssDateSelector(e.target.value)}
+                    className={`w-full rounded-lg border px-3 py-2 font-mono text-sm focus:outline-none ${
+                      isDarkMode
+                        ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                        : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-sm font-semibold">Thumbnail CSS Selector <span className="text-zinc-500 font-normal text-xs">(optional)</span></label>
+                  <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+                    CSS selector matching a thumbnail image element. The <code>src</code> attribute will be used as the thumbnail URL.
+                  </p>
+                  <input
+                    type="text"
+                    placeholder="img.article-thumb"
+                    value={htmlToRssThumbnailSelector}
+                    onChange={(e) => setHtmlToRssThumbnailSelector(e.target.value)}
+                    className={`w-full rounded-lg border px-3 py-2 font-mono text-sm focus:outline-none ${
+                      isDarkMode
+                        ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                        : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-sm font-semibold">Snippet CSS Selector <span className="text-zinc-500 font-normal text-xs">(optional)</span></label>
+                  <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+                    CSS selector matching a summary or description element. The inner text will be used as the article snippet.
+                  </p>
+                  <input
+                    type="text"
+                    placeholder="p.article-summary"
+                    value={htmlToRssSnippetSelector}
+                    onChange={(e) => setHtmlToRssSnippetSelector(e.target.value)}
+                    className={`w-full rounded-lg border px-3 py-2 font-mono text-sm focus:outline-none ${
+                      isDarkMode
+                        ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                        : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-sm font-semibold">Author CSS Selector <span className="text-zinc-500 font-normal text-xs">(optional)</span></label>
+                  <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+                    CSS selector matching the author element. The inner text will be used as the article author. Leave blank if not available.
+                  </p>
+                  <input
+                    type="text"
+                    placeholder="span.author-name"
+                    value={htmlToRssAuthorSelector}
+                    onChange={(e) => setHtmlToRssAuthorSelector(e.target.value)}
+                    className={`w-full rounded-lg border px-3 py-2 font-mono text-sm focus:outline-none ${
+                      isDarkMode
+                        ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-600"
+                        : "border-zinc-300 bg-zinc-200 text-zinc-900 placeholder-zinc-500"
+                    }`}
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <button
+                  type="button"
+                  disabled={htmlToRssLoading || !htmlToRssUrl.trim() || !htmlToRssContainerSelector.trim() || !htmlToRssTitleSelector.trim() || !htmlToRssLinkSelector.trim()}
+                  onClick={() => {
+                    if (htmlToRssLoading) return;
+                    setHtmlToRssLoading(true);
+                    setHtmlToRssPreviewError("");
+                    setHtmlToRssPreviewArticles([]);
+                    feedService
+                      .testHtmlToRss({
+                        url: htmlToRssUrl.trim(),
+                        display_name: htmlToRssName.trim() || "HTML2RSS",
+                        container_selector: htmlToRssContainerSelector.trim(),
+                        title_selector: htmlToRssTitleSelector.trim(),
+                        link_selector: htmlToRssLinkSelector.trim(),
+                        date_selector: htmlToRssDateSelector.trim(),
+                        thumbnail_selector: htmlToRssThumbnailSelector.trim(),
+                        snippet_selector: htmlToRssSnippetSelector.trim(),
+                        author_selector: htmlToRssAuthorSelector.trim(),
+                      })
+                      .then((articles) => {
+                        setHtmlToRssPreviewArticles(articles);
+                      })
+                      .catch((err) => {
+                        setHtmlToRssPreviewError(String(err));
+                      })
+                      .finally(() => {
+                        setHtmlToRssLoading(false);
+                        setShowHtmlToRssPreview(true);
+                      });
+                  }}
+                  className={`inline-flex items-center gap-1 rounded-lg border px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+                    isDarkMode
+                      ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                      : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
+                  } disabled:cursor-not-allowed disabled:opacity-50`}
+                >
+                  <Check size={12} /> {htmlToRssLoading ? "Scraping..." : "Confirm"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showHtmlToRssPreview && (
+        <div className="popup-overlay fixed inset-0 z-[140] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/65 backdrop-blur-sm" onClick={() => setShowHtmlToRssPreview(false)} />
+          <div
+            className={`relative w-full max-w-2xl overflow-hidden rounded-3xl border shadow-2xl ${
+              isDarkMode ? "border-zinc-800 bg-zinc-900 text-zinc-300" : "border-zinc-200 bg-zinc-150 text-zinc-800"
+            }`}
+          >
+            <div
+              className={`flex items-center justify-between border-b p-5 ${
+                isDarkMode ? "border-zinc-800 bg-zinc-950/50" : "border-zinc-200 bg-zinc-150"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <FileCode size={18} className="text-zinc-500" />
+                <h3 className="text-base font-bold uppercase tracking-widest">Scrape Result</h3>
+                {!htmlToRssPreviewError && (
+                  <span className={`text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+                    {htmlToRssPreviewArticles.length} article{htmlToRssPreviewArticles.length !== 1 ? "s" : ""} found
+                  </span>
+                )}
+              </div>
+              <button type="button" onClick={() => setShowHtmlToRssPreview(false)} className="hover:opacity-60" aria-label="Close preview">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className={`max-h-[calc(100vh-16rem)] overflow-y-auto p-5 news-scroll ${isDarkMode ? "news-scroll-dark" : "news-scroll-light"}`}>
+              {htmlToRssPreviewError ? (
+                <p className="text-sm text-red-400">{htmlToRssPreviewError}</p>
+              ) : (
+                <>
+                  <p className={`mb-3 text-sm ${isDarkMode ? "text-zinc-400" : "text-zinc-600"}`}>
+                    Are these results correct?
+                  </p>
+                  <div className="space-y-2">
+                    {htmlToRssPreviewArticles.slice(0, 10).map((article) => (
+                      <div
+                        key={article.id}
+                        className={`flex gap-3 rounded-lg border p-3 ${
+                          isDarkMode ? "border-zinc-800 bg-zinc-800/40" : "border-zinc-200 bg-zinc-100/60"
+                        }`}
+                      >
+                        {article.thumbnail && (
+                          <img
+                            src={article.thumbnail}
+                            alt=""
+                            className="h-10 w-10 flex-shrink-0 rounded object-cover"
+                            loading="lazy"
+                          />
+                        )}
+                        <div className="min-w-0 flex-1">
+                          {article.url ? (
+                            <a
+                              href={article.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-sm font-semibold hover:underline line-clamp-2"
+                            >
+                              {article.title}
+                            </a>
+                          ) : (
+                            <p className="text-sm font-semibold line-clamp-2">{article.title}</p>
+                          )}
+                          <p className={`mt-0.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+                            {[article.date, article.authors?.join(", ")].filter(Boolean).join(" · ")}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                    {htmlToRssPreviewArticles.length > 10 && (
+                      <p className={`text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
+                        ...and {htmlToRssPreviewArticles.length - 10} more
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className={`flex justify-end gap-2 border-t p-4 ${isDarkMode ? "border-zinc-800" : "border-zinc-200"}`}>
+              <button
+                type="button"
+                onClick={() => setShowHtmlToRssPreview(false)}
+                disabled={htmlToRssSaving}
+                className={`inline-flex items-center gap-1 rounded-lg border px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+                  isDarkMode
+                    ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                    : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
+                } disabled:cursor-not-allowed disabled:opacity-50`}
+              >
+                Cancel
+              </button>
+              {!htmlToRssPreviewError && (
+                <button
+                  type="button"
+                  disabled={htmlToRssSaving}
+                  onClick={() => {
+                    if (htmlToRssSaving) return;
+                    setHtmlToRssSaving(true);
+                    feedService
+                      .saveHtmlToRssRule({
+                        url: htmlToRssUrl.trim(),
+                        display_name: htmlToRssName.trim(),
+                        container_selector: htmlToRssContainerSelector.trim(),
+                        title_selector: htmlToRssTitleSelector.trim(),
+                        link_selector: htmlToRssLinkSelector.trim(),
+                        date_selector: htmlToRssDateSelector.trim(),
+                        thumbnail_selector: htmlToRssThumbnailSelector.trim(),
+                        snippet_selector: htmlToRssSnippetSelector.trim(),
+                        author_selector: htmlToRssAuthorSelector.trim(),
+                      })
+                      .then(async () => {
+                        setShowHtmlToRssPreview(false);
+                        setShowHtmlToRss(false);
+                        await onRefresh();
+                      })
+                      .catch((err) => {
+                        setHtmlToRssPreviewError(String(err));
+                      })
+                      .finally(() => setHtmlToRssSaving(false));
+                  }}
+                  className={`inline-flex items-center gap-1 rounded-lg border px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors ${
+                    isDarkMode
+                      ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                      : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
+                  } disabled:cursor-not-allowed disabled:opacity-50`}
+                >
+                  <Check size={12} /> {htmlToRssSaving ? "Saving..." : "Confirm"}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

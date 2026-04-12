@@ -2,6 +2,7 @@ use crate::db::{
     count_visible_feeds,
     create_feed,
     delete_feed,
+    delete_html_to_rss_rule,
     get_article_by_id,
     get_unenriched_articles_by_category_and_language,
     list_feed_sources,
@@ -19,14 +20,19 @@ use crate::db::{
     set_feed_visibility,
     upsert_article,
     upsert_feed_source,
+    upsert_html_to_rss_rule,
+    HtmlToRssRule,
 };
 use crate::article::{Article, RankedArticle};
 use crate::article_extract::fetch_article_text_and_thumbnail;
 use crate::logging::ProcessLogEvent;
 use crate::scrapers::{run_default_scrapers, ScrapeContext};
 use crate::scrapers::gl_rss::list_region_ids;
+use crate::scrapers::html_to_rss::{scrape_html_to_rss, HtmlToRssConfig};
 use crate::scrapers::rss_common::strip_trailing_source;
 use chrono::{DateTime, Local, Utc};
+use rig::completion::Prompt;
+use rig::client::CompletionClient;
 use sqlx::sqlite::SqlitePool;
 use std::path::{Path, PathBuf};
 use std::collections::{HashMap, HashSet};
@@ -130,7 +136,7 @@ fn file_ext_from_content_type(content_type: &str) -> Option<String> {
 
 // Browser-like User-Agent used when downloading thumbnails so that CDNs
 // (e.g. image.gcores.com) serve the actual image instead of returning 204.
-const THUMBNAIL_USER_AGENT: &str =
+const BROWSER_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -159,7 +165,7 @@ async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str
     
 
     let client = reqwest::Client::builder()
-        .user_agent(THUMBNAIL_USER_AGENT)
+        .user_agent(BROWSER_USER_AGENT)
         .build()
         .map_err(|e| format!("failed to build thumbnail HTTP client: {}", e))?;
 
@@ -786,11 +792,15 @@ async fn run_scrape_stage(
     let subscribed_news_categories = list_subscribed_news_categories(&state.db)
         .await
         .map_err(|e| format!("Failed to load subscribed news categories: {}", e))?;
+    let html_to_rss_rules = crate::db::list_html_to_rss_rules(&state.db)
+        .await
+        .map_err(|e| format!("Failed to load HTML-to-RSS rules: {}", e))?;
     let scrape_context = ScrapeContext {
         selected_regions: resolved.selected_regions.clone(),
         rss_sources,
         subscribed_rss_names,
         subscribed_news_categories,
+        html_to_rss_rules,
     };
     let (stage_results, scrape_was_stopped) = run_default_scrapers(&scrape_context, &state.stop_requested).await?;
     if scrape_was_stopped {
@@ -2392,6 +2402,8 @@ async fn list_feed_sources_action(
         .map_err(|e| format!("Failed to list feed sources: {}", e))
 }
 
+const ALLOWED_SOURCE_TYPES: &[&str] = &["custom_rss", "gcores", "ann", "automaton", "yys", "html_to_rss"];
+
 #[tauri::command]
 async fn upsert_feed_source_action(
     state: tauri::State<'_, AppState>,
@@ -2401,9 +2413,8 @@ async fn upsert_feed_source_action(
     let source_ref = request.source_ref.trim();
     let display_name = request.display_name.trim();
     if source_type.is_empty() { return Err("source_type is required".to_string()); }
-    let allowed_types = ["custom_rss", "gcores", "ann", "automaton", "yys"];
-    if !allowed_types.contains(&source_type) {
-        return Err("Unsupported source_type. Allowed: custom_rss, gcores, ann, automaton, yys".to_string());
+    if !ALLOWED_SOURCE_TYPES.contains(&source_type) {
+        return Err(format!("Unsupported source_type. Allowed: {}", ALLOWED_SOURCE_TYPES.join(", ")));
     }
     if source_ref.is_empty() { return Err("source_ref is required".to_string()); }
     if display_name.is_empty() { return Err("display_name is required".to_string()); }
@@ -2426,13 +2437,262 @@ async fn remove_feed_source_action(
 ) -> Result<bool, String> {
     let source_type = request.source_type.trim();
     let source_ref = request.source_ref.trim();
-    let allowed_types = ["custom_rss", "gcores", "ann", "automaton", "yys"];
-    if !allowed_types.contains(&source_type) {
-        return Err("Unsupported source_type. Allowed: custom_rss, gcores, ann, automaton, yys".to_string());
+    if !ALLOWED_SOURCE_TYPES.contains(&source_type) {
+        return Err(format!("Unsupported source_type. Allowed: {}", ALLOWED_SOURCE_TYPES.join(", ")));
+    }
+    if source_type == "html_to_rss" {
+        let _ = delete_html_to_rss_rule(&state.db, source_ref).await;
     }
     remove_feed_source(&state.db, source_type, source_ref)
         .await
         .map_err(|e| format!("Failed to remove feed source: {}", e))
+}
+
+#[derive(serde::Deserialize)]
+struct HtmlToRssRuleRequest {
+    url: String,
+    display_name: String,
+    container_selector: String,
+    title_selector: String,
+    link_selector: String,
+    date_selector: String,
+    thumbnail_selector: String,
+    snippet_selector: String,
+    author_selector: String,
+}
+
+#[tauri::command]
+async fn test_html_to_rss_action(
+    request: HtmlToRssRuleRequest,
+) -> Result<Vec<Article>, String> {
+    let config = HtmlToRssConfig {
+        url: request.url,
+        display_name: request.display_name,
+        container_selector: request.container_selector,
+        title_selector: request.title_selector,
+        link_selector: request.link_selector,
+        date_selector: request.date_selector,
+        thumbnail_selector: request.thumbnail_selector,
+        snippet_selector: request.snippet_selector,
+        author_selector: request.author_selector,
+    };
+    let articles = scrape_html_to_rss(&config).await?;
+    Ok(articles)
+}
+
+#[derive(serde::Deserialize)]
+struct AiSuggestHtmlToRssRequest {
+    url: String,
+    provider: String,
+    model: String,
+    api_key: Option<String>,
+    endpoint: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SelectorSuggestion {
+    container_selector: String,
+    title_selector: String,
+    link_selector: String,
+    date_selector: String,
+    thumbnail_selector: String,
+    snippet_selector: String,
+    author_selector: String,
+}
+
+fn truncate_html_for_llm(html: &str, max_bytes: usize) -> &str {
+    if html.len() <= max_bytes {
+        return html;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !html.is_char_boundary(end) {
+        end -= 1;
+    }
+    &html[..end]
+}
+
+fn strip_code_fences(text: &str) -> String {
+    let trimmed = text.trim();
+    if let Some(rest) = trimmed.strip_prefix("```json") {
+        if let Some(body) = rest.strip_suffix("```") {
+            return body.trim().to_string();
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("```") {
+        if let Some(body) = rest.strip_suffix("```") {
+            return body.trim().to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
+async fn raw_llm_prompt(
+    provider: &str,
+    model: &str,
+    api_key: Option<&str>,
+    endpoint: Option<&str>,
+    prompt: &str,
+) -> Result<String, String> {
+    if model.trim().is_empty() {
+        return Err("Model name is required".to_string());
+    }
+    let provider_lower = provider.trim().to_lowercase();
+    match provider_lower.as_str() {
+        "ollama" => {
+            use ollama_rs::generation::completion::request::GenerationRequest;
+            use ollama_rs::Ollama;
+            let address = endpoint.unwrap_or("http://127.0.0.1:11434");
+            let (host, port) = platform_llm::parse_ollama_host_port(address)?;
+            let ollama = Ollama::new(host, port);
+            let response = ollama
+                .generate(GenerationRequest::new(model.to_string(), prompt.to_string()))
+                .await
+                .map_err(|e| format!("Ollama request failed: {}", e))?;
+            Ok(response.response)
+        }
+        "openai" => {
+            let key = api_key.ok_or("OpenAI API key is required")?;
+            let client = rig::providers::openai::Client::new(key)
+                .map_err(|e| format!("Failed to create OpenAI client: {}", e))?;
+            let agent = client.agent(model).build();
+            agent.prompt(prompt).await.map_err(|e| format!("OpenAI request failed: {}", e))
+        }
+        "claude" => {
+            let key = api_key.ok_or("Claude API key is required")?;
+            let client = rig::providers::anthropic::Client::new(key)
+                .map_err(|e| format!("Failed to create Claude client: {}", e))?;
+            let agent = client.agent(model).build();
+            agent.prompt(prompt).await.map_err(|e| format!("Claude request failed: {}", e))
+        }
+        "gemini" => {
+            let key = api_key.ok_or("Gemini API key is required")?;
+            let client = rig::providers::gemini::Client::new(key)
+                .map_err(|e| format!("Failed to create Gemini client: {}", e))?;
+            let agent = client.agent(model).build();
+            agent.prompt(prompt).await.map_err(|e| format!("Gemini request failed: {}", e))
+        }
+        "deepseek" => {
+            let key = api_key.ok_or("DeepSeek API key is required")?;
+            let client = rig::providers::deepseek::Client::new(key)
+                .map_err(|e| format!("Failed to create DeepSeek client: {}", e))?;
+            let agent = client.agent(model).build();
+            agent.prompt(prompt).await.map_err(|e| format!("DeepSeek request failed: {}", e))
+        }
+        _ => Err(format!("Unsupported provider: {}", provider)),
+    }
+}
+
+#[tauri::command]
+async fn ai_suggest_html_to_rss_selectors(
+    request: AiSuggestHtmlToRssRequest,
+) -> Result<SelectorSuggestion, String> {
+    let url = request.url.trim();
+    if url.is_empty() {
+        return Err("URL is required".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent(BROWSER_USER_AGENT)
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+    let response = client.get(url).send().await
+        .map_err(|e| format!("Failed to fetch URL: {}", e))?;
+    let html = response.text().await
+        .map_err(|e| format!("Failed to read response body: {}", e))?;
+
+    let truncated = truncate_html_for_llm(&html, 12000);
+
+    let prompt = format!(
+r#"You are an expert at analyzing HTML structure to extract article data.
+
+Below is the HTML source of a webpage containing a list of articles/news items. Your task:
+1. Find the repeating HTML block that represents each article (the "container")
+2. For each container, determine CSS selectors to extract specific fields
+
+IMPORTANT RULES:
+- All field selectors (title, link, date, etc.) must be RELATIVE to the container element
+- Use the most specific CSS selector that uniquely identifies each element
+- Use attribute selectors like [class="..."], [target="_blank"], td[width] to disambiguate when needed
+- For the link selector, target the <a> element whose href points to the article page
+- For the thumbnail selector, target an <img> element; use empty string if no image exists
+- If a field cannot be reliably extracted, use an empty string
+
+Return ONLY a JSON object with no markdown fences and no explanation:
+{{"container_selector":"...","title_selector":"...","link_selector":"...","date_selector":"...","thumbnail_selector":"...","snippet_selector":"...","author_selector":"..."}}
+
+Here is the HTML:
+
+{}"#,
+        truncated
+    );
+
+    let response_text = raw_llm_prompt(
+        &request.provider,
+        &request.model,
+        request.api_key.as_deref(),
+        request.endpoint.as_deref(),
+        &prompt,
+    )
+    .await?;
+
+    let cleaned = strip_code_fences(&response_text);
+    let suggestion: SelectorSuggestion = serde_json::from_str(&cleaned)
+        .map_err(|e| format!("Failed to parse AI response as JSON: {}. Response: {}", e, &cleaned[..cleaned.len().min(500)]))?;
+
+    Ok(suggestion)
+}
+
+#[tauri::command]
+async fn save_html_to_rss_rule_action(
+    state: tauri::State<'_, AppState>,
+    request: HtmlToRssRuleRequest,
+) -> Result<(), String> {
+    let url = request.url.trim();
+    let display_name = request.display_name.trim();
+    if url.is_empty() { return Err("url is required".to_string()); }
+    if display_name.is_empty() { return Err("display_name is required".to_string()); }
+
+    let rule = HtmlToRssRule {
+        url: url.to_string(),
+        container_selector: request.container_selector.trim().to_string(),
+        title_selector: request.title_selector.trim().to_string(),
+        link_selector: request.link_selector.trim().to_string(),
+        date_selector: request.date_selector.trim().to_string(),
+        thumbnail_selector: request.thumbnail_selector.trim().to_string(),
+        snippet_selector: request.snippet_selector.trim().to_string(),
+        author_selector: request.author_selector.trim().to_string(),
+        display_name: display_name.to_string(),
+    };
+
+    upsert_html_to_rss_rule(&state.db, &rule)
+        .await
+        .map_err(|e| format!("Failed to save HTML to RSS rule: {}", e))?;
+
+    upsert_feed_source(&state.db, "html_to_rss", url, display_name, true, "")
+        .await
+        .map_err(|e| format!("Failed to add feed source: {}", e))?;
+
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+struct DeleteHtmlToRssRuleRequest {
+    url: String,
+}
+
+#[tauri::command]
+async fn delete_html_to_rss_rule_action(
+    state: tauri::State<'_, AppState>,
+    request: DeleteHtmlToRssRuleRequest,
+) -> Result<(), String> {
+    let url = request.url.trim();
+    delete_html_to_rss_rule(&state.db, url)
+        .await
+        .map_err(|e| format!("Failed to delete HTML to RSS rule: {}", e))?;
+    remove_feed_source(&state.db, "html_to_rss", url)
+        .await
+        .map_err(|e| format!("Failed to remove feed source: {}", e))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2446,14 +2706,26 @@ async fn purge_database(app: tauri::AppHandle, state: tauri::State<'_, AppState>
         .execute(&state.db)
         .await
         .map_err(|e| format!("Failed to purge feed_topic_map table: {}", e))?;
-    sqlx::query("DELETE FROM feed_sources WHERE source_type = 'custom_rss'")
-        .execute(&state.db)
-        .await
-        .map_err(|e| format!("Failed to purge custom feed_sources: {}", e))?;
     sqlx::query("DELETE FROM feed_definitions")
         .execute(&state.db)
         .await
         .map_err(|e| format!("Failed to purge feed_definitions table: {}", e))?;
+    sqlx::query("DELETE FROM feed_sources")
+        .execute(&state.db)
+        .await
+        .map_err(|e| format!("Failed to purge feed_sources table: {}", e))?;
+    sqlx::query("DELETE FROM feed_source_seed_state")
+        .execute(&state.db)
+        .await
+        .map_err(|e| format!("Failed to purge feed_source_seed_state table: {}", e))?;
+    sqlx::query("DELETE FROM html_to_rss_rules")
+        .execute(&state.db)
+        .await
+        .map_err(|e| format!("Failed to purge html_to_rss_rules table: {}", e))?;
+    sqlx::query("DELETE FROM cloud_models")
+        .execute(&state.db)
+        .await
+        .map_err(|e| format!("Failed to purge cloud_models table: {}", e))?;
 
     seed_default_feeds(&state.db)
         .await
@@ -3159,6 +3431,10 @@ pub fn run() {
             list_feed_sources_action,
             upsert_feed_source_action,
             remove_feed_source_action,
+            test_html_to_rss_action,
+            ai_suggest_html_to_rss_selectors,
+            save_html_to_rss_rule_action,
+            delete_html_to_rss_rule_action,
             list_cloud_models,
             set_auto_start,
             set_minimize_to_tray

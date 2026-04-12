@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { FeedDefinition, FeedSource } from "../types/article";
+import type { BackendArticle, FeedDefinition, FeedSource } from "../types/article";
 
 export interface CreateFeedRequest {
   name: string;
@@ -44,6 +44,52 @@ export interface RemoveFeedSourceRequest {
   source_ref: string;
 }
 
+export interface TestHtmlToRssRequest {
+  url: string;
+  display_name: string;
+  container_selector: string;
+  title_selector: string;
+  link_selector: string;
+  date_selector: string;
+  thumbnail_selector: string;
+  snippet_selector: string;
+  author_selector: string;
+}
+
+export interface AiSuggestHtmlToRssRequest {
+  url: string;
+  provider: string;
+  model: string;
+  api_key: string | null;
+  endpoint: string | null;
+}
+
+export interface SelectorSuggestion {
+  container_selector: string;
+  title_selector: string;
+  link_selector: string;
+  date_selector: string;
+  thumbnail_selector: string;
+  snippet_selector: string;
+  author_selector: string;
+}
+
+export interface SaveHtmlToRssRuleRequest {
+  url: string;
+  display_name: string;
+  container_selector: string;
+  title_selector: string;
+  link_selector: string;
+  date_selector: string;
+  thumbnail_selector: string;
+  snippet_selector: string;
+  author_selector: string;
+}
+
+export interface DeleteHtmlToRssRuleRequest {
+  url: string;
+}
+
 export const feedService = {
   list: (): Promise<FeedDefinition[]> => invoke("list_feeds"),
 
@@ -72,4 +118,16 @@ export const feedService = {
 
   removeSource: (request: RemoveFeedSourceRequest): Promise<void> =>
     invoke("remove_feed_source_action", { request }),
+
+  testHtmlToRss: (request: TestHtmlToRssRequest): Promise<BackendArticle[]> =>
+    invoke("test_html_to_rss_action", { request }),
+
+  suggestHtmlToRssSelectors: (request: AiSuggestHtmlToRssRequest): Promise<SelectorSuggestion> =>
+    invoke("ai_suggest_html_to_rss_selectors", { request }),
+
+  saveHtmlToRssRule: (request: SaveHtmlToRssRuleRequest): Promise<void> =>
+    invoke("save_html_to_rss_rule_action", { request }),
+
+  deleteHtmlToRssRule: (request: DeleteHtmlToRssRuleRequest): Promise<void> =>
+    invoke("delete_html_to_rss_rule_action", { request }),
 };

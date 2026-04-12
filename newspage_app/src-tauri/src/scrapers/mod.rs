@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::db::FeedSource;
+use crate::db::{FeedSource, HtmlToRssRule};
 use crate::article::Article;
 use crate::logging;
 
@@ -11,6 +11,7 @@ pub mod automaton;
 pub mod custom_rss;
 pub mod gcores;
 pub mod gl_rss;
+pub mod html_to_rss;
 pub mod rss_common;
 pub mod yys;
 
@@ -19,6 +20,7 @@ use automaton::AutomatonScraperStage;
 use custom_rss::CustomRssScraperStage;
 use gcores::GcoresScraperStage;
 use gl_rss::GlRssScraperStage;
+use html_to_rss::HtmlToRssScraperStage;
 use yys::YysScraperStage;
 
 #[derive(Clone)]
@@ -31,6 +33,8 @@ pub struct ScrapeContext {
     /// Google News category names (e.g. "world", "sports") that are toggled ON
     /// by at least one feed.  Only these categories will be scraped.
     pub subscribed_news_categories: HashSet<String>,
+    /// HTML-to-RSS rules loaded from the `html_to_rss_rules` table.
+    pub html_to_rss_rules: Vec<HtmlToRssRule>,
 }
 
 pub struct StageRunResult {
@@ -58,6 +62,7 @@ fn default_scraper_stages() -> Vec<Box<dyn ScraperStage>> {
         Box::new(CustomRssScraperStage),
         Box::new(GcoresScraperStage),
         Box::new(YysScraperStage),
+        Box::new(HtmlToRssScraperStage),
     ]
 }
 

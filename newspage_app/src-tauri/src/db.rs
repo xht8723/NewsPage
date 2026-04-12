@@ -470,6 +470,23 @@ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         .execute(pool)
         .await?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS html_to_rss_rules (
+            url TEXT NOT NULL PRIMARY KEY,
+            container_selector TEXT NOT NULL,
+            title_selector TEXT NOT NULL,
+            link_selector TEXT NOT NULL,
+            date_selector TEXT NOT NULL DEFAULT '',
+            thumbnail_selector TEXT NOT NULL DEFAULT '',
+            snippet_selector TEXT NOT NULL DEFAULT '',
+            author_selector TEXT NOT NULL DEFAULT '',
+            display_name TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // Migration: add article_type column to feed_topic_map for existing databases.
     let _ = sqlx::query("ALTER TABLE feed_topic_map ADD COLUMN article_type TEXT NOT NULL DEFAULT 'news'")
         .execute(pool)
@@ -1171,4 +1188,81 @@ pub async fn remove_rss_category_from_all_feeds(pool: &SqlitePool, category: &st
     .execute(pool)
     .await?;
     Ok(())
+}
+
+// ─── HTML to RSS rules ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HtmlToRssRule {
+    pub url: String,
+    pub container_selector: String,
+    pub title_selector: String,
+    pub link_selector: String,
+    pub date_selector: String,
+    pub thumbnail_selector: String,
+    pub snippet_selector: String,
+    pub author_selector: String,
+    pub display_name: String,
+}
+
+pub async fn upsert_html_to_rss_rule(pool: &SqlitePool, rule: &HtmlToRssRule) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO html_to_rss_rules(url, container_selector, title_selector, link_selector,
+            date_selector, thumbnail_selector, snippet_selector, author_selector, display_name)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(url) DO UPDATE SET
+            container_selector = excluded.container_selector,
+            title_selector = excluded.title_selector,
+            link_selector = excluded.link_selector,
+            date_selector = excluded.date_selector,
+            thumbnail_selector = excluded.thumbnail_selector,
+            snippet_selector = excluded.snippet_selector,
+            author_selector = excluded.author_selector,
+            display_name = excluded.display_name",
+    )
+    .bind(&rule.url)
+    .bind(&rule.container_selector)
+    .bind(&rule.title_selector)
+    .bind(&rule.link_selector)
+    .bind(&rule.date_selector)
+    .bind(&rule.thumbnail_selector)
+    .bind(&rule.snippet_selector)
+    .bind(&rule.author_selector)
+    .bind(rule.display_name.trim())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_html_to_rss_rule(pool: &SqlitePool, url: &str) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM html_to_rss_rules WHERE url = ?1")
+        .bind(url)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn list_html_to_rss_rules(pool: &SqlitePool) -> Result<Vec<HtmlToRssRule>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT url, container_selector, title_selector, link_selector,
+                date_selector, thumbnail_selector, snippet_selector, author_selector, display_name
+         FROM html_to_rss_rules
+         ORDER BY display_name ASC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|row| HtmlToRssRule {
+            url: row.get("url"),
+            container_selector: row.get("container_selector"),
+            title_selector: row.get("title_selector"),
+            link_selector: row.get("link_selector"),
+            date_selector: row.get("date_selector"),
+            thumbnail_selector: row.get("thumbnail_selector"),
+            snippet_selector: row.get("snippet_selector"),
+            author_selector: row.get("author_selector"),
+            display_name: row.get("display_name"),
+        })
+        .collect())
 }
