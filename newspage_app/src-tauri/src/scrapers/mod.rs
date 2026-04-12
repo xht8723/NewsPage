@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::db::FeedSource;
 use crate::article::Article;
+use crate::logging;
 
 pub mod ann;
 pub mod automaton;
@@ -91,10 +92,15 @@ pub async fn run_default_scrapers(ctx: &ScrapeContext, stop: &AtomicBool) -> Res
     while let Some(res) = set.join_next().await {
         match res {
             Ok((name, Ok(items))) => {
+                logging::info("Scrape", format!("{} returned {} articles", name, items.len()), Some(items.len()));
                 results.push(StageRunResult { stage_name: name, items });
             }
-            Ok((_name, Err(_e))) => {}
-            Err(_join_err) => {}
+            Ok((name, Err(e))) => {
+                logging::warn("Scrape", format!("{} failed: {}", name, e), None);
+            }
+            Err(join_err) => {
+                logging::warn("Scrape", format!("Scraper task panicked: {}", join_err), None);
+            }
         }
     }
 

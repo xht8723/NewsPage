@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDate};
+use chrono::{DateTime, Timelike};
 use reqwest::Client;
 use scraper::{ElementRef, Html, Selector};
 use std::collections::HashSet;
@@ -87,21 +87,25 @@ fn first_attr_from_selectors(root: &ElementRef<'_>, selectors: &[&str], attr: &s
     String::new()
 }
 
-fn article_date_from_url(url: &str) -> Option<NaiveDate> {
-    let (_, path_after_news) = url.split_once("/news/")?;
-    let date_segment = path_after_news.get(..10)?;
-    NaiveDate::parse_from_str(date_segment, "%Y-%m-%d").ok()
+fn normalize_date_to_minutes(date_str: &str) -> String {
+    let dt = DateTime::parse_from_rfc3339(date_str.trim())
+        .ok()
+        .or_else(|| DateTime::parse_from_rfc2822(date_str.trim()).ok());
+
+    match dt {
+        Some(mut dt) => {
+            dt = dt.with_second(0).unwrap_or(dt);
+            dt = dt.with_nanosecond(0).unwrap_or(dt);
+            dt.to_rfc3339()
+        }
+        None => date_str.trim().to_string(),
+    }
 }
 
 fn ann_sort_key(item: &Article) -> (Option<i64>, String) {
     let timestamp = DateTime::parse_from_rfc3339(&item.date)
         .ok()
-        .map(|datetime| datetime.timestamp())
-        .or_else(|| {
-            article_date_from_url(&item.url)
-                .and_then(|date| date.and_hms_opt(0, 0, 0))
-                .map(|datetime| datetime.and_utc().timestamp())
-        });
+        .map(|dt| dt.timestamp());
 
     (timestamp, item.date.clone())
 }
@@ -130,12 +134,13 @@ fn extract_news_item_fields(item_html: &str) -> Option<Article> {
         return None;
     }
 
-    let date = first_attr_from_selectors(&root, &[".byline time", "time"], "datetime");
-    let date = if date.is_empty() {
+    let raw_date = first_attr_from_selectors(&root, &[".byline time", "time"], "datetime");
+    let raw_date = if raw_date.is_empty() {
         first_text_from_selectors(&root, &[".byline time", "time"])
     } else {
-        date
+        raw_date
     };
+    let date = normalize_date_to_minutes(&raw_date);
 
     let raw_thumbnail = first_attr_from_selectors(&root, &[".thumbnail", "div.thumbnail"], "data-src");
     let thumbnail = if raw_thumbnail.is_empty() {

@@ -233,26 +233,54 @@ async fn enrich_media_and_embedding(
         enriched.snippet.clone()
     };
     let candidates = image_search::fill_thumbnail_if_missing(&mut enriched.thumbnail, &search_query).await;
+    let used_ddg_search = !candidates.is_empty();
 
     if !enriched.thumbnail.trim().is_empty() {
-        if !candidates.is_empty() {
+        let cached = if used_ddg_search {
+            let mut ok = false;
             for url in &candidates {
                 match cache_thumbnail(image_cache_dir, &enriched.id, url).await {
                     Ok(cached_path) => {
                         enriched.thumbnail = cached_path;
+                        ok = true;
                         break;
                     }
                     Err(_) => continue,
                 }
             }
+            ok
         } else {
             match cache_thumbnail(image_cache_dir, &enriched.id, &enriched.thumbnail).await {
                 Ok(cached_path) => {
                     enriched.thumbnail = cached_path;
+                    true
                 }
-                Err(_) => {}
+                Err(_) => false,
             }
+        };
+        if cached {
+            logging::info(
+                "Thumbnail",
+                format!(
+                    "Cached for '{}'{}",
+                    enriched.title,
+                    if used_ddg_search { " (DDG search)" } else { " (extraction)" }
+                ),
+                None,
+            );
+        } else {
+            logging::warn(
+                "Thumbnail",
+                format!("Failed to cache thumbnail for '{}'", enriched.title),
+                None,
+            );
         }
+    } else {
+        logging::warn(
+            "Thumbnail",
+            format!("No thumbnail found for '{}'", enriched.title),
+            None,
+        );
     }
 
     let trimmed_title = enriched.title.trim();
@@ -777,6 +805,12 @@ async fn run_scrape_stage(
         return Ok(true);
     }
     let total_stages = stage_results.len();
+    let total_scraped: usize = stage_results.iter().map(|s| s.items.len()).sum();
+    logging::info(
+        "Scrape",
+        format!("Scrape complete: {} stages, {} total articles", total_stages, total_scraped),
+        Some(total_scraped),
+    );
 
     for (index, stage_result) in stage_results.iter().enumerate() {
         for item in &stage_result.items {
@@ -1143,6 +1177,21 @@ async fn run_enrichment_stage(
         });
     }
 
+    let extract_ok = fetched.iter().filter(|(_, _, r)| r.is_ok()).count();
+    let extract_fail = fetched.len() - extract_ok;
+    let thumbnail_count = fetched.iter().filter(|(_, _, r)| r.as_ref().is_ok_and(|(_, th)| th.is_some())).count();
+    logging::info(
+        "Extract",
+        format!(
+            "Extraction done: {}/{} succeeded, {} had thumbnails",
+            extract_ok, total, thumbnail_count
+        ),
+        Some(extract_ok),
+    );
+    if extract_fail > 0 {
+        logging::warn("Extract", format!("{} articles failed extraction", extract_fail), Some(extract_fail));
+    }
+
     emit_process_stage(
         app,
         "extract",
@@ -1257,6 +1306,11 @@ async fn run_enrichment_stage_sequential(
                 let is_in_llm_batch = llm_inputs.iter().any(|(idx, _, _)| *idx == i);
 
                 if !is_in_llm_batch {
+                    logging::warn(
+                        "Enrichment",
+                        format!("Skipped '{}' — extraction failed, no fallback content", item.title),
+                        None,
+                    );
                     if first_error.is_none() {
                         first_error = Some(format!("Text fetch failed for '{}'", item.title));
                     }
@@ -1315,6 +1369,12 @@ async fn run_enrichment_stage_sequential(
 
                         enriched_count += 1;
 
+                        logging::info(
+                            "Enrichment",
+                            format!("Enriched '{}'", enriched.title),
+                            None,
+                        );
+
                         emit_enriched_articles_updated(app, &enriched.id, global_index, total, enriched_count)?;
                         emit_process_stage(
                             app,
@@ -1326,6 +1386,11 @@ async fn run_enrichment_stage_sequential(
                         )?;
                     }
                     Err(err) => {
+                        logging::warn(
+                            "Enrichment",
+                            format!("Failed '{}' — {}", item.title, err),
+                            None,
+                        );
                         if first_error.is_none() {
                             first_error = Some(err);
                         }
@@ -1611,9 +1676,20 @@ async fn run_enrichment_stage_concurrent(
 
                         enriched_count += 1;
 
+                        logging::info(
+                            "Enrichment",
+                            format!("Enriched '{}'", enriched.title),
+                            None,
+                        );
+
                         emit_enriched_articles_updated(app, &enriched.id, global_index, total, enriched_count)?;
                     }
                     Some(Err(err)) => {
+                        logging::warn(
+                            "Enrichment",
+                            format!("Failed '{}' — {}", item.title, err),
+                            None,
+                        );
                         if first_error.is_none() {
                             first_error = Some(err);
                         }
@@ -1627,6 +1703,11 @@ async fn run_enrichment_stage_concurrent(
                         emit_enriched_articles_updated(app, &failed.id, global_index, total, enriched_count)?;
                     }
                     None => {
+                        logging::warn(
+                            "Enrichment",
+                            format!("Skipped '{}' — extraction failed, no fallback content", item.title),
+                            None,
+                        );
                         if first_error.is_none() {
                             first_error = Some(format!("Text fetch failed for '{}'", item.title));
                         }

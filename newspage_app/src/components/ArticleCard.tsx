@@ -1,3 +1,4 @@
+import { Clock } from "lucide-react";
 import { ChevronRight } from "lucide-react";
 import { memo } from "react";
 import { ARTICLE_THUMBNAIL_FALLBACK_URL, type LayoutMode } from "../constants/article";
@@ -5,6 +6,33 @@ import { useImageFallback } from "../hooks/useImageFallback";
 import { useLiveTranslation, type TranslationRuntimeConfig } from "../hooks/useLiveTranslation";
 import type { FeedSource, NewsArticle } from "../types/article";
 import { resolveTagColor } from "../utils/articleMeta";
+
+function formatRelativeTime(timestamp: number): string {
+  const now = Date.now();
+  const diffMs = now - timestamp;
+  if (diffMs < 0) return "just now";
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  const date = new Date(timestamp);
+  return `${date.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+}
+
+function formatExactDateTime(timestamp: number): string {
+  const date = new Date(timestamp);
+  return date.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
 
 interface ArticleCardProps {
   item: NewsArticle;
@@ -139,10 +167,16 @@ function ArticleCardComponent({
           </p>
         )}
         <div className="mt-auto flex items-center justify-between gap-3">
-          <div className={`flex min-w-0 items-center gap-2 ${isCompactListLayout ? "text-[9px]" : "text-[10px]"} font-black uppercase tracking-widest ${
+          <div className={`flex min-w-0 flex-col gap-0.5 ${isCompactListLayout ? "text-[9px]" : "text-[10px]"} font-black uppercase tracking-widest ${
             isDarkMode ? "text-zinc-500" : "text-zinc-600"
           }`}>
             <span className="truncate">{item.sourceName}</span>
+            <span title={formatExactDateTime(item.timestamp)} className={`flex items-center gap-1 ${isCompactListLayout ? "text-[8px]" : "text-[9px]"} font-medium normal-case tracking-normal ${isDarkMode ? "text-zinc-600" : "text-zinc-400"}`}>
+              <Clock size={10} />
+              {formatRelativeTime(item.timestamp)}
+              <span className="mx-0.5 opacity-40">&middot;</span>
+              {formatExactDateTime(item.timestamp)}
+            </span>
           </div>
           <div
             className={`flex items-center ${isCompactListLayout ? "text-[9px]" : "text-[10px]"} font-black uppercase tracking-widest opacity-60 transition-opacity group-hover:opacity-100 ${
