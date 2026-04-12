@@ -12,7 +12,6 @@ interface UseArticleFilterDeps {
 
 interface UseArticleFilterReturn {
   filteredNews: NewsArticle[];
-  blacklistedSources: Set<string>;
   setSortMode: (mode: "date" | "score") => void;
   handleSetLayout: (mode: import("../constants/article").LayoutMode) => void;
   setPreferenceConcepts: (field: "likedConcepts" | "dislikedConcepts", value: string) => void;
@@ -120,7 +119,6 @@ export function useArticleFilter(deps: UseArticleFilterDeps): UseArticleFilterRe
 
   return {
     filteredNews,
-    blacklistedSources,
     setSortMode,
     handleSetLayout,
     setPreferenceConcepts,

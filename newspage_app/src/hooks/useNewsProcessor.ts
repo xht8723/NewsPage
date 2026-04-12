@@ -11,7 +11,7 @@ import { useNewsStore, useUIStore } from "../stores";
 type StageKey = "scrape" | "extract" | "enrich" | "persist";
 type StageState = "idle" | "running" | "done" | "error" | "stopped";
 
-const STAGE_ORDER: StageKey[] = ["scrape", "extract", "enrich", "persist"];
+export const STAGE_ORDER: StageKey[] = ["scrape", "extract", "enrich", "persist"];
 
 function makeInitialStageStatus(): Record<StageKey, { state: StageState; current?: number; total?: number; message?: string }> {
   return {
@@ -26,8 +26,6 @@ interface UseNewsProcessorDeps {
   isEmbeddingConfigured: boolean;
   news: NewsArticle[];
   setNews: (updater: NewsArticle[] | ((prev: NewsArticle[]) => NewsArticle[])) => void;
-  fetchEnrichedNews: (filterByDate?: boolean, preserveOnEmpty?: boolean, overrideDate?: string) => Promise<void>;
-  disableRelevanceSort: (reason: string) => void;
 }
 
 interface UseNewsProcessorReturn {
@@ -60,14 +58,10 @@ export function useNewsProcessor(deps: UseNewsProcessorDeps): UseNewsProcessorRe
 
   const seenLogKeysRef = useRef<Map<string, number>>(new Map());
   const settingsRef = useRef(settings);
-  const newsRef = useRef(deps.news);
   const setNewsRef = useRef(deps.setNews);
-  const fetchEnrichedNewsRef = useRef(deps.fetchEnrichedNews);
 
   useEffect(() => { settingsRef.current = settings; }, [settings]);
-  useEffect(() => { newsRef.current = deps.news; }, [deps.news]);
   useEffect(() => { setNewsRef.current = deps.setNews; }, [deps.setNews]);
-  useEffect(() => { fetchEnrichedNewsRef.current = deps.fetchEnrichedNews; }, [deps.fetchEnrichedNews]);
 
   const disableRelevanceSort = useCallback((reason: string) => {
     if (settings.sortMode !== "score") {
@@ -177,10 +171,10 @@ export function useNewsProcessor(deps: UseNewsProcessorDeps): UseNewsProcessorRe
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setEnrichmentError(message);
+    } finally {
       setLoading(false);
+      setStopping(false);
     }
-    setLoading(false);
-    setStopping(false);
   };
 
   const stopGenerate = async () => {

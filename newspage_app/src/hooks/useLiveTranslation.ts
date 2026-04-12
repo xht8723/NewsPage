@@ -16,6 +16,7 @@ interface UseLiveTranslationParams {
   runtime: TranslationRuntimeConfig;
 }
 
+const MAX_CACHE_SIZE = 500;
 const translationCache = new Map<string, string>();
 
 function normalizeLang(value?: string): string {
@@ -92,6 +93,10 @@ export function useLiveTranslation({
           return;
         }
         const nextValue = result?.trim() ? result : text;
+        if (translationCache.size >= MAX_CACHE_SIZE) {
+          const oldestKey = translationCache.keys().next().value;
+          if (oldestKey !== undefined) translationCache.delete(oldestKey);
+        }
         translationCache.set(cacheKey, nextValue);
         setTranslatedText(nextValue);
       })

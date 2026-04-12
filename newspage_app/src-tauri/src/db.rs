@@ -557,6 +557,25 @@ VALUES (?1, ?2, ?3, 1, ?4)",
     }
 
     tx.commit().await?;
+
+    let default_sources = [
+        ("gcores", "https://www.gcores.com/rss", "机核网"),
+        ("ann", "https://www.animenewsnetwork.com/news/?topic=anime", "ANN"),
+        ("automaton", "https://automaton-media.com/en/feed/", "AUTOMATON"),
+        ("yys", "https://www.yystv.cn/rss/feed", "游研社"),
+    ];
+    for (source_type, source_ref, display_name) in default_sources {
+        sqlx::query(
+            "INSERT OR IGNORE INTO feed_sources(source_type, source_ref, display_name, enabled)
+             VALUES (?1, ?2, ?3, 1)",
+        )
+        .bind(source_type)
+        .bind(source_ref)
+        .bind(display_name)
+        .execute(pool)
+        .await?;
+    }
+
     Ok(())
 }
 

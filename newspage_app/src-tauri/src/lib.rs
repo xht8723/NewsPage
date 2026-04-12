@@ -608,15 +608,15 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
     let saved_openai_model = settings_map
         .get("openaiModel")
         .cloned()
-        .unwrap_or_else(|| "gpt-5.4-mini".to_string());
+        .unwrap_or_else(|| DEFAULT_OPENAI_MODEL.to_string());
     let saved_claude_model = settings_map
         .get("claudeModel")
         .cloned()
-        .unwrap_or_else(|| "claude-sonnet-4-6".to_string());
+        .unwrap_or_else(|| DEFAULT_CLAUDE_MODEL.to_string());
     let saved_gemini_model = settings_map
         .get("geminiModel")
         .cloned()
-        .unwrap_or_else(|| "gemini-2.5-flash".to_string());
+        .unwrap_or_else(|| DEFAULT_GEMINI_MODEL.to_string());
     let saved_deepseek_api_key = settings_map
         .get("deepseekApiKey")
         .cloned()
@@ -624,7 +624,7 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
     let saved_deepseek_model = settings_map
         .get("deepseekModel")
         .cloned()
-        .unwrap_or_else(|| "deepseek-chat".to_string());
+        .unwrap_or_else(|| DEFAULT_DEEPSEEK_MODEL.to_string());
     let saved_selected_regions: Vec<String> = settings_map
         .get("selectedRegions")
         .and_then(|raw| serde_json::from_str(raw).ok())
@@ -912,7 +912,7 @@ async fn collect_items_to_enrich_by_language(
                 }
                 if !process_past_date {
                     let today = Local::now().date_naive().to_string();
-                    if !is_on_utc_day(&item.date, &today) {
+                    if !is_on_local_day(&item.date, &today) {
                         return false;
                     }
                 }
@@ -1647,7 +1647,9 @@ async fn run_enrichment_stage_concurrent(
                 }
             }
 
-            let mut llm_result_iter = llm_results_for_batch.into_iter();
+            let llm_result_map: HashMap<usize, Result<(String, String), String>> = llm_results_for_batch
+                .into_iter()
+                .collect();
 
             for (i, (item, fetch_result)) in batch.iter().enumerate() {
                 if state.stop_requested.load(Ordering::Relaxed) {
@@ -1660,9 +1662,9 @@ async fn run_enrichment_stage_concurrent(
                     Err(_) => (item.og_content.clone(), None),
                 };
 
-                let llm_result = llm_result_iter
-                    .find(|(idx, _)| *idx == i)
-                    .map(|(_, r)| r);
+                let llm_result = llm_result_map
+                    .get(&i)
+                    .cloned();
 
                 match llm_result {
                     Some(Ok((snippet, ai_summary))) => {
@@ -1832,12 +1834,12 @@ struct ProcessStageEvent {
     emitted_at_utc: String,
 }
 
-fn is_on_utc_day(date_value: &str, target_utc_day: &str) -> bool {
+fn is_on_local_day(date_value: &str, target_local_day: &str) -> bool {
     if let Ok(parsed) = DateTime::parse_from_rfc3339(date_value) {
-        return parsed.with_timezone(&Local).date_naive().to_string() == target_utc_day;
+        return parsed.with_timezone(&Local).date_naive().to_string() == target_local_day;
     }
 
-    date_value.get(..10) == Some(target_utc_day)
+    date_value.get(..10) == Some(target_local_day)
 }
 
 #[tauri::command]
@@ -1857,7 +1859,7 @@ async fn get_enriched_articles(
         .map_err(|e| format!("DB read error: {}", e))?;
 
     if let Some(ref date_utc_day) = date {
-        items.retain(|item| is_on_utc_day(&item.date, date_utc_day));
+        items.retain(|item| is_on_local_day(&item.date, date_utc_day));
     }
 
     Ok(items
@@ -2328,6 +2330,12 @@ fn default_settings_map() -> HashMap<String, String> {
     map.insert("autoScrapeDayInterval".to_string(), "1".to_string());
     map.insert("autoScrapeTime".to_string(), "09:00".to_string());
     map.insert("lastAutoScrapeEpoch".to_string(), "0".to_string());
+    map.insert("localEmbeddingModel".to_string(), DEFAULT_LOCAL_EMBEDDING_MODEL.to_string());
+    map.insert("minSummaryPoints".to_string(), "1".to_string());
+    map.insert("maxSummaryPoints".to_string(), "8".to_string());
+    map.insert("llmBatchSize".to_string(), "3".to_string());
+    map.insert("concurrentLlmRequests".to_string(), "5".to_string());
+    map.insert("ollamaEmbeddingModel".to_string(), DEFAULT_LOCAL_EMBEDDING_MODEL.to_string());
     map
 }
 
@@ -3038,15 +3046,15 @@ async fn test_provider_connection(provider: String, api_key: Option<String>, end
         endpoint: endpoint.clone(),
         model: model.unwrap_or_else(|| {
             if provider == "ollama" {
-                "qwen2.5:3b".to_string()
+                DEFAULT_OLLAMA_MODEL.to_string()
             } else if provider == "openai" {
-                "gpt-5.4-mini".to_string()
+                DEFAULT_OPENAI_MODEL.to_string()
             } else if provider == "claude" {
-                "claude-sonnet-4-6".to_string()
+                DEFAULT_CLAUDE_MODEL.to_string()
             } else if provider == "deepseek" {
-                "deepseek-chat".to_string()
+                DEFAULT_DEEPSEEK_MODEL.to_string()
             } else {
-                "gemini-2.5-flash".to_string()
+                DEFAULT_GEMINI_MODEL.to_string()
             }
         }),
     };
@@ -3160,7 +3168,7 @@ fn build_tray(app: &tauri::AppHandle) -> Result<(), String> {
 
     let app_handle = app.clone();
     let _tray = TrayIconBuilder::with_id("main-tray")
-        .icon(app.default_window_icon().cloned().unwrap())
+        .icon(app.default_window_icon().cloned().ok_or("No default window icon configured")?)
         .menu(&menu)
         .tooltip("NewsPage")
         .on_menu_event(move |_app, event| match event.id.as_ref() {

@@ -17,7 +17,7 @@ import { usePanelTransition } from "./hooks/usePanelTransition";
 import { useAppStartup } from "./hooks/useAppStartup";
 import { useLlmSettings } from "./hooks/useLlmSettings";
 import { useFeedManager } from "./hooks/useFeedManager";
-import { useNewsProcessor } from "./hooks/useNewsProcessor";
+import { useNewsProcessor, STAGE_ORDER } from "./hooks/useNewsProcessor";
 import { useArticleFilter } from "./hooks/useArticleFilter";
 import { LayoutSwitcher } from "./components/LayoutSwitcher";
 import { CardContextMenu } from "./components/CardContextMenu";
@@ -41,8 +41,6 @@ import { articleService, llmService } from "./services";
 import { useFeedStore, useNewsStore, useUIStore, useSettingsStore } from "./stores";
 import { createDefaultSettings } from "./stores/settingsStore";
 import "./App.css";
-
-const STAGE_ORDER = ["scrape", "extract", "enrich", "persist"] as const;
 
 function App(): React.JSX.Element {
   const isDarkMode = useUIStore((s) => s.isDarkMode);
@@ -136,8 +134,6 @@ function App(): React.JSX.Element {
     isEmbeddingConfigured,
     news,
     setNews,
-    fetchEnrichedNews,
-    disableRelevanceSort: () => {},
   });
 
   const llm = useLlmSettings({
@@ -235,15 +231,13 @@ function App(): React.JSX.Element {
       void llm.refreshOllamaModels(settings.ollamaAddress, settings.ollamaModel);
     }
 
-    void (async () => {
-      void llmService.listLocalEmbeddingModels()
-        .then((models) => {
-          if (models.length > 0) {
-            llm.setLocalEmbeddingModels(models);
-          }
-        })
-        .catch(() => {});
-    })();
+    void llmService.listLocalEmbeddingModels()
+      .then((models) => {
+        if (models.length > 0) {
+          llm.setLocalEmbeddingModels(models);
+        }
+      })
+      .catch(() => {});
 
     void llm.refreshLocalEmbeddingStatus();
     const timer = window.setInterval(() => {
@@ -326,11 +320,9 @@ function App(): React.JSX.Element {
     const disliked = settings.dislikedConcepts.split(",").map((s) => s.trim()).filter(Boolean);
     if (liked.length === 0 && disliked.length === 0) return;
 
-    const newsRef = { current: news };
     const timeout = window.setTimeout(async () => {
-      const currentNews = newsRef.current;
-      if (currentNews.length === 0) return;
-      const ids = currentNews.map((a) => a.id);
+      if (news.length === 0) return;
+      const ids = news.map((a) => a.id);
 
       try {
         const scorePairs = await articleService.computePreferenceScores({
@@ -636,7 +628,7 @@ function App(): React.JSX.Element {
         setSettings={setSettings}
         saveSetting={saveSetting}
         ollamaConnectionState={llm.ollamaConnectionState}
-        setOllamaConnectionState={() => {}}
+        setOllamaConnectionState={llm.setOllamaConnectionState}
         isTestingOllama={llm.isTestingOllama}
         testOllamaConnection={llm.testOllamaConnection}
         ollamaModels={llm.ollamaModels}

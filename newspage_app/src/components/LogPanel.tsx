@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 import type { ProcessLogEntry } from "../types/article";
 import { usePanelTransition } from "../hooks/usePanelTransition";
@@ -61,8 +61,6 @@ export function LogPanel({ isDarkMode, logs, isOpen, onClear, onClose }: LogPane
     };
   }, [isOpen, onClose]);
 
-  const latestCount = useMemo(() => logs.length, [logs.length]);
-
   if (!isMounted) {
     return null;
   }
@@ -82,7 +80,7 @@ export function LogPanel({ isDarkMode, logs, isOpen, onClear, onClose }: LogPane
         >
           <div>
             <h3 className={`text-sm font-black ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>Process Details</h3>
-            <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">{latestCount} entries</p>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">{logs.length} entries</p>
           </div>
           <div className="flex items-center gap-2">
             <button

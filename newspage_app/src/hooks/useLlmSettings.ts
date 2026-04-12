@@ -6,6 +6,7 @@ import { useSettingsStore } from "../stores/settingsStore";
 
 interface UseLlmSettingsReturn {
   ollamaConnectionState: OllamaConnectionState;
+  setOllamaConnectionState: (state: OllamaConnectionState) => void;
   isTestingOllama: boolean;
   ollamaModels: string[];
   isRefreshingModels: boolean;
@@ -36,7 +37,7 @@ export function useLlmSettings(deps: {
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [isRefreshingModels, setIsRefreshingModels] = useState(false);
   const [localEmbeddingModels, setLocalEmbeddingModels] = useState<string[]>(
-    LOCAL_EMBEDDING_MODELS as unknown as string[],
+    [...LOCAL_EMBEDDING_MODELS],
   );
   const [localEmbeddingStatus, setLocalEmbeddingStatus] = useState<LocalEmbeddingStatus | null>(null);
   const [isPreparingLocalEmbeddingModel, setIsPreparingLocalEmbeddingModel] = useState(false);
@@ -161,6 +162,7 @@ export function useLlmSettings(deps: {
 
   return {
     ollamaConnectionState,
+    setOllamaConnectionState,
     isTestingOllama,
     ollamaModels,
     isRefreshingModels,
