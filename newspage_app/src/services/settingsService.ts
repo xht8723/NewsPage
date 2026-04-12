@@ -5,4 +5,10 @@ export const settingsService = {
 
   save: (key: string, value: string): Promise<void> =>
     invoke("save_setting", { key, value }),
+
+  setAutoStart: (enabled: boolean): Promise<void> =>
+    invoke("set_auto_start", { enabled }),
+
+  setMinimizeToTray: (enabled: boolean): Promise<void> =>
+    invoke("set_minimize_to_tray", { enabled }),
 };

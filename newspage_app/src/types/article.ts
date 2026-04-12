@@ -89,6 +89,13 @@ export interface UserSettings {
   translationTargetLanguage: "en" | "zh-CN";
   concurrentLlmRequests: number;
   processPastDateArticles: boolean;
+  autoStartOnBoot: boolean;
+  minimizeToTray: boolean;
+  autoScrapeEnabled: boolean;
+  autoScrapeFrequency: "hourly" | "daily";
+  autoScrapeHourInterval: number;
+  autoScrapeDayInterval: number;
+  autoScrapeTime: string;
 }
 
 export interface LocalEmbeddingStatus {

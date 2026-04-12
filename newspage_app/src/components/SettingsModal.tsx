@@ -1,4 +1,5 @@
 import { FolderOpen, RefreshCw, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
+import { CustomSelect } from "./CustomSelect";
 import { DotsSpinner } from "./DotsSpinner";
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -12,6 +13,7 @@ import {
 import type { FeedSource, LocalEmbeddingStatus, UserSettings } from "../types/article";
 import { usePanelTransition } from "../hooks/usePanelTransition";
 import { articleService } from "../services/articleService";
+import { settingsService } from "../services/settingsService";
 import { LLMProviderSection } from "./LLMProviderSection";
 
 interface SettingsModalProps {
@@ -302,6 +304,37 @@ export function SettingsModal({
                       <span className="text-sm">Show deletion confirmation</span>
                     </label>
                   </div>
+                  <div>
+                    <label className="mb-1.5 block text-xs font-medium opacity-70">Startup &amp; Behavior</label>
+                    <div className="space-y-2">
+                      <label className="flex cursor-pointer items-center gap-2">
+                        <NeonCheckbox
+                          checked={settings.autoStartOnBoot}
+                          onChange={(checked) => {
+                            setSettings((current) => ({ ...current, autoStartOnBoot: checked }));
+                            saveSetting("autoStartOnBoot", checked ? "true" : "false");
+                            void settingsService.setAutoStart(checked);
+                          }}
+                          isDarkMode={isDarkMode}
+                          ariaLabel="Start app on system start"
+                        />
+                        <span className="text-sm">Start app on system start</span>
+                      </label>
+                      <label className="flex cursor-pointer items-center gap-2">
+                        <NeonCheckbox
+                          checked={settings.minimizeToTray}
+                          onChange={(checked) => {
+                            setSettings((current) => ({ ...current, minimizeToTray: checked }));
+                            saveSetting("minimizeToTray", checked ? "true" : "false");
+                            void settingsService.setMinimizeToTray(checked);
+                          }}
+                          isDarkMode={isDarkMode}
+                          ariaLabel="Run in system tray when closing"
+                        />
+                        <span className="text-sm">Run in system tray when closing</span>
+                      </label>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -353,6 +386,132 @@ export function SettingsModal({
                     </button>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            {/* Auto-Scrape Schedule */}
+            <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
+              <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Auto-Scrape Schedule</p>
+              <div className="space-y-3">
+                <label className="flex cursor-pointer items-center gap-2">
+                  <NeonCheckbox
+                    checked={settings.autoScrapeEnabled}
+                    onChange={(checked) => {
+                      setSettings((current) => ({ ...current, autoScrapeEnabled: checked }));
+                      saveSetting("autoScrapeEnabled", checked ? "true" : "false");
+                    }}
+                    isDarkMode={isDarkMode}
+                    ariaLabel="Enable automatic scraping"
+                  />
+                  <span className="text-sm">Enable automatic scraping</span>
+                </label>
+                {settings.autoScrapeEnabled && (
+                  <div className="space-y-3 pl-1">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium opacity-70">Frequency</label>
+                      <CustomSelect
+                        options={[
+                          { value: "hourly", label: "Hourly" },
+                          { value: "daily", label: "Daily" },
+                        ]}
+                        value={settings.autoScrapeFrequency}
+                        onChange={(val) => {
+                          const v = val as "hourly" | "daily";
+                          setSettings((s) => ({ ...s, autoScrapeFrequency: v }));
+                          saveSetting("autoScrapeFrequency", v);
+                        }}
+                        isDarkMode={isDarkMode}
+                      />
+                    </div>
+                    {settings.autoScrapeFrequency === "hourly" && (
+                      <div>
+                        <label className="mb-1.5 block text-xs font-medium opacity-70">Repeat every</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={1}
+                            max={24}
+                            value={settings.autoScrapeHourInterval}
+                            onChange={(e) => {
+                              const val = Math.min(24, Math.max(1, Number(e.target.value)));
+                              setSettings((s) => ({ ...s, autoScrapeHourInterval: val }));
+                              saveSetting("autoScrapeHourInterval", String(val));
+                            }}
+                            className={`number-dial-${isDarkMode ? "dark" : "light"} w-20 rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
+                              isDarkMode
+                                ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                                : "border-zinc-300 bg-zinc-200 text-zinc-900"
+                            }`}
+                          />
+                          <span className="text-xs opacity-70">hours</span>
+                        </div>
+                      </div>
+                    )}
+                    {settings.autoScrapeFrequency === "daily" && (
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium opacity-70">Repeat every</label>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min={1}
+                              max={30}
+                              value={settings.autoScrapeDayInterval}
+                              onChange={(e) => {
+                                const val = Math.min(30, Math.max(1, Number(e.target.value)));
+                                setSettings((s) => ({ ...s, autoScrapeDayInterval: val }));
+                                saveSetting("autoScrapeDayInterval", String(val));
+                              }}
+                              className={`number-dial-${isDarkMode ? "dark" : "light"} w-20 rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
+                                isDarkMode
+                                  ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                                  : "border-zinc-300 bg-zinc-200 text-zinc-900"
+                              }`}
+                            />
+                            <span className="text-xs opacity-70">days</span>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium opacity-70">At time</label>
+                          <div className="flex items-center gap-2">
+                            <CustomSelect
+                              options={Array.from({ length: 24 }, (_, i) => ({
+                                value: String(i).padStart(2, "0"),
+                                label: String(i).padStart(2, "0"),
+                              }))}
+                              value={settings.autoScrapeTime.split(":")[0] ?? "09"}
+                              onChange={(h) => {
+                                const m = settings.autoScrapeTime.split(":")[1] ?? "00";
+                                const val = `${h}:${m}`;
+                                setSettings((s) => ({ ...s, autoScrapeTime: val }));
+                                saveSetting("autoScrapeTime", val);
+                              }}
+                              isDarkMode={isDarkMode}
+                              className="w-20"
+                            />
+                            <span className="text-xs font-bold opacity-50">:</span>
+                            <CustomSelect
+                              options={["00", "15", "30", "45"].map((m) => ({
+                                value: m,
+                                label: m,
+                              }))}
+                              value={settings.autoScrapeTime.split(":")[1] ?? "00"}
+                              onChange={(m) => {
+                                const h = settings.autoScrapeTime.split(":")[0] ?? "09";
+                                const val = `${h}:${m}`;
+                                setSettings((s) => ({ ...s, autoScrapeTime: val }));
+                                saveSetting("autoScrapeTime", val);
+                              }}
+                              isDarkMode={isDarkMode}
+                              className="w-20"
+                            />
+                            <span className="text-[11px] opacity-50">Hour&nbsp;&middot;&nbsp;Min</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 

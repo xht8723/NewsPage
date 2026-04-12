@@ -33,6 +33,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{atomic::{AtomicBool, Ordering}, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{TrayIconBuilder, MouseButton, MouseButtonState, TrayIconEvent};
+use tauri_plugin_autostart::ManagerExt;
 
 pub mod article_extract;
 pub mod db;
@@ -43,6 +46,7 @@ pub mod scrapers;
 pub mod platform_llm;
 pub mod local_embedding;
 pub mod logging;
+pub mod scheduler;
 
 const DEFAULT_OLLAMA_ADDRESS: &str = "http://127.0.0.1:11434";
 const DEFAULT_OLLAMA_MODEL: &str = "qwen2.5:3b";
@@ -267,6 +271,29 @@ async fn enrich_media_and_embedding(
     }
 }
 
+async fn persist_failed_with_embedding(
+    db_pool: &SqlitePool,
+    image_cache_dir: &Path,
+    item: &Article,
+    local_embedding_model: &str,
+) -> Result<Article, String> {
+    let mut failed = item.clone();
+    failed.status = "failed".to_string();
+    let embedding = enrich_media_and_embedding(
+        image_cache_dir,
+        &mut failed,
+        local_embedding_model,
+    )
+    .await;
+    persist_enriched_article(db_pool, &failed).await?;
+    if let Some(vec) = embedding {
+        if let Err(e) = db::save_embedding(db_pool, &failed.id, &vec).await {
+            logging::warn("Embedding", format!("Failed to save embedding for '{}': {}", failed.title, e), None);
+        }
+    }
+    Ok(failed)
+}
+
 async fn persist_enriched_article(db_pool: &SqlitePool, enriched: &Article) -> Result<(), String> {
     upsert_article(db_pool, enriched)
         .await
@@ -407,6 +434,8 @@ struct AppState {
     preference_embedding_cache: Mutex<HashMap<String, Vec<f32>>>,
     translation_cache: Mutex<HashMap<String, String>>,
     stop_requested: AtomicBool,
+    minimize_to_tray: AtomicBool,
+    is_pipeline_running: AtomicBool,
 }
 
 #[derive(Default)]
@@ -454,7 +483,7 @@ struct RuntimeLlmContext {
     resolved: ResolvedLlmSettings,
 }
 
-fn read_settings_map(settings_path: &Path) -> HashMap<String, String> {
+pub(crate) fn read_settings_map(settings_path: &Path) -> HashMap<String, String> {
     std::fs::read_to_string(settings_path)
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -1231,20 +1260,13 @@ async fn run_enrichment_stage_sequential(
                     if first_error.is_none() {
                         first_error = Some(format!("Text fetch failed for '{}'", item.title));
                     }
-                    let mut failed = item.clone();
-                    failed.status = "failed".to_string();
-                    let failed_embedding = enrich_media_and_embedding(
+                    let failed = persist_failed_with_embedding(
+                        &state.db,
                         image_cache_dir,
-                        &mut failed,
+                        item,
                         &settings.local_embedding_model,
                     )
-                    .await;
-                    persist_enriched_article(&state.db, &failed).await?;
-                    if let Some(vec) = failed_embedding {
-                        if let Err(e) = db::save_embedding(&state.db, &failed.id, &vec).await {
-                            logging::warn("Embedding", format!("Failed to save embedding for '{}': {}", failed.title, e), None);
-                        }
-                    }
+                    .await?;
                     emit_enriched_articles_updated(app, &failed.id, global_index, total, enriched_count)?;
                     continue;
                 }
@@ -1307,20 +1329,13 @@ async fn run_enrichment_stage_sequential(
                         if first_error.is_none() {
                             first_error = Some(err);
                         }
-                        let mut failed = item.clone();
-                        failed.status = "failed".to_string();
-                        let failed_embedding = enrich_media_and_embedding(
+                        let failed = persist_failed_with_embedding(
+                            &state.db,
                             image_cache_dir,
-                            &mut failed,
+                            item,
                             &settings.local_embedding_model,
                         )
-                        .await;
-                        persist_enriched_article(&state.db, &failed).await?;
-                        if let Some(vec) = failed_embedding {
-                            if let Err(e) = db::save_embedding(&state.db, &failed.id, &vec).await {
-                                logging::warn("Embedding", format!("Failed to save embedding for '{}': {}", failed.title, e), None);
-                            }
-                        }
+                        .await?;
                         emit_enriched_articles_updated(app, &failed.id, global_index, total, enriched_count)?;
                     }
                 }
@@ -1602,40 +1617,26 @@ async fn run_enrichment_stage_concurrent(
                         if first_error.is_none() {
                             first_error = Some(err);
                         }
-                        let mut failed = item.clone();
-                        failed.status = "failed".to_string();
-                        let failed_embedding = enrich_media_and_embedding(
+                        let failed = persist_failed_with_embedding(
+                            &state.db,
                             image_cache_dir,
-                            &mut failed,
+                            item,
                             &settings.local_embedding_model,
                         )
-                        .await;
-                        persist_enriched_article(&state.db, &failed).await?;
-                        if let Some(vec) = failed_embedding {
-                            if let Err(e) = db::save_embedding(&state.db, &failed.id, &vec).await {
-                                logging::warn("Embedding", format!("Failed to save embedding for '{}': {}", failed.title, e), None);
-                            }
-                        }
+                        .await?;
                         emit_enriched_articles_updated(app, &failed.id, global_index, total, enriched_count)?;
                     }
                     None => {
                         if first_error.is_none() {
                             first_error = Some(format!("Text fetch failed for '{}'", item.title));
                         }
-                        let mut failed = item.clone();
-                        failed.status = "failed".to_string();
-                        let failed_embedding = enrich_media_and_embedding(
+                        let failed = persist_failed_with_embedding(
+                            &state.db,
                             image_cache_dir,
-                            &mut failed,
+                            item,
                             &settings.local_embedding_model,
                         )
-                        .await;
-                        persist_enriched_article(&state.db, &failed).await?;
-                        if let Some(vec) = failed_embedding {
-                            if let Err(e) = db::save_embedding(&state.db, &failed.id, &vec).await {
-                                logging::warn("Embedding", format!("Failed to save embedding for '{}': {}", failed.title, e), None);
-                            }
-                        }
+                        .await?;
                         emit_enriched_articles_updated(app, &failed.id, global_index, total, enriched_count)?;
                     }
                 }
@@ -2218,10 +2219,18 @@ fn default_settings_map() -> HashMap<String, String> {
     map.insert("sortMode".to_string(), "date".to_string());
     map.insert("layout".to_string(), "grid".to_string());
     map.insert("processPastDateArticles".to_string(), "false".to_string());
+    map.insert("autoStartOnBoot".to_string(), "false".to_string());
+    map.insert("minimizeToTray".to_string(), "false".to_string());
+    map.insert("autoScrapeEnabled".to_string(), "false".to_string());
+    map.insert("autoScrapeFrequency".to_string(), "hourly".to_string());
+    map.insert("autoScrapeHourInterval".to_string(), "1".to_string());
+    map.insert("autoScrapeDayInterval".to_string(), "1".to_string());
+    map.insert("autoScrapeTime".to_string(), "09:00".to_string());
+    map.insert("lastAutoScrapeEpoch".to_string(), "0".to_string());
     map
 }
 
-fn write_settings_map(settings_path: &Path, map: &HashMap<String, String>) -> Result<(), String> {
+pub(crate) fn write_settings_map(settings_path: &Path, map: &HashMap<String, String>) -> Result<(), String> {
     let json = serde_json::to_string_pretty(map)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
     std::fs::write(settings_path, json)
@@ -2438,6 +2447,88 @@ async fn request_stop_action(state: tauri::State<'_, AppState>) -> Result<(), St
     Ok(())
 }
 
+struct PipelineArgs {
+    per_category_limit: i64,
+    per_category_limits: HashMap<String, i64>,
+    cooldown_hours: u64,
+    ai_mode_enabled: bool,
+    process_past_date: bool,
+    llm_overrides: LlmOverrideArgs,
+}
+
+async fn run_pipeline(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    args: PipelineArgs,
+    stage_message: &str,
+) -> Result<(), String> {
+    emit_process_stage(app, "scrape", "running", stage_message, None, None)?;
+
+    let runtime = resolve_runtime_llm_context(app, args.llm_overrides)?;
+
+    let scrape_stopped = run_scrape_stage(app, state, &runtime.resolved, args.cooldown_hours, &runtime.settings_path).await?;
+    if scrape_stopped {
+        return emit_enriched_articles_sync_complete(app, EnrichmentStageResult {
+            total: 0,
+            enriched_count: 0,
+            first_error: None,
+            stopped: true,
+        });
+    }
+
+    let items_to_enrich_by_language = collect_items_to_enrich_by_language(
+        state,
+        args.per_category_limit,
+        &args.per_category_limits,
+        &runtime.resolved.source_blacklist,
+        args.process_past_date,
+    ).await?;
+
+    let result = if args.ai_mode_enabled {
+        let llm_config = build_llm_config(&runtime.resolved);
+        let llm = platform_llm::create_provider(&llm_config)?;
+        verify_llm_provider_handshake(&runtime.resolved.llm_provider, llm.as_ref(), &llm_config).await?;
+        run_enrichment_stage(
+            app,
+            state,
+            &llm_config,
+            &runtime.image_cache_dir,
+            &runtime.resolved,
+            args.per_category_limit,
+            items_to_enrich_by_language,
+        ).await?
+    } else {
+        run_none_ai_stage(
+            app,
+            state,
+            &runtime.image_cache_dir,
+            &runtime.resolved,
+            items_to_enrich_by_language,
+        ).await?
+    };
+
+    if !result.stopped {
+        emit_process_stage(app, "persist", "done", "Pipeline complete", Some(result.enriched_count), Some(result.total))?;
+    }
+
+    emit_enriched_articles_sync_complete(app, result)
+}
+
+fn begin_pipeline(state: &AppState, app: &tauri::AppHandle) -> Result<(), String> {
+    if state.is_pipeline_running.load(Ordering::SeqCst) {
+        return Err("Pipeline is already running".to_string());
+    }
+    state.is_pipeline_running.store(true, Ordering::SeqCst);
+    state.stop_requested.store(false, Ordering::Relaxed);
+    update_tray_menu(app, true);
+    Ok(())
+}
+
+fn end_pipeline(state: &AppState, app: &tauri::AppHandle) {
+    state.is_pipeline_running.store(false, Ordering::SeqCst);
+    update_tray_menu(app, false);
+}
+
 #[tauri::command]
 async fn start_all_action(
     app: tauri::AppHandle,
@@ -2473,18 +2564,16 @@ async fn start_all_action(
                 .collect()
         })
         .unwrap_or_default();
-    state.stop_requested.store(false, Ordering::Relaxed);
-    emit_process_stage(
-        &app,
-        "scrape",
-        "running",
-        "Starting pipeline",
-        None,
-        None,
-    )?;
-    let runtime = resolve_runtime_llm_context(
-        &app,
-        LlmOverrideArgs {
+
+    begin_pipeline(&state, &app)?;
+
+    let result = run_pipeline(&app, &state, PipelineArgs {
+        per_category_limit,
+        per_category_limits,
+        cooldown_hours,
+        ai_mode_enabled,
+        process_past_date: process_past_date_articles.unwrap_or(false),
+        llm_overrides: LlmOverrideArgs {
             llm_provider,
             openai_api_key,
             claude_api_key,
@@ -2500,66 +2589,10 @@ async fn start_all_action(
             min_summary_points: None,
             max_summary_points: None,
         },
-    )?;
+    }, "Starting pipeline").await;
 
-    let scrape_stopped = run_scrape_stage(&app, &state, &runtime.resolved, cooldown_hours, &runtime.settings_path).await?;
-    if scrape_stopped {
-        return emit_enriched_articles_sync_complete(&app, EnrichmentStageResult {
-            total: 0,
-            enriched_count: 0,
-            first_error: None,
-            stopped: true,
-        });
-    }
-
-    let process_past_date = process_past_date_articles.unwrap_or(false);
-
-    let items_to_enrich_by_language = collect_items_to_enrich_by_language(
-        &state,
-        per_category_limit,
-        &per_category_limits,
-        &runtime.resolved.source_blacklist,
-        process_past_date,
-    )
-    .await?;
-    let result = if ai_mode_enabled {
-        let llm_config = build_llm_config(&runtime.resolved);
-        let llm = platform_llm::create_provider(&llm_config)?;
-        verify_llm_provider_handshake(&runtime.resolved.llm_provider, llm.as_ref(), &llm_config).await?;
-
-        run_enrichment_stage(
-            &app,
-            &state,
-            &llm_config,
-            &runtime.image_cache_dir,
-            &runtime.resolved,
-            per_category_limit,
-            items_to_enrich_by_language,
-        )
-        .await?
-    } else {
-        run_none_ai_stage(
-            &app,
-            &state,
-            &runtime.image_cache_dir,
-            &runtime.resolved,
-            items_to_enrich_by_language,
-        )
-        .await?
-    };
-
-    if !result.stopped {
-        emit_process_stage(
-            &app,
-            "persist",
-            "done",
-            "Pipeline complete",
-            Some(result.enriched_count),
-            Some(result.total),
-        )?;
-    }
-
-    emit_enriched_articles_sync_complete(&app, result)
+    end_pipeline(&state, &app);
+    result
 }
 
 #[tauri::command]
@@ -2744,9 +2777,168 @@ fn load_process_logs(limit: Option<usize>) -> Result<Vec<ProcessLogEvent>, Strin
     Ok(logging::load_recent(max))
 }
 
+fn build_tray_menu(app: &tauri::AppHandle, pipeline_running: bool) -> Result<tauri::menu::Menu<tauri::Wry>, String> {
+    let news_label = if pipeline_running { "Getting News..." } else { "Get News" };
+    let news_item = MenuItem::with_id(app, "get_news", news_label, !pipeline_running, None::<&str>)
+        .map_err(|e| format!("Failed to create menu item: {}", e))?;
+    let show_item = MenuItem::with_id(app, "show", "Show NewsPage", true, None::<&str>)
+        .map_err(|e| format!("Failed to create menu item: {}", e))?;
+    let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)
+        .map_err(|e| format!("Failed to create menu item: {}", e))?;
+    let menu = Menu::with_items(app, &[&news_item, &show_item, &quit_item])
+        .map_err(|e| format!("Failed to create tray menu: {}", e))?;
+    Ok(menu)
+}
+
+fn build_tray(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let pipeline_running = state.is_pipeline_running.load(Ordering::SeqCst);
+    let menu = build_tray_menu(app, pipeline_running)?;
+
+    let app_handle = app.clone();
+    let _tray = TrayIconBuilder::with_id("main-tray")
+        .icon(app.default_window_icon().cloned().unwrap())
+        .menu(&menu)
+        .tooltip("NewsPage")
+        .on_menu_event(move |_app, event| match event.id.as_ref() {
+            "get_news" => {
+                let state = _app.state::<AppState>();
+                if !state.is_pipeline_running.load(Ordering::SeqCst) {
+                    let app_h = _app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = start_all_background_inner(app_h).await;
+                    });
+                }
+            }
+            "show" => {
+                if let Some(w) = _app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
+            "quit" => {
+                app_handle.exit(0);
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray: &tauri::tray::TrayIcon, event| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                let app = tray.app_handle();
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
+        })
+        .build(app)
+        .map_err(|e| format!("Failed to build tray icon: {}", e))?;
+
+    Ok(())
+}
+
+fn update_tray_menu(app: &tauri::AppHandle, pipeline_running: bool) {
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        match build_tray_menu(app, pipeline_running) {
+            Ok(menu) => {
+                let _ = tray.set_menu(Some(menu));
+            }
+            Err(e) => {
+                logging::warn("Tray", format!("Failed to update tray menu: {}", e), None);
+            }
+        }
+    }
+}
+
+pub(crate) async fn start_all_background_inner(app: tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    begin_pipeline(&state, &app)?;
+
+    let app_data_dir = app.path().app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
+    let settings_path = app_data_dir.join("settings.json");
+    let settings_map = read_settings_map(&settings_path);
+
+    let limit: usize = settings_map.get("newsLimit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5)
+        .clamp(1, 100);
+    let cooldown_hours: u64 = settings_map.get("scrapeCooldownHours")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
+
+    let result = run_pipeline(&app, &state, PipelineArgs {
+        per_category_limit: limit as i64,
+        per_category_limits: settings_map.get("perCategoryNewsLimits").cloned()
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| v.as_object().cloned())
+            .map(|obj| {
+                obj.into_iter()
+                    .filter_map(|(k, v)| v.as_i64().map(|n| (k.to_lowercase(), n)))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        cooldown_hours,
+        ai_mode_enabled: settings_map.get("aiModeEnabled").map(|v| v == "true").unwrap_or(false),
+        process_past_date: settings_map.get("processPastDateArticles").map(|v| v == "true").unwrap_or(false),
+        llm_overrides: LlmOverrideArgs {
+            llm_provider: settings_map.get("llmProvider").cloned(),
+            openai_api_key: settings_map.get("openaiApiKey").cloned(),
+            claude_api_key: settings_map.get("claudeApiKey").cloned(),
+            gemini_api_key: settings_map.get("geminiApiKey").cloned(),
+            deepseek_api_key: settings_map.get("deepseekApiKey").cloned(),
+            openai_model: settings_map.get("openaiModel").cloned(),
+            claude_model: settings_map.get("claudeModel").cloned(),
+            gemini_model: settings_map.get("geminiModel").cloned(),
+            deepseek_model: settings_map.get("deepseekModel").cloned(),
+            ollama_address: settings_map.get("ollamaAddress").cloned(),
+            ollama_model: settings_map.get("ollamaModel").cloned(),
+            local_embedding_model: settings_map.get("localEmbeddingModel").cloned(),
+            min_summary_points: settings_map.get("minSummaryPoints").and_then(|v| v.parse().ok()),
+            max_summary_points: settings_map.get("maxSummaryPoints").and_then(|v| v.parse().ok()),
+        },
+    }, "Starting pipeline (background)").await;
+
+    end_pipeline(&state, &app);
+    result
+}
+
+#[tauri::command]
+fn set_auto_start(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| format!("Failed to enable auto-start: {}", e))?;
+    } else {
+        manager.disable().map_err(|e| format!("Failed to disable auto-start: {}", e))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_minimize_to_tray(app: tauri::AppHandle, state: tauri::State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    state.minimize_to_tray.store(enabled, Ordering::SeqCst);
+
+    if enabled {
+        if app.tray_by_id("main-tray").is_none() {
+            build_tray(&app)?;
+        }
+    } else {
+        if let Some(_tray) = app.tray_by_id("main-tray") {
+            drop(_tray);
+        }
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.show();
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_data_dir)?;
@@ -2774,12 +2966,20 @@ pub fn run() {
                 .and_then(|raw| serde_json::from_str::<HashMap<String, String>>(&raw).ok())
                 .and_then(|map| map.get("last_scrape_epoch").and_then(|s| s.parse::<u64>().ok()))
                 .map(|epoch| UNIX_EPOCH + Duration::from_secs(epoch));
+            let saved_minimize_to_tray = std::fs::read_to_string(&settings_path)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<HashMap<String, String>>(&raw).ok())
+                .and_then(|map| map.get("minimizeToTray").and_then(|v| v.parse::<bool>().ok()))
+                .unwrap_or(false);
+
             app.manage(AppState {
                 db: pool,
                 last_scrape: Mutex::new(last_scrape),
                 preference_embedding_cache: Mutex::new(HashMap::new()),
                 translation_cache: Mutex::new(HashMap::new()),
                 stop_requested: AtomicBool::new(false),
+                minimize_to_tray: AtomicBool::new(saved_minimize_to_tray),
+                is_pipeline_running: AtomicBool::new(false),
             });
 
             if let Ok(raw) = std::fs::read_to_string(&settings_path) {
@@ -2804,6 +3004,37 @@ pub fn run() {
                     }
                 }
             }
+
+            let app_handle = app.handle().clone();
+            let tray_app_handle = app.handle().clone();
+            if let Some(window) = app.get_webview_window("main") {
+                let state = app.state::<AppState>();
+                let minimize = state.minimize_to_tray.load(Ordering::SeqCst);
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        let should_minimize = app_handle
+                            .state::<AppState>()
+                            .minimize_to_tray
+                            .load(Ordering::SeqCst);
+                        if should_minimize {
+                            api.prevent_close();
+                            if let Some(w) = app_handle.get_webview_window("main") {
+                                let _ = w.hide();
+                            }
+                        }
+                    }
+                });
+                if minimize {
+                    build_tray(&tray_app_handle)
+                        .map_err(|e| -> Box<dyn std::error::Error> { Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)) })?;
+                }
+            }
+
+            let scheduler_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                crate::scheduler::auto_scrape_loop(scheduler_handle).await;
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2837,7 +3068,9 @@ pub fn run() {
             list_feed_sources_action,
             upsert_feed_source_action,
             remove_feed_source_action,
-            list_cloud_models
+            list_cloud_models,
+            set_auto_start,
+            set_minimize_to_tray
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

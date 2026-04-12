@@ -132,6 +132,13 @@ export function useAppStartup(): UseAppStartupReturn {
             return raw && !isNaN(n) ? Math.min(20, Math.max(1, n)) : defaults.concurrentLlmRequests;
           })(),
           processPastDateArticles: saved.processPastDateArticles === "true",
+          autoStartOnBoot: saved.autoStartOnBoot === "true",
+          minimizeToTray: saved.minimizeToTray === "true",
+          autoScrapeEnabled: saved.autoScrapeEnabled === "true",
+          autoScrapeFrequency: saved.autoScrapeFrequency === "daily" ? "daily" : "hourly",
+          autoScrapeHourInterval: saved.autoScrapeHourInterval ? Math.min(24, Math.max(1, Number(saved.autoScrapeHourInterval))) : defaults.autoScrapeHourInterval,
+          autoScrapeDayInterval: saved.autoScrapeDayInterval ? Math.min(30, Math.max(1, Number(saved.autoScrapeDayInterval))) : defaults.autoScrapeDayInterval,
+          autoScrapeTime: saved.autoScrapeTime?.match(/^\d{1,2}:\d{2}$/) ? saved.autoScrapeTime : defaults.autoScrapeTime,
         }));
         setSelectedEmbeddingModel(savedLocalEmbeddingModel || DEFAULT_EMBEDDING_MODEL);
         if (nextLayout) {
@@ -146,6 +153,8 @@ export function useAppStartup(): UseAppStartupReturn {
         if (persistedSortMode !== nextSortMode) {
           void settingsService.save("sortMode", nextSortMode);
         }
+
+        void settingsService.setAutoStart(saved.autoStartOnBoot === "true");
 
         if (savedLocalEmbeddingModel.length > 0) {
           void preloadEmbeddingOnStartup(savedLocalEmbeddingModel);

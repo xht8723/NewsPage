@@ -36,10 +36,10 @@ pub(crate) fn check_image_url(url: &str) -> Result<(), &'static str> {
 }
 
 /// Returns `true` if the thumbnail URL is missing or likely low quality.
-pub fn is_low_quality_thumbnail(url: &Option<String>) -> bool {
-    let url = match url {
-        Some(u) if !u.trim().is_empty() => u,
-        _ => return true, // no thumbnail
+pub fn is_low_quality_thumbnail(url: &str) -> bool {
+    let url = match url.trim() {
+        u if !u.is_empty() => u,
+        _ => return true,
     };
     let lower = url.to_ascii_lowercase();
     let bad_patterns = [
@@ -59,7 +59,7 @@ pub fn is_low_quality_thumbnail(url: &Option<String>) -> bool {
 /// verify the image is not suspiciously small (<10 KB).
 /// Returns `true` when the thumbnail should be replaced via DDG search.
 pub async fn should_fallback_to_ddg(url: &str) -> bool {
-    if is_low_quality_thumbnail(&Some(url.to_string())) {
+    if is_low_quality_thumbnail(url) {
         return true;
     }
 

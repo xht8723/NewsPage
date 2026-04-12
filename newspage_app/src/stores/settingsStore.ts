@@ -60,6 +60,13 @@ export function createDefaultSettings(): UserSettings {
     translationTargetLanguage: "en",
     concurrentLlmRequests: 5,
     processPastDateArticles: false,
+    autoStartOnBoot: false,
+    minimizeToTray: false,
+    autoScrapeEnabled: false,
+    autoScrapeFrequency: "hourly",
+    autoScrapeHourInterval: 1,
+    autoScrapeDayInterval: 1,
+    autoScrapeTime: "09:00",
   };
 }
 
