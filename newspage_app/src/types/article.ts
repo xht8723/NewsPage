@@ -25,6 +25,7 @@ export interface NewsArticle {
   date: string;
   timestamp: number;
   preferenceScore: number;
+  vote: 1 | -1 | null;
 }
 
 export interface BackendArticle {
@@ -44,6 +45,7 @@ export interface BackendArticle {
   snippet: string;
   status: "pending" | "enriched" | "failed";
   preference_score?: number;
+  vote?: number | null;
 }
 
 export interface FeedDefinition {
@@ -97,6 +99,7 @@ export interface UserSettings {
   autoScrapeDayInterval: number;
   autoScrapeTime: string;
   uiLanguage: string;
+  maxVotedArticles: number;
 }
 
 export interface LocalEmbeddingStatus {

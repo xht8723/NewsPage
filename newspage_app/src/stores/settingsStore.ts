@@ -68,6 +68,7 @@ export function createDefaultSettings(): UserSettings {
     autoScrapeDayInterval: 1,
     autoScrapeTime: "09:00",
     uiLanguage: "",
+    maxVotedArticles: 100,
   };
 }
 

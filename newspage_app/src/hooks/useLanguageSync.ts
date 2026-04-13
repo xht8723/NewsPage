@@ -3,26 +3,22 @@ import { useSettingsStore } from "../stores/settingsStore";
 import i18n from "../i18n";
 
 export function useLanguageSync(): void {
-  const settings = useSettingsStore((s) => s.settings);
+  const uiLanguage = useSettingsStore((s) => s.settings.uiLanguage);
   const saveSetting = useSettingsStore((s) => s.saveSetting);
 
   useEffect(() => {
-    const targetLang = settings.uiLanguage || i18n.language;
-    if (i18n.language !== targetLang && i18n.isInitialized) {
-      void i18n.changeLanguage(targetLang);
-    }
-  }, [settings.uiLanguage]);
+    if (!i18n.isInitialized) return;
 
-  useEffect(() => {
-    if (!settings.uiLanguage && i18n.isInitialized) {
+    if (!uiLanguage) {
       const detected = i18n.language;
-      if (detected === "zh-CN" || detected.startsWith("zh")) {
-        void i18n.changeLanguage("zh-CN");
-        saveSetting("uiLanguage", "zh-CN");
-      } else {
-        void i18n.changeLanguage("en");
-        saveSetting("uiLanguage", "en");
-      }
+      const resolved = detected === "zh-CN" || detected.startsWith("zh") ? "zh-CN" : "en";
+      void i18n.changeLanguage(resolved);
+      saveSetting("uiLanguage", resolved);
+      return;
     }
-  }, [settings.uiLanguage, saveSetting]);
+
+    if (i18n.language !== uiLanguage) {
+      void i18n.changeLanguage(uiLanguage);
+    }
+  }, [uiLanguage, saveSetting]);
 }

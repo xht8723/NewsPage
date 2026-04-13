@@ -27,4 +27,6 @@ pub struct RankedArticle {
     #[serde(flatten)]
     pub item: Article,
     pub preference_score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vote: Option<i32>,
 }

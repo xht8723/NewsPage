@@ -47,20 +47,25 @@ export function getProviderLabel(provider: string): string {
   return "Ollama";
 }
 
+const CATEGORY_COLORS: Record<string, { tw: string; hex: string }> = {
+  World:         { tw: "bg-sky-500/90",     hex: "#0ea5e9" },
+  Nation:        { tw: "bg-cyan-500/90",    hex: "#06b6d4" },
+  Business:      { tw: "bg-emerald-500/90", hex: "#10b981" },
+  Technology:    { tw: "bg-indigo-500/90",  hex: "#6366f1" },
+  Entertainment: { tw: "bg-fuchsia-500/90", hex: "#d946ef" },
+  Science:       { tw: "bg-amber-500/90",   hex: "#f59e0b" },
+  Sports:        { tw: "bg-orange-500/90",  hex: "#f97316" },
+  Health:        { tw: "bg-teal-500/90",    hex: "#14b8a6" },
+  Anime:         { tw: "bg-pink-500/90",    hex: "#ec4899" },
+  Gaming:        { tw: "bg-violet-500/90",  hex: "#8b5cf6" },
+};
+
+export const CATEGORY_HEX_COLORS: Record<string, string> = Object.fromEntries(
+  Object.entries(CATEGORY_COLORS).map(([key, val]) => [key, val.hex]),
+);
+
 function getTagColor(category: string): string {
-  const colors: Record<string, string> = {
-    World: "bg-sky-500/90",
-    Nation: "bg-cyan-500/90",
-    Business: "bg-emerald-500/90",
-    Technology: "bg-indigo-500/90",
-    Entertainment: "bg-fuchsia-500/90",
-    Science: "bg-amber-500/90",
-    Sports: "bg-orange-500/90",
-    Health: "bg-teal-500/90",
-    Anime: "bg-pink-500/90",
-    Gaming: "bg-violet-500/90",
-  };
-  return colors[category] ?? "bg-zinc-500/90";
+  return CATEGORY_COLORS[category]?.tw ?? "bg-zinc-500/90";
 }
 
 /**
@@ -97,10 +102,23 @@ export const TAG_COLOR_PRESETS: { label: string; hex: string }[] = [
  *  - { type: "hex"; value: string }  → use as inline style backgroundColor
  *  - { type: "class"; value: string } → use as Tailwind className
  */
+export type TagColorResult = { type: "hex"; value: string } | { type: "class"; value: string };
+
+export function buildTagColorMap(feedSources: FeedSource[]): Map<string, TagColorResult> {
+  const map = new Map<string, TagColorResult>();
+  for (const s of feedSources) {
+    const key = s.display_name.toLowerCase();
+    if (key && s.tag_color.trim() !== "") {
+      map.set(key, { type: "hex", value: s.tag_color.trim() });
+    }
+  }
+  return map;
+}
+
 export function resolveTagColor(
   category: string,
   feedSources: FeedSource[],
-): { type: "hex"; value: string } | { type: "class"; value: string } {
+): TagColorResult {
   const lowerCategory = category.toLowerCase();
   const match = feedSources.find(
     (s) => s.display_name.toLowerCase() === lowerCategory && s.tag_color.trim() !== "",
@@ -108,5 +126,15 @@ export function resolveTagColor(
   if (match) {
     return { type: "hex", value: match.tag_color.trim() };
   }
+  return { type: "class", value: getTagColor(category) };
+}
+
+export function resolveTagColorFromMap(
+  category: string,
+  colorMap: Map<string, TagColorResult>,
+): TagColorResult {
+  const lowerCategory = category.toLowerCase();
+  const match = colorMap.get(lowerCategory);
+  if (match) return match;
   return { type: "class", value: getTagColor(category) };
 }

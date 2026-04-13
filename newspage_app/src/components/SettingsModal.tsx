@@ -341,9 +341,44 @@ export function SettingsModal({
                         />
                         <span className="text-sm">{t("settings.minimizeToTray")}</span>
                       </label>
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium opacity-70">{t("settings.maxVotedArticles")}</label>
+                  <p className="mb-1.5 h-4 text-xs opacity-50 line-clamp-1">{t("settings.maxVotedArticlesHint")}</p>
+                  <div>
+                    <div className="relative h-6 w-full">
+                      <div className={`absolute top-1/2 h-1.5 w-full -translate-y-1/2 rounded-full ${isDarkMode ? "bg-zinc-700" : "bg-zinc-300"}`} />
+                      <div
+                        className={`absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full ${isDarkMode ? "bg-cyan-600/85" : "bg-emerald-500"}`}
+                        style={{ left: 0, width: `${((settings.maxVotedArticles - 10) / (500 - 10)) * 100}%` }}
+                      />
+                      <input
+                        type="range"
+                        min={10}
+                        max={500}
+                        step={10}
+                        value={settings.maxVotedArticles}
+                        onChange={(e) => {
+                          const val = Number(e.target.value);
+                          setSettings((s) => ({ ...s, maxVotedArticles: val }));
+                          saveSetting("maxVotedArticles", String(val));
+                        }}
+                        className={`absolute top-0 h-6 w-full appearance-none bg-transparent [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:cursor-pointer [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 ${
+                          isDarkMode
+                            ? "[&::-moz-range-thumb]:border-cyan-600 [&::-moz-range-thumb]:bg-zinc-900 [&::-webkit-slider-thumb]:border-cyan-600 [&::-webkit-slider-thumb]:bg-zinc-900"
+                            : "[&::-moz-range-thumb]:border-emerald-500 [&::-moz-range-thumb]:bg-white [&::-webkit-slider-thumb]:border-emerald-500 [&::-webkit-slider-thumb]:bg-white"
+                        }`}
+                      />
+                    </div>
+                    <div className="mt-1 flex items-center justify-between">
+                      <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>10</span>
+                      <span className={`text-xs font-semibold ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>{settings.maxVotedArticles}</span>
+                      <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>500</span>
                     </div>
                   </div>
                 </div>
+              </div>
               </div>
 
               <div className={`order-1 rounded-xl border p-4 lg:order-2 lg:col-span-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>

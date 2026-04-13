@@ -77,4 +77,7 @@ export const articleService = {
   purgeDatabase: (): Promise<void> => invoke("purge_database"),
 
   openAppDataDir: (): Promise<void> => invoke("open_app_data_dir"),
+
+  voteArticle: (articleId: string, direction: number, maxVotes: number): Promise<number | null> =>
+    invoke("vote_article", { articleId, direction, maxVotes: maxVotes }),
 };

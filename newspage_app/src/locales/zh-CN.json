@@ -86,8 +86,11 @@
     "reprocessing": "重新处理中...",
     "reprocess": "重新处理此新闻",
     "sourceAlreadyHidden": "\"{{source}}\" 已被隐藏",
-    "hideSource": "隐藏来自\"{{source}}\"的未来新闻",
-    "hideFuture": "隐藏来自 {{source}} 的未来新闻"
+    "hideSource": "隐藏来自\"{{source}}\"的新闻",
+    "likeTopic": "我喜欢这个主题",
+    "dislikeTopic": "我不喜欢这个主题",
+    "votedLike": "✓ 我喜欢这个主题",
+    "votedDislike": "✓ 我不喜欢这个主题"
   },
   "settings": {
     "preferences": "偏好设置",

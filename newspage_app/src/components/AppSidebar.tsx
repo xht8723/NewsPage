@@ -1,4 +1,5 @@
 import { Calendar, SlidersHorizontal } from "lucide-react";
+import { memo } from "react";
 import { useTranslation } from "react-i18next";
 import { offsetDateString } from "../utils/articleMeta";
 import { FeedNavigationList } from "./FeedNavigationList";
@@ -28,7 +29,7 @@ interface AppSidebarProps {
   onShowCalendar: () => void;
 }
 
-export function AppSidebar({
+function AppSidebarComponent({
   isDarkMode,
   availableFeeds,
   selectedFeedId,
@@ -139,3 +140,5 @@ export function AppSidebar({
     </aside>
   );
 }
+
+export const AppSidebar = memo(AppSidebarComponent);

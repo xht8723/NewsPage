@@ -1,14 +1,12 @@
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { X } from "lucide-react";
-import type { ProcessLogEntry } from "../types/article";
 import { usePanelTransition } from "../hooks/usePanelTransition";
+import { useNewsStore } from "../stores";
 
 interface LogPanelProps {
   isDarkMode: boolean;
-  logs: ProcessLogEntry[];
   isOpen: boolean;
-  onClear: () => void;
   onClose: () => void;
 }
 
@@ -34,8 +32,10 @@ function formatTimestamp(raw: string): string {
   });
 }
 
-export function LogPanel({ isDarkMode, logs, isOpen, onClear, onClose }: LogPanelProps): React.JSX.Element | null {
+export function LogPanel({ isDarkMode, isOpen, onClose }: LogPanelProps): React.JSX.Element | null {
   const { t } = useTranslation();
+  const logs = useNewsStore((s) => s.processLogs);
+  const setProcessLogs = useNewsStore((s) => s.setProcessLogs);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const { isMounted, isClosing } = usePanelTransition(isOpen, 170);
 
@@ -87,7 +87,7 @@ export function LogPanel({ isDarkMode, logs, isOpen, onClear, onClose }: LogPane
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={onClear}
+              onClick={() => setProcessLogs([])}
               className={`rounded-md border px-3 py-1 text-[10px] font-black uppercase tracking-widest transition-colors ${
                 isDarkMode
                   ? "border-zinc-700 text-zinc-300 hover:bg-zinc-800"

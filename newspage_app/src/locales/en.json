@@ -87,7 +87,10 @@
     "reprocess": "Re-process this news",
     "sourceAlreadyHidden": "\"{{source}}\" already hidden",
     "hideSource": "Hide future news from \"{{source}}\"",
-    "hideFuture": "Hide future news from {{source}}"
+    "likeTopic": "I like this topic",
+    "dislikeTopic": "I don't like this topic",
+    "votedLike": "✓ I liked this topic",
+    "votedDislike": "✓ I didn't like this topic"
   },
   "settings": {
     "preferences": "Preferences",
@@ -131,6 +134,8 @@
     "summaryBulletPoints": "Summary bullet points",
     "summaryRangeHint": "Range of bullet points per article summary.",
     "points": "points",
+    "maxVotedArticles": "Max voted articles",
+    "maxVotedArticlesHint": "Oldest votes are automatically removed when the limit is reached.",
     "mediaBlacklist": "Media Outlet Blacklist",
     "searchSource": "Search source name",
     "noBlacklisted": "No blacklisted sources yet.",

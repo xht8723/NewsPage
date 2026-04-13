@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Moon,
@@ -10,7 +10,7 @@ import {
   LayoutList,
   X,
 } from "lucide-react";
-import type { CardContextMenuState, FeedDefinition } from "./types/article";
+import type { CardContextMenuState, FeedDefinition, NewsArticle } from "./types/article";
 import { formatDateLocal, getProviderLabel } from "./utils/articleMeta";
 import { getFeedDisplayName } from "./utils/feedNames";
 import { getSelectedModel, getSelectedApiKey, getSelectedEndpoint } from "./utils/llmConfig";
@@ -24,29 +24,30 @@ import { useArticleFilter } from "./hooks/useArticleFilter";
 import { useLanguageSync } from "./hooks/useLanguageSync";
 import { LayoutSwitcher } from "./components/LayoutSwitcher";
 import { CardContextMenu } from "./components/CardContextMenu";
-import { SettingsModal } from "./components/SettingsModal";
-import { ArticleDetailModal } from "./components/ArticleDetailModal";
-import { CalendarModal } from "./components/CalendarModal";
-import { LogPanel } from "./components/LogPanel";
-import { CategoryLimitsModal } from "./components/CategoryLimitsModal";
-import { CustomRssFeedModal } from "./components/CustomRssFeedModal";
-import { FeedManagerPanel } from "./components/FeedManagerPanel";
 import { NeonCheckbox } from "./components/NeonCheckbox";
-import { VirtualizedArticleList } from "./components/VirtualizedArticleList";
 import { OnboardingGuide } from "./components/OnboardingGuide";
 import { StartupScreen } from "./components/StartupScreen";
 import { AppSidebar } from "./components/AppSidebar";
-import { FeedDeleteConfirmDialog } from "./components/FeedDeleteConfirmDialog";
 import { ConfigPopupDialog } from "./components/ConfigPopupDialog";
 
+const SettingsModal = lazy(() => import("./components/SettingsModal").then((m) => ({ default: m.SettingsModal })));
+const ArticleDetailModal = lazy(() => import("./components/ArticleDetailModal").then((m) => ({ default: m.ArticleDetailModal })));
+const CalendarModal = lazy(() => import("./components/CalendarModal").then((m) => ({ default: m.CalendarModal })));
+const LogPanel = lazy(() => import("./components/LogPanel").then((m) => ({ default: m.LogPanel })));
+const CategoryLimitsModal = lazy(() => import("./components/CategoryLimitsModal").then((m) => ({ default: m.CategoryLimitsModal })));
+const CustomRssFeedModal = lazy(() => import("./components/CustomRssFeedModal").then((m) => ({ default: m.CustomRssFeedModal })));
+const FeedDeleteConfirmDialog = lazy(() => import("./components/FeedDeleteConfirmDialog").then((m) => ({ default: m.FeedDeleteConfirmDialog })));
+const FeedManagerPanel = lazy(() => import("./components/FeedManagerPanel").then((m) => ({ default: m.FeedManagerPanel })));
+import { VirtualizedArticleList } from "./components/VirtualizedArticleList";
+
 import type { TranslationRuntimeConfig } from "./hooks/useLiveTranslation";
-import { normalizeSourceName, toNormalizedSourceSet } from "./utils/sourceBlacklist";
+import { normalizeSourceName } from "./utils/sourceBlacklist";
 import { articleService, llmService } from "./services";
 import { useFeedStore, useNewsStore, useUIStore, useSettingsStore } from "./stores";
 import { createDefaultSettings } from "./stores/settingsStore";
 import "./App.css";
 
-function App(): React.JSX.Element {
+function App() {
   const { t } = useTranslation();
   useLanguageSync();
   const isDarkMode = useUIStore((s) => s.isDarkMode);
@@ -94,11 +95,9 @@ function App(): React.JSX.Element {
   const selectedArticle = useNewsStore((s) => s.selectedArticle);
   const reprocessingArticleId = useNewsStore((s) => s.reprocessingArticleId);
   const stageStatus = useNewsStore((s) => s.stageStatus);
-  const processLogs = useNewsStore((s) => s.processLogs);
   const setEnrichmentError = useNewsStore((s) => s.setEnrichmentError);
   const setRelevanceWarning = useNewsStore((s) => s.setRelevanceWarning);
   const setSelectedArticle = useNewsStore((s) => s.setSelectedArticle);
-  const setProcessLogs = useNewsStore((s) => s.setProcessLogs);
   const setStageStatus = useNewsStore((s) => s.setStageStatus);
 
   const settings = useSettingsStore((s) => s.settings);
@@ -114,6 +113,7 @@ function App(): React.JSX.Element {
   const [dontAskFeedDeleteAgain, setDontAskFeedDeleteAgain] = useState(false);
   const [purgeConfirmStep, setPurgeConfirmStep] = useState<0 | 1 | 2>(0);
   const [isPurging, setIsPurging] = useState(false);
+  const [voteVersion, setVoteVersion] = useState(0);
 
   const translatePanelRef = useRef<HTMLDivElement | null>(null);
   const todayString = formatDateLocal(new Date());
@@ -149,12 +149,7 @@ function App(): React.JSX.Element {
 
   const articleFilter = useArticleFilter({ news, setNews, selectedDate });
 
-  const availableFeeds = useMemo(
-    () => [...feeds]
-      .filter((feed) => feed.is_visible)
-      .sort((left, right) => left.sort_order - right.sort_order),
-    [feeds],
-  );
+  const availableFeeds = articleFilter.availableFeeds;
 
   const selectedFeedName = useMemo(
     () => {
@@ -177,12 +172,9 @@ function App(): React.JSX.Element {
     model: getSelectedModel(settings),
     apiKey: getSelectedApiKey(settings),
     endpoint: getSelectedEndpoint(settings),
-  }), [settings]);
+  }), [settings.llmProvider, settings.ollamaAddress, settings.ollamaModel, settings.openaiApiKey, settings.openaiModel, settings.claudeApiKey, settings.claudeModel, settings.geminiApiKey, settings.geminiModel, settings.deepseekApiKey, settings.deepseekModel]);
 
-  const blacklistedSources = useMemo(
-    () => toNormalizedSourceSet(settings.sourceBlacklist),
-    [settings.sourceBlacklist],
-  );
+  const blacklistedSources = articleFilter.blacklistedSources;
 
   useEffect(() => {
     if (startupPhase === "ready" && !isEmbeddingConfigured) {
@@ -301,10 +293,14 @@ function App(): React.JSX.Element {
 
     updateByPointerType();
 
+    let rafId = 0;
     const handleMouseMove = (event: MouseEvent) => {
       if (coarsePointerQuery.matches) return;
-      const nearBottom = window.innerHeight - event.clientY <= 140;
-      setShowLayoutSwitcher((current) => (current === nearBottom ? current : nearBottom));
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        const nearBottom = window.innerHeight - event.clientY <= 140;
+        setShowLayoutSwitcher((current) => (current === nearBottom ? current : nearBottom));
+      });
     };
 
     const handleMouseLeaveWindow = (event: MouseEvent) => {
@@ -320,6 +316,7 @@ function App(): React.JSX.Element {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseout", handleMouseLeaveWindow);
       coarsePointerQuery.removeEventListener("change", updateByPointerType);
+      cancelAnimationFrame(rafId);
     };
   }, []);
 
@@ -327,7 +324,6 @@ function App(): React.JSX.Element {
     if (settings.sortMode !== "score") return;
     const liked = settings.likedConcepts.split(",").map((s) => s.trim()).filter(Boolean);
     const disliked = settings.dislikedConcepts.split(",").map((s) => s.trim()).filter(Boolean);
-    if (liked.length === 0 && disliked.length === 0) return;
 
     const timeout = window.setTimeout(async () => {
       if (news.length === 0) return;
@@ -341,20 +337,38 @@ function App(): React.JSX.Element {
           localEmbeddingModel: settings.localEmbeddingModel,
         });
         const scoreMap = Object.fromEntries(scorePairs);
-        setNews((prev) => prev.map((a) => ({
-          ...a,
-          preferenceScore: scoreMap[a.id] ?? a.preferenceScore,
-        })));
+        setNews((prev) => prev.map((a) => {
+          const newScore = scoreMap[a.id];
+          return newScore !== undefined && Math.abs(newScore - a.preferenceScore) > 0.0001
+            ? { ...a, preferenceScore: newScore }
+            : a;
+        }));
         setRelevanceWarning(null);
       } catch (error) {
         if (String(error).includes("RELEVANCE_EMBEDDING_UNAVAILABLE")) {
           newsProcessor.disableRelevanceSort(String(error));
         }
       }
-    }, 300);
+    }, 800);
 
     return () => window.clearTimeout(timeout);
-  }, [settings.sortMode, settings.likedConcepts, settings.dislikedConcepts, settings.localEmbeddingModel, news.length]);
+  }, [settings.sortMode, settings.likedConcepts, settings.dislikedConcepts, settings.localEmbeddingModel, news.length, voteVersion]);
+
+  const handleVote = useCallback(async (articleId: string, direction: 1 | -1) => {
+    const article = news.find((a) => a.id === articleId);
+    if (!article) return;
+    const newDirection = article.vote === direction ? 0 : direction;
+    try {
+      await articleService.voteArticle(articleId, newDirection, settings.maxVotedArticles);
+      setNews((prev) => prev.map((a) =>
+        a.id === articleId
+          ? { ...a, vote: newDirection === 0 ? null : newDirection }
+          : a
+      ));
+      setVoteVersion((v) => v + 1);
+    } catch {
+    }
+  }, [news, setNews, settings.maxVotedArticles]);
 
   const openSettingsFromGuide = useCallback(() => {
     setShowOnboardingGuide(false);
@@ -399,6 +413,23 @@ function App(): React.JSX.Element {
     }, 150);
   }, [selectedDate, fetchEnrichedNews, setIsFilterTransitioning]);
 
+  const handleSelectFeed = useCallback((feedId: string) => {
+    setSelectedFeedId(feedId);
+    saveSetting("selectedFeedId", feedId);
+  }, [setSelectedFeedId, saveSetting]);
+
+  const handleToggleCategoryManager = useCallback(() => {
+    setShowCategoryManager((current) => !current);
+  }, [setShowCategoryManager]);
+
+  const handleShowCalendar = useCallback(() => {
+    setShowCalendar(true);
+  }, [setShowCalendar]);
+
+  const handleOpenContextMenu = useCallback((article: NewsArticle, x: number, y: number) => {
+    setContextMenu({ article, x, y });
+  }, [setContextMenu]);
+
   if (startupPhase !== "ready") {
     return (
       <StartupScreen
@@ -423,18 +454,15 @@ function App(): React.JSX.Element {
         canGoToNextDay={canGoToNextDay}
         settings={settings}
         isRelevanceMode={isRelevanceMode}
-        onSelectFeed={(feedId) => {
-          setSelectedFeedId(feedId);
-          saveSetting("selectedFeedId", feedId);
-        }}
+        onSelectFeed={handleSelectFeed}
         onReorderFeedByDrag={feedManager.reorderFeedByDrag}
         onRenameFeed={feedManager.renameFeed}
         onToggleFeedVisibility={feedManager.toggleFeedVisibility}
-        onToggleCategoryManager={() => setShowCategoryManager((current) => !current)}
+        onToggleCategoryManager={handleToggleCategoryManager}
         onSetSortMode={articleFilter.setSortMode}
         onSetPreferenceConcepts={articleFilter.setPreferenceConcepts}
         onSetDate={handleSetDate}
-        onShowCalendar={() => setShowCalendar(true)}
+        onShowCalendar={handleShowCalendar}
       />
 
       <main className="flex h-screen flex-col overflow-hidden p-4 pb-24 md:ml-64 md:p-8">
@@ -603,9 +631,7 @@ function App(): React.JSX.Element {
             isTransitioning={isFilterTransitioning}
             shiftingArticleId={newsProcessor.shiftingArticleId}
             onSelectArticle={setSelectedArticle}
-            onOpenContextMenu={(article, x, y) => {
-              setContextMenu({ article, x, y });
-            }}
+            onOpenContextMenu={handleOpenContextMenu}
           />
         </section>
 
@@ -619,6 +645,7 @@ function App(): React.JSX.Element {
           isClosing={contextMenuTransition.isClosing}
           reprocessingArticleId={reprocessingArticleId}
           isSourceBlacklisted={blacklistedSources.has(normalizeSourceName(contextMenuView.article.sourceName))}
+          sortMode={settings.sortMode}
           onClose={() => setContextMenu(null)}
           onReprocess={(articleId) => {
             const article = news.find((item) => item.id === articleId);
@@ -627,67 +654,71 @@ function App(): React.JSX.Element {
             }
           }}
           onHideSource={articleFilter.handleHideSourceFromFutureNews}
+          onVote={handleVote}
         />
       )}
 
-      <SettingsModal
-        showSettings={showSettings}
-        isDarkMode={isDarkMode}
-        settings={settings}
-        setSettings={setSettings}
-        saveSetting={saveSetting}
-        ollamaConnectionState={llm.ollamaConnectionState}
-        setOllamaConnectionState={llm.setOllamaConnectionState}
-        isTestingOllama={llm.isTestingOllama}
-        testOllamaConnection={llm.testOllamaConnection}
-        ollamaModels={llm.ollamaModels}
-        isRefreshingModels={llm.isRefreshingModels}
-        refreshOllamaModels={llm.refreshOllamaModels}
-        localEmbeddingModels={llm.localEmbeddingModels}
-        selectedEmbeddingModel={selectedEmbeddingModel}
-        onSelectEmbeddingModel={setSelectedEmbeddingModel}
-        localEmbeddingStatus={llm.localEmbeddingStatus}
-        isPreparingLocalEmbeddingModel={llm.isPreparingLocalEmbeddingModel}
-        onPrepareLocalEmbeddingModel={llm.prepareLocalEmbeddingModel}
-        isEmbeddingConfigured={isEmbeddingConfigured}
-        purgeConfirmStep={purgeConfirmStep}
-        setPurgeConfirmStep={setPurgeConfirmStep}
-        isPurging={isPurging}
-        setIsPurging={setIsPurging}
-        onPurgeDatabase={() => handleCleanReset()}
-        onOpenCategoryLimits={() => setShowCategoryLimitsManager(true)}
-        feedSources={feedSources}
-        onOpenCustomRssFeedSettings={() => setShowCustomRssFeedSettings(true)}
-        cloudModels={llm.cloudModels}
-        refreshCloudModels={llm.refreshCloudModels}
-        onClose={() => {
-          setShowSettings(false);
-          setPurgeConfirmStep(0);
-        }}
-        scrollToEmbedding={settingsScrollToEmbedding}
-        onScrollConsumed={() => setSettingsScrollToEmbedding(false)}
-        showOnboardingHints={showSettingsHints}
-      />
+      <Suspense fallback={null}>
+        <SettingsModal
+          showSettings={showSettings}
+          isDarkMode={isDarkMode}
+          settings={settings}
+          setSettings={setSettings}
+          saveSetting={saveSetting}
+          ollamaConnectionState={llm.ollamaConnectionState}
+          setOllamaConnectionState={llm.setOllamaConnectionState}
+          isTestingOllama={llm.isTestingOllama}
+          testOllamaConnection={llm.testOllamaConnection}
+          ollamaModels={llm.ollamaModels}
+          isRefreshingModels={llm.isRefreshingModels}
+          refreshOllamaModels={llm.refreshOllamaModels}
+          localEmbeddingModels={llm.localEmbeddingModels}
+          selectedEmbeddingModel={selectedEmbeddingModel}
+          onSelectEmbeddingModel={setSelectedEmbeddingModel}
+          localEmbeddingStatus={llm.localEmbeddingStatus}
+          isPreparingLocalEmbeddingModel={llm.isPreparingLocalEmbeddingModel}
+          onPrepareLocalEmbeddingModel={llm.prepareLocalEmbeddingModel}
+          isEmbeddingConfigured={isEmbeddingConfigured}
+          purgeConfirmStep={purgeConfirmStep}
+          setPurgeConfirmStep={setPurgeConfirmStep}
+          isPurging={isPurging}
+          setIsPurging={setIsPurging}
+          onPurgeDatabase={() => handleCleanReset()}
+          onOpenCategoryLimits={() => setShowCategoryLimitsManager(true)}
+          feedSources={feedSources}
+          onOpenCustomRssFeedSettings={() => setShowCustomRssFeedSettings(true)}
+          cloudModels={llm.cloudModels}
+          refreshCloudModels={llm.refreshCloudModels}
+          onClose={() => {
+            setShowSettings(false);
+            setPurgeConfirmStep(0);
+          }}
+          scrollToEmbedding={settingsScrollToEmbedding}
+          onScrollConsumed={() => setSettingsScrollToEmbedding(false)}
+          showOnboardingHints={showSettingsHints}
+        />
 
-      <CategoryLimitsModal
-        show={showCategoryLimitsManager}
-        isDarkMode={isDarkMode}
-        settings={settings}
-        setSettings={setSettings}
-        saveSetting={saveSetting}
-        onClose={() => setShowCategoryLimitsManager(false)}
-      />
+        <CategoryLimitsModal
+          show={showCategoryLimitsManager}
+          isDarkMode={isDarkMode}
+          settings={settings}
+          setSettings={setSettings}
+          saveSetting={saveSetting}
+          onClose={() => setShowCategoryLimitsManager(false)}
+        />
 
-      <CustomRssFeedModal
-        show={showCustomRssFeedSettings}
-        isDarkMode={isDarkMode}
-        feedSources={feedSources}
-        onRefresh={feedManager.loadRssSources}
-        onClose={() => setShowCustomRssFeedSettings(false)}
-      />
+        <CustomRssFeedModal
+          show={showCustomRssFeedSettings}
+          isDarkMode={isDarkMode}
+          feedSources={feedSources}
+          onRefresh={feedManager.loadRssSources}
+          onClose={() => setShowCustomRssFeedSettings(false)}
+        />
+      </Suspense>
 
       {categoryManagerTransition.isMounted && (
-        <div
+        <Suspense fallback={null}>
+          <div
           className={`${categoryManagerTransition.isClosing ? "popup-overlay-out" : "popup-overlay"} fixed inset-0 z-[110] flex items-center justify-center bg-black/65 p-4`}
           onClick={() => setShowCategoryManager(false)}
         >
@@ -777,28 +808,31 @@ function App(): React.JSX.Element {
             </div>
           </div>
         </div>
+        </Suspense>
       )}
 
-      <ArticleDetailModal
-        selectedArticle={selectedArticle}
-        feedSources={feedSources}
-        isDarkMode={isDarkMode}
-        reprocessingArticleId={reprocessingArticleId}
-        liveTranslationEnabled={settings.liveTranslationEnabled}
-        translationTargetLanguage={settings.translationTargetLanguage}
-        translationRuntime={translationRuntime}
-        onClose={() => setSelectedArticle(null)}
-        onOpenUrl={(url) => { void articleService.openUrl(url); }}
-        onReprocessArticle={(article) => { void newsProcessor.reprocessArticle(article); }}
-      />
+      <Suspense fallback={null}>
+        <ArticleDetailModal
+          selectedArticle={selectedArticle}
+          feedSources={feedSources}
+          isDarkMode={isDarkMode}
+          reprocessingArticleId={reprocessingArticleId}
+          liveTranslationEnabled={settings.liveTranslationEnabled}
+          translationTargetLanguage={settings.translationTargetLanguage}
+          translationRuntime={translationRuntime}
+          onClose={() => setSelectedArticle(null)}
+          onOpenUrl={(url) => { void articleService.openUrl(url); }}
+          onReprocessArticle={(article) => { void newsProcessor.reprocessArticle(article); }}
+        />
 
-      <CalendarModal
-        showCalendar={showCalendar}
-        isDarkMode={isDarkMode}
-        selectedDate={selectedDate}
-        onSelectDate={handleSetDate}
-        onClose={() => setShowCalendar(false)}
-      />
+        <CalendarModal
+          showCalendar={showCalendar}
+          isDarkMode={isDarkMode}
+          selectedDate={selectedDate}
+          onSelectDate={handleSetDate}
+          onClose={() => setShowCalendar(false)}
+        />
+      </Suspense>
 
       {configPopupTransition.isMounted && (
         <ConfigPopupDialog
@@ -810,7 +844,8 @@ function App(): React.JSX.Element {
       )}
 
       {pendingFeedDeletionTransition.isMounted && pendingFeedDeletionView && (
-        <FeedDeleteConfirmDialog
+        <Suspense fallback={null}>
+          <FeedDeleteConfirmDialog
           isDarkMode={isDarkMode}
           isClosing={pendingFeedDeletionTransition.isClosing}
           feed={pendingFeedDeletionView}
@@ -832,17 +867,16 @@ function App(): React.JSX.Element {
           }}
           onCancel={() => setPendingFeedDeletion(null)}
         />
+        </Suspense>
       )}
 
-      <LogPanel
-        isDarkMode={isDarkMode}
-        isOpen={showLogPanel}
-        logs={processLogs}
-        onClear={() => {
-          setProcessLogs([]);
-        }}
-        onClose={() => setShowLogPanel(false)}
-      />
+      <Suspense fallback={null}>
+        <LogPanel
+          isDarkMode={isDarkMode}
+          isOpen={showLogPanel}
+          onClose={() => setShowLogPanel(false)}
+        />
+      </Suspense>
 
       <OnboardingGuide
         show={showOnboardingGuide}

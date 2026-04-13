@@ -3,8 +3,12 @@ use crate::db::{
     create_feed,
     delete_feed,
     delete_html_to_rss_rule,
+    get_all_votes,
     get_article_by_id,
+    get_embeddings_for_articles,
     get_unenriched_articles_by_category_and_language,
+    get_vote,
+    get_votes_for_articles,
     list_feed_sources,
     list_feeds_with_topics,
     list_subscribed_news_categories,
@@ -13,6 +17,7 @@ use crate::db::{
     list_unenriched_languages_by_category,
     remove_feed_source,
     remove_rss_category_from_all_feeds,
+    remove_vote,
     rename_feed,
     reorder_feeds,
     seed_default_feeds,
@@ -21,6 +26,7 @@ use crate::db::{
     upsert_article,
     upsert_feed_source,
     upsert_html_to_rss_rule,
+    upsert_vote,
     HtmlToRssRule,
 };
 use crate::article::{Article, RankedArticle};
@@ -1880,9 +1886,17 @@ async fn get_enriched_articles(
         items.retain(|item| is_on_local_day(&item.date, date_utc_day));
     }
 
+    let ids: Vec<String> = items.iter().map(|a| a.id.clone()).collect();
+    let votes = get_votes_for_articles(&state.db, &ids)
+        .await
+        .map_err(|e| format!("DB vote read error: {}", e))?;
+
     Ok(items
         .into_iter()
-        .map(|item| RankedArticle { item, preference_score: 0.0 })
+        .map(|item| {
+            let vote = votes.get(&item.id).copied();
+            RankedArticle { item, preference_score: 0.0, vote }
+        })
         .collect())
 }
 
@@ -1906,7 +1920,13 @@ async fn compute_preference_scores(
         .collect();
 
     if liked.is_empty() && disliked.is_empty() {
-        return Ok(vec![]);
+        let has_votes = !get_all_votes(&state.db)
+            .await
+            .map_err(|e| format!("DB vote read error: {}", e))?
+            .is_empty();
+        if !has_votes {
+            return Ok(vec![]);
+        }
     }
 
     let embedding_model = local_embedding_model
@@ -1976,6 +1996,29 @@ async fn compute_preference_scores(
         }
     }
 
+    let all_votes = get_all_votes(&state.db)
+        .await
+        .map_err(|e| format!("DB vote read error: {}", e))?;
+    let upvoted_ids: Vec<&str> = all_votes.iter().filter(|(_, v)| *v == 1).map(|(id, _)| id.as_str()).collect();
+    let downvoted_ids: Vec<&str> = all_votes.iter().filter(|(_, v)| *v == -1).map(|(id, _)| id.as_str()).collect();
+
+    if !upvoted_ids.is_empty() {
+        let upvoted_embs = get_embeddings_for_articles(&state.db, &upvoted_ids)
+            .await
+            .map_err(|e| format!("DB vote embedding read error: {}", e))?;
+        for (_, emb) in upvoted_embs {
+            liked_vecs.push(emb);
+        }
+    }
+    if !downvoted_ids.is_empty() {
+        let downvoted_embs = get_embeddings_for_articles(&state.db, &downvoted_ids)
+            .await
+            .map_err(|e| format!("DB vote embedding read error: {}", e))?;
+        for (_, emb) in downvoted_embs {
+            disliked_vecs.push(emb);
+        }
+    }
+
     if liked_vecs.is_empty() && disliked_vecs.is_empty() {
         return Err(format!(
             "{}: Relevance sort unavailable because preference embeddings could not be generated",
@@ -2016,7 +2059,32 @@ async fn get_enriched_article_by_id(
     Ok(RankedArticle {
         item: article,
         preference_score: 0.0,
+        vote: get_vote(&state.db, &id).await.map_err(|e| format!("DB vote read error: {}", e))?,
     })
+}
+
+#[tauri::command]
+async fn vote_article(
+    state: tauri::State<'_, AppState>,
+    article_id: String,
+    direction: i32,
+    max_votes: Option<i64>,
+) -> Result<Option<i32>, String> {
+    if direction != 1 && direction != -1 && direction != 0 {
+        return Err("direction must be 1 (upvote), -1 (downvote), or 0 (remove vote)".to_string());
+    }
+    if direction == 0 {
+        remove_vote(&state.db, &article_id)
+            .await
+            .map_err(|e| format!("DB vote remove error: {}", e))?;
+        Ok(None)
+    } else {
+        let cap = max_votes.unwrap_or(100).clamp(10, 5000);
+        upsert_vote(&state.db, &article_id, direction, cap)
+            .await
+            .map_err(|e| format!("DB vote upsert error: {}", e))?;
+        Ok(Some(direction))
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -3419,6 +3487,7 @@ pub fn run() {
             get_enriched_articles,
             get_enriched_article_by_id,
             compute_preference_scores,
+            vote_article,
             list_feeds,
             create_feed_action,
             rename_feed_action,

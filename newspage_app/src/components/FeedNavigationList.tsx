@@ -13,6 +13,7 @@ import { ChevronRight, EyeOff, GripVertical, Pencil } from "lucide-react";
 import type { FeedDefinition } from "../types/article";
 import { getFeedDisplayName } from "../utils/feedNames";
 import { usePanelTransition } from "../hooks/usePanelTransition";
+import { useClampedMenuPosition } from "../hooks/useClampedMenuPosition";
 import { useFeedDragReorder } from "../hooks/useFeedDragReorder";
 
 interface FeedNavigationListProps {
@@ -79,6 +80,9 @@ export const FeedNavigationList = memo(function FeedNavigationListComponent({
 }: FeedNavigationListProps): React.JSX.Element {
   const { t } = useTranslation();
   const [feedContextMenu, setFeedContextMenu] = useState<{ feedId: string; x: number; y: number } | null>(null);
+  const feedMenuRef = useRef<HTMLDivElement>(null);
+  const feedMenuPos = feedContextMenu ?? { x: 0, y: 0 };
+  useClampedMenuPosition(feedMenuRef, feedMenuPos.x, feedMenuPos.y);
   const [feedContextMenuClosing, setFeedContextMenuClosing] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renamingFeed, setRenamingFeed] = useState<FeedDefinition | null>(null);
@@ -245,6 +249,7 @@ export const FeedNavigationList = memo(function FeedNavigationListComponent({
         onClick={closeContextMenu}
       >
         <div
+          ref={feedMenuRef}
           className={`${feedContextMenuClosing ? "popup-panel-pop-out" : "popup-panel-pop"} absolute min-w-[180px] rounded-xl border p-2 shadow-2xl ${
             isDarkMode ? "border-zinc-700 bg-zinc-900 text-zinc-200" : "border-zinc-300 bg-zinc-150 text-zinc-900"
           }`}

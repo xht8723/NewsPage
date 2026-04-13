@@ -86,10 +86,6 @@ export interface SaveHtmlToRssRuleRequest {
   author_selector: string;
 }
 
-export interface DeleteHtmlToRssRuleRequest {
-  url: string;
-}
-
 export const feedService = {
   list: (): Promise<FeedDefinition[]> => invoke("list_feeds"),
 
@@ -128,6 +124,4 @@ export const feedService = {
   saveHtmlToRssRule: (request: SaveHtmlToRssRuleRequest): Promise<void> =>
     invoke("save_html_to_rss_rule_action", { request }),
 
-  deleteHtmlToRssRule: (request: DeleteHtmlToRssRuleRequest): Promise<void> =>
-    invoke("delete_html_to_rss_rule_action", { request }),
 };

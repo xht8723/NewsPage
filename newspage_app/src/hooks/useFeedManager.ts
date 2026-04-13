@@ -27,7 +27,8 @@ export function useFeedManager(): UseFeedManagerReturn {
     try {
       const rows = await feedService.list();
       setFeeds(rows);
-    } catch (_error) {
+    } catch (error) {
+      console.error("[useFeedManager] Failed to load feeds:", error);
     }
   }, [setFeeds]);
 
@@ -35,7 +36,8 @@ export function useFeedManager(): UseFeedManagerReturn {
     try {
       const sources = await feedService.listSources();
       setFeedSources(sources);
-    } catch (_error) {
+    } catch (error) {
+      console.error("[useFeedManager] Failed to load RSS sources:", error);
     }
   }, [setFeedSources]);
 
@@ -51,8 +53,13 @@ export function useFeedManager(): UseFeedManagerReturn {
   }, [loadFeeds]);
 
   const deleteFeed = useCallback(async (feedId: string) => {
-    await feedService.delete({ feed_id: feedId });
-    await loadFeeds();
+    try {
+      await feedService.delete({ feed_id: feedId });
+      await loadFeeds();
+    } catch (error) {
+      console.error("[useFeedManager] Failed to delete feed:", error);
+      throw error;
+    }
   }, [loadFeeds]);
 
   const requestDeleteFeed = useCallback((feedId: string) => {

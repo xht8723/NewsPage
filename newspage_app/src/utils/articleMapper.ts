@@ -68,5 +68,6 @@ export function mapBackendArticle(item: BackendArticle): NewsArticle {
     date: getUtcDateKey(item.date),
     timestamp: Number.isNaN(parsedTimestamp) ? Date.now() : parsedTimestamp,
     preferenceScore: item.preference_score ?? 0,
+    vote: item.vote === 1 ? 1 : item.vote === -1 ? -1 : null,
   };
 }

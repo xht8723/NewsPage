@@ -1,5 +1,6 @@
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -173,9 +174,10 @@ let pool = SqlitePoolOptions::new()
 .connect_with(options)
 .await?;
 create_article_schema(&pool).await?;
-create_feed_tables(&pool).await?;
-create_cloud_models_table(&pool).await?;
-seed_default_feeds(&pool).await?;
+    create_vote_schema(&pool).await?;
+    create_feed_tables(&pool).await?;
+    create_cloud_models_table(&pool).await?;
+    seed_default_feeds(&pool).await?;
 logging::info("DB", format!("Initialized SQLite database at {}", db_path), None);
 Ok(pool)
 }
@@ -831,6 +833,127 @@ pub async fn get_cloud_models_fetched_at(pool: &SqlitePool, provider: &str) -> R
     .fetch_optional(pool)
     .await?;
     Ok(row)
+}
+
+pub async fn create_vote_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS article_votes (
+            article_id TEXT PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
+            vote INTEGER NOT NULL CHECK(vote IN (1, -1)),
+            voted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn upsert_vote(pool: &SqlitePool, article_id: &str, vote: i32, max_votes: i64) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO article_votes (article_id, vote) VALUES (?1, ?2)
+         ON CONFLICT(article_id) DO UPDATE SET vote = excluded.vote, voted_at = CURRENT_TIMESTAMP",
+    )
+    .bind(article_id)
+    .bind(vote)
+    .execute(pool)
+    .await?;
+
+    if max_votes > 0 {
+        sqlx::query(
+            "DELETE FROM article_votes WHERE article_id NOT IN (
+                SELECT article_id FROM article_votes ORDER BY voted_at DESC LIMIT ?1
+            )",
+        )
+        .bind(max_votes)
+        .execute(pool)
+        .await?;
+    }
+
+    Ok(())
+}
+
+pub async fn remove_vote(pool: &SqlitePool, article_id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM article_votes WHERE article_id = ?1")
+        .bind(article_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn get_all_votes(pool: &SqlitePool) -> Result<Vec<(String, i32)>, sqlx::Error> {
+    let rows = sqlx::query("SELECT article_id, vote FROM article_votes")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let id: String = row.get("article_id");
+            let vote: i32 = row.get("vote");
+            (id, vote)
+        })
+        .collect())
+}
+
+pub async fn get_votes_for_articles(pool: &SqlitePool, article_ids: &[String]) -> Result<HashMap<std::string::String, i32>, sqlx::Error> {
+    if article_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let placeholders: Vec<&str> = article_ids.iter().map(|_| "?").collect();
+    let sql = format!(
+        "SELECT article_id, vote FROM article_votes WHERE article_id IN ({})",
+        placeholders.join(",")
+    );
+    let mut query = sqlx::query(&sql);
+    for id in article_ids {
+        query = query.bind(id);
+    }
+    let rows = query.fetch_all(pool).await?;
+    let mut map = HashMap::new();
+    for row in &rows {
+        let id: String = row.get("article_id");
+        let vote: i32 = row.get("vote");
+        map.insert(id, vote);
+    }
+    Ok(map)
+}
+
+pub async fn get_vote(pool: &SqlitePool, article_id: &str) -> Result<Option<i32>, sqlx::Error> {
+    let row = sqlx::query_scalar::<_, i32>(
+        "SELECT vote FROM article_votes WHERE article_id = ?1",
+    )
+    .bind(article_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn get_embeddings_for_articles(
+    pool: &SqlitePool,
+    article_ids: &[&str],
+) -> Result<Vec<(String, Vec<f32>)>, sqlx::Error> {
+    if article_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders: Vec<&str> = article_ids.iter().map(|_| "?").collect();
+    let sql = format!(
+        "SELECT id, embedding FROM articles WHERE id IN ({}) AND embedding IS NOT NULL",
+        placeholders.join(",")
+    );
+    let mut query = sqlx::query(&sql);
+    for id in article_ids {
+        query = query.bind(*id);
+    }
+    let rows = query.fetch_all(pool).await?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let id: String = row.get("id");
+            let embedding: Option<Vec<u8>> = row.try_get("embedding").ok().flatten();
+            embedding
+                .filter(|b| !b.is_empty())
+                .map(|b| (id, decode_embedding(&b)))
+        })
+        .collect())
 }
 
 pub async fn create_article_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {

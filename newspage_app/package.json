@@ -23,7 +23,6 @@
     "react-dom": "^19.1.0",
     "react-i18next": "^17.0.2",
     "react-markdown": "^10.1.0",
-    "react-window": "^2.2.7",
     "zustand": "^5.0.12"
   },
   "devDependencies": {
@@ -31,7 +30,6 @@
     "@tauri-apps/cli": "^2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
-    "@types/react-window": "^1.8.8",
     "@vitejs/plugin-react": "^4.6.0",
     "autoprefixer": "^10.4.27",
     "postcss": "^8.5.8",

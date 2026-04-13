@@ -201,7 +201,6 @@
 
 /* Scroll performance optimization */
 .news-scroll {
-	scroll-behavior: smooth;
 	contain: layout style paint;
 }
 

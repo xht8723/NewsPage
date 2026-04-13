@@ -6,8 +6,10 @@ import i18n from "../i18n";
 import { ARTICLE_THUMBNAIL_FALLBACK_URL, type LayoutMode } from "../constants/article";
 import { useImageFallback } from "../hooks/useImageFallback";
 import { useLiveTranslation, type TranslationRuntimeConfig } from "../hooks/useLiveTranslation";
-import type { FeedSource, NewsArticle } from "../types/article";
-import { resolveTagColor } from "../utils/articleMeta";
+import type { NewsArticle } from "../types/article";
+import { type TagColorResult, resolveTagColorFromMap } from "../utils/articleMeta";
+
+type TagColorMap = Map<string, TagColorResult>;
 
 function formatRelativeTime(timestamp: number, language: string): string {
   const now = Date.now();
@@ -38,7 +40,7 @@ function formatExactDateTime(timestamp: number, language: string): string {
 
 interface ArticleCardProps {
   item: NewsArticle;
-  feedSources: FeedSource[];
+  tagColorMap: TagColorMap;
   layout: LayoutMode;
   isDarkMode: boolean;
   sortMode: string;
@@ -53,7 +55,7 @@ interface ArticleCardProps {
 
 function ArticleCardComponent({
   item,
-  feedSources,
+  tagColorMap,
   layout,
   isDarkMode,
   sortMode,
@@ -86,7 +88,7 @@ function ArticleCardComponent({
     runtime: translationRuntime,
   });
 
-  const tagColor = resolveTagColor(item.category, feedSources);
+  const tagColor = resolveTagColorFromMap(item.category, tagColorMap);
 
   return (
     <div
@@ -97,7 +99,7 @@ function ArticleCardComponent({
         event.preventDefault();
         onOpenContextMenu(item, event.clientX, event.clientY);
       }}
-      className={`group cursor-pointer rounded-2xl border transition-all hover:shadow-lg ${
+      className={`group cursor-pointer rounded-2xl border transition-[border-color,box-shadow] hover:shadow-lg ${
         isDarkMode ? "border-zinc-800 bg-zinc-900 hover:border-zinc-600" : "border-zinc-200 bg-white hover:border-zinc-300"
       } ${isListLayout ? "flex flex-col gap-4 p-4 md:flex-row" : isCompactListLayout ? "flex flex-col gap-2 px-3 py-2.5" : "flex flex-col"}${isNew ? " article-new-marker" : ""}`}
     >
@@ -207,7 +209,7 @@ function areEqual(prevProps: ArticleCardProps, nextProps: ArticleCardProps): boo
     prevProps.item.preferenceScore === nextProps.item.preferenceScore &&
     prevProps.item.sourceName === nextProps.item.sourceName &&
     prevProps.item.language === nextProps.item.language &&
-    prevProps.feedSources === nextProps.feedSources &&
+    prevProps.tagColorMap === nextProps.tagColorMap &&
     prevProps.layout === nextProps.layout &&
     prevProps.isDarkMode === nextProps.isDarkMode &&
     prevProps.sortMode === nextProps.sortMode &&

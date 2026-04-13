@@ -11,22 +11,10 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import { ArrowDown, ArrowUp, ChevronRight, Eye, EyeOff, GripVertical, Pencil, Plus, Trash2 } from "lucide-react";
 import { TOPIC_CATEGORIES } from "../constants/article";
+import { CATEGORY_HEX_COLORS } from "../utils/articleMeta";
 import type { FeedDefinition, FeedSource } from "../types/article";
 import { getFeedDisplayName } from "../utils/feedNames";
 import { useFeedDragReorder } from "../hooks/useFeedDragReorder";
-
-const CATEGORY_HEX: Record<string, string> = {
-  World: "#0ea5e9",
-  Nation: "#06b6d4",
-  Business: "#10b981",
-  Technology: "#6366f1",
-  Entertainment: "#d946ef",
-  Science: "#f59e0b",
-  Sports: "#f97316",
-  Health: "#14b8a6",
-  Anime: "#ec4899",
-  Gaming: "#8b5cf6",
-};
 
 function inactivePillClass(isDarkMode: boolean): string {
   return `rounded-md border px-2 py-1 text-[10px] font-bold uppercase tracking-wide transition-all duration-200 hover:scale-[1.03] ${
@@ -47,6 +35,13 @@ function RssPillButton({ active, tagColor, isDarkMode, title, children, onClick 
   const [hovered, setHovered] = useState(false);
   const hex = tagColor.trim() || "#71717a";
 
+  const hoverStyle = useMemo(() =>
+    hovered
+      ? { backgroundColor: hex + "18", borderColor: hex + "70", color: hex, boxShadow: `0 0 7px ${hex}30` }
+      : undefined,
+    [hovered, hex],
+  );
+
   if (active) {
     return (
       <button
@@ -60,10 +55,6 @@ function RssPillButton({ active, tagColor, isDarkMode, title, children, onClick 
       </button>
     );
   }
-
-  const hoverStyle = hovered
-    ? { backgroundColor: hex + "18", borderColor: hex + "70", color: hex, boxShadow: `0 0 7px ${hex}30` }
-    : undefined;
 
   return (
     <button
@@ -399,7 +390,7 @@ export function FeedManagerPanel({
                         <RssPillButton
                           key={`${feed.id}-${category}`}
                           active={active}
-                          tagColor={CATEGORY_HEX[category] || "#71717a"}
+                          tagColor={CATEGORY_HEX_COLORS[category] || "#71717a"}
                           isDarkMode={isDarkMode}
                           title={active ? t("feedManager.removeFromFeed", { category }) : t("feedManager.includeInFeed", { category })}
                           onClick={async () => {
