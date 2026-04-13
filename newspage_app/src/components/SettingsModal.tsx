@@ -1,8 +1,11 @@
 import { FolderOpen, RefreshCw, Search, Settings, Sparkles, Trash2, X } from "lucide-react";
 import { CustomSelect } from "./CustomSelect";
 import { DotsSpinner } from "./DotsSpinner";
+import { getEmbeddingStatusMessage } from "../utils/embeddingStatus";
+import { LanguageSwitcher } from "./LanguageSwitcher";
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { addSourceToBlacklist, normalizeSourceName, removeSourceFromBlacklist } from "../utils/sourceBlacklist";
 import { NeonCheckbox } from "./NeonCheckbox";
 import {
@@ -87,6 +90,7 @@ export function SettingsModal({
   cloudModels,
   refreshCloudModels,
 }: SettingsModalProps): React.JSX.Element | null {
+  const { t } = useTranslation();
   const { isMounted, isClosing } = usePanelTransition(showSettings, 170);
 
   // Refs for scroll-to and bubble positioning
@@ -205,8 +209,8 @@ export function SettingsModal({
     (localEmbeddingStatus.active_model ?? "").toLowerCase() === effectiveEmbeddingModel.toLowerCase();
   const downloadButtonDisabled = embeddingIsBusy || isEmbeddingConfigured;
   const embeddingModelTooltip = isEmbeddingConfigured
-    ? "Embedding model is locked after setup to keep relevance sorting consistent. Use Clean Reset in the Danger Zone to choose a different model."
-    : "Select the local embedding model used for relevance sorting.";
+    ? t("settings.embeddingTooltipLocked")
+    : t("settings.embeddingTooltipUnlocked");
   const APP_VERSION = "0.1.0";
   const FRONTEND_VERSION = "0.1.0";
   const APP_IDENTIFIER = "com.newspage";
@@ -227,7 +231,7 @@ export function SettingsModal({
         >
           <div className="flex items-center gap-2">
             <Settings size={18} className="text-zinc-500" />
-            <h3 className="text-base font-bold uppercase tracking-widest">Preferences</h3>
+            <h3 className="text-base font-bold uppercase tracking-widest">{t("settings.preferences")}</h3>
           </div>
           <button onClick={onClose} className="hover:opacity-50">
             <X size={18} />
@@ -238,7 +242,7 @@ export function SettingsModal({
             {/* General Settings */}
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-10">
               <div className={`order-2 rounded-xl border p-4 lg:order-1 lg:col-span-7 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
-                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>General Settings</p>
+                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{t("settings.generalSettings")}</p>
                 <div className="space-y-3">
                   <div>
                     <button
@@ -273,10 +277,10 @@ export function SettingsModal({
                               settings.aiModeEnabled
                                 ? isDarkMode ? "text-cyan-300" : "text-emerald-700"
                                 : isDarkMode ? "text-zinc-400" : "text-zinc-500"
-                            }`}>AI Mode</p>
+                            }`}>{t("settings.aiMode")}</p>
                             <p className={`text-[11px] transition-colors duration-200 ${
                               isDarkMode ? "text-zinc-500" : "text-zinc-400"
-                            }`}>Summarise, tag and rank articles with LLM</p>
+                            }`}>{t("settings.aiModeDescription")}</p>
                           </div>
                         </div>
                         <span className={`shrink-0 rounded-md px-2.5 py-1 text-[11px] font-bold uppercase tracking-widest transition-all duration-200 ${
@@ -284,13 +288,17 @@ export function SettingsModal({
                             ? isDarkMode ? "bg-cyan-800/60 text-cyan-300" : "bg-emerald-200 text-emerald-700"
                             : isDarkMode ? "bg-zinc-700 text-zinc-500" : "bg-zinc-200 text-zinc-400"
                         }`}>
-                          {settings.aiModeEnabled ? "ON" : "OFF"}
+                          {settings.aiModeEnabled ? t("common.on") : t("common.off")}
                         </span>
                       </div>
-                    </button>
+</button>
                   </div>
                   <div>
-                    <label className="mb-1.5 block text-xs font-medium opacity-70">Deletion confirmation</label>
+                    <label className="mb-1.5 block text-xs font-medium opacity-70">{t("settings.language")}</label>
+                    <LanguageSwitcher isDarkMode={isDarkMode} />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-xs font-medium opacity-70">{t("settings.deletionConfirmation")}</label>
                     <label className="flex cursor-pointer items-center gap-2">
                       <NeonCheckbox
                         checked={settings.showFeedDeletionConfirmation}
@@ -299,13 +307,13 @@ export function SettingsModal({
                           saveSetting("showFeedDeletionConfirmation", checked ? "true" : "false");
                         }}
                         isDarkMode={isDarkMode}
-                        ariaLabel="Show deletion confirmation"
+                        ariaLabel={t("settings.showDeletionConfirmation")}
                       />
-                      <span className="text-sm">Show deletion confirmation</span>
+                      <span className="text-sm">{t("settings.showDeletionConfirmation")}</span>
                     </label>
                   </div>
                   <div>
-                    <label className="mb-1.5 block text-xs font-medium opacity-70">Startup &amp; Behavior</label>
+                    <label className="mb-1.5 block text-xs font-medium opacity-70">{t("settings.startupBehavior")}</label>
                     <div className="space-y-2">
                       <label className="flex cursor-pointer items-center gap-2">
                         <NeonCheckbox
@@ -316,9 +324,9 @@ export function SettingsModal({
                             void settingsService.setAutoStart(checked);
                           }}
                           isDarkMode={isDarkMode}
-                          ariaLabel="Start app on system start"
+                          ariaLabel={t("settings.startOnBoot")}
                         />
-                        <span className="text-sm">Start app on system start</span>
+                        <span className="text-sm">{t("settings.startOnBoot")}</span>
                       </label>
                       <label className="flex cursor-pointer items-center gap-2">
                         <NeonCheckbox
@@ -329,9 +337,9 @@ export function SettingsModal({
                             void settingsService.setMinimizeToTray(checked);
                           }}
                           isDarkMode={isDarkMode}
-                          ariaLabel="Run in system tray when closing"
+                          ariaLabel={t("settings.minimizeToTray")}
                         />
-                        <span className="text-sm">Run in system tray when closing</span>
+                        <span className="text-sm">{t("settings.minimizeToTray")}</span>
                       </label>
                     </div>
                   </div>
@@ -345,27 +353,27 @@ export function SettingsModal({
                       <img src="/icon.png" alt="NewsPage logo" className="h-10 w-10 rounded object-contain" />
                     </div>
                     <div className="min-w-0">
-                      <p className={`text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Info</p>
-                      <h4 className={`truncate text-sm font-bold ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>NewsPage</h4>
-                      <p className={`mt-0.5 text-[11px] ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>AI desktop news reader</p>
+                      <p className={`text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{t("settings.info")}</p>
+                      <h4 className={`truncate text-sm font-bold ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{t("settings.appName")}</h4>
+                      <p className={`mt-0.5 text-[11px] ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>{t("settings.appDescription")}</p>
                     </div>
                   </div>
 
                   <div className="mt-3 space-y-1.5 text-xs">
                     <div className="flex items-center justify-between gap-3">
-                      <span className={isDarkMode ? "text-zinc-500" : "text-zinc-500"}>Version</span>
+                      <span className={isDarkMode ? "text-zinc-500" : "text-zinc-500"}>{t("settings.version")}</span>
                       <span className={isDarkMode ? "text-zinc-200" : "text-zinc-800"}>{APP_VERSION}</span>
                     </div>
                     <div className="flex items-center justify-between gap-3">
-                      <span className={isDarkMode ? "text-zinc-500" : "text-zinc-500"}>Frontend</span>
+                      <span className={isDarkMode ? "text-zinc-500" : "text-zinc-500"}>{t("settings.frontend")}</span>
                       <span className={isDarkMode ? "text-zinc-200" : "text-zinc-800"}>Vite {FRONTEND_VERSION}</span>
                     </div>
                     <div className="flex items-center justify-between gap-3">
-                      <span className={isDarkMode ? "text-zinc-500" : "text-zinc-500"}>Desktop</span>
+                      <span className={isDarkMode ? "text-zinc-500" : "text-zinc-500"}>{t("settings.desktop")}</span>
                       <span className={isDarkMode ? "text-zinc-200" : "text-zinc-800"}>Tauri 2</span>
                     </div>
                     <div className="flex items-center justify-between gap-3">
-                      <span className={isDarkMode ? "text-zinc-500" : "text-zinc-500"}>Identifier</span>
+                      <span className={isDarkMode ? "text-zinc-500" : "text-zinc-500"}>{t("settings.identifier")}</span>
                       <span className={`truncate text-right ${isDarkMode ? "text-zinc-200" : "text-zinc-800"}`}>{APP_IDENTIFIER}</span>
                     </div>
                   </div>
@@ -382,7 +390,7 @@ export function SettingsModal({
                           : "text-zinc-700 hover:text-zinc-900"
                       }`}
                     >
-                      GitHub Repository
+                      {t("settings.githubRepo")}
                     </button>
                   </div>
                 </div>
@@ -391,7 +399,7 @@ export function SettingsModal({
 
             {/* Auto-Scrape Schedule */}
             <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
-              <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Auto-Scrape Schedule</p>
+              <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{t("settings.autoScrapeSchedule")}</p>
               <div className="space-y-3">
                 <label className="flex cursor-pointer items-center gap-2">
                   <NeonCheckbox
@@ -401,18 +409,18 @@ export function SettingsModal({
                       saveSetting("autoScrapeEnabled", checked ? "true" : "false");
                     }}
                     isDarkMode={isDarkMode}
-                    ariaLabel="Enable automatic scraping"
-                  />
-                  <span className="text-sm">Enable automatic scraping</span>
+ariaLabel={t("settings.enableAutoScrape")}
+                   />
+                   <span className="text-sm">{t("settings.enableAutoScrape")}</span>
                 </label>
                 {settings.autoScrapeEnabled && (
                   <div className="space-y-3 pl-1">
                     <div>
-                      <label className="mb-1.5 block text-xs font-medium opacity-70">Frequency</label>
+                      <label className="mb-1.5 block text-xs font-medium opacity-70">{t("settings.frequency")}</label>
                       <CustomSelect
                         options={[
-                          { value: "hourly", label: "Hourly" },
-                          { value: "daily", label: "Daily" },
+                          { value: "hourly", label: t("settings.hourly") },
+                          { value: "daily", label: t("settings.daily") },
                         ]}
                         value={settings.autoScrapeFrequency}
                         onChange={(val) => {
@@ -425,54 +433,54 @@ export function SettingsModal({
                     </div>
                     {settings.autoScrapeFrequency === "hourly" && (
                       <div>
-                        <label className="mb-1.5 block text-xs font-medium opacity-70">Repeat every</label>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            min={1}
-                            max={24}
-                            value={settings.autoScrapeHourInterval}
-                            onChange={(e) => {
-                              const val = Math.min(24, Math.max(1, Number(e.target.value)));
-                              setSettings((s) => ({ ...s, autoScrapeHourInterval: val }));
-                              saveSetting("autoScrapeHourInterval", String(val));
-                            }}
-                            className={`number-dial-${isDarkMode ? "dark" : "light"} w-20 rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
-                              isDarkMode
-                                ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                                : "border-zinc-300 bg-zinc-200 text-zinc-900"
-                            }`}
-                          />
-                          <span className="text-xs opacity-70">hours</span>
+<label className="mb-1.5 block text-xs font-medium opacity-70">{t("settings.repeatEvery")}</label>
+                         <div className="flex items-center gap-2">
+                           <input
+                             type="number"
+                             min={1}
+                             max={24}
+                             value={settings.autoScrapeHourInterval}
+                             onChange={(e) => {
+                               const val = Math.min(24, Math.max(1, Number(e.target.value)));
+                               setSettings((s) => ({ ...s, autoScrapeHourInterval: val }));
+                               saveSetting("autoScrapeHourInterval", String(val));
+                             }}
+                             className={`number-dial-${isDarkMode ? "dark" : "light"} w-20 rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
+                               isDarkMode
+                                 ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                                 : "border-zinc-300 bg-zinc-200 text-zinc-900"
+                             }`}
+                           />
+                           <span className="text-xs opacity-70">{t("settings.hours")}</span>
                         </div>
                       </div>
                     )}
                     {settings.autoScrapeFrequency === "daily" && (
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div>
-                          <label className="mb-1.5 block text-xs font-medium opacity-70">Repeat every</label>
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="number"
-                              min={1}
-                              max={30}
-                              value={settings.autoScrapeDayInterval}
-                              onChange={(e) => {
-                                const val = Math.min(30, Math.max(1, Number(e.target.value)));
-                                setSettings((s) => ({ ...s, autoScrapeDayInterval: val }));
-                                saveSetting("autoScrapeDayInterval", String(val));
-                              }}
-                              className={`number-dial-${isDarkMode ? "dark" : "light"} w-20 rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
-                                isDarkMode
-                                  ? "border-zinc-700 bg-zinc-800 text-zinc-100"
-                                  : "border-zinc-300 bg-zinc-200 text-zinc-900"
-                              }`}
-                            />
-                            <span className="text-xs opacity-70">days</span>
+<label className="mb-1.5 block text-xs font-medium opacity-70">{t("settings.repeatEvery")}</label>
+                           <div className="flex items-center gap-2">
+                             <input
+                               type="number"
+                               min={1}
+                               max={30}
+                               value={settings.autoScrapeDayInterval}
+                               onChange={(e) => {
+                                 const val = Math.min(30, Math.max(1, Number(e.target.value)));
+                                 setSettings((s) => ({ ...s, autoScrapeDayInterval: val }));
+                                 saveSetting("autoScrapeDayInterval", String(val));
+                               }}
+                               className={`number-dial-${isDarkMode ? "dark" : "light"} w-20 rounded-lg border px-3 py-2 text-sm font-semibold focus:outline-none ${
+                                 isDarkMode
+                                   ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                                   : "border-zinc-300 bg-zinc-200 text-zinc-900"
+                               }`}
+                             />
+                             <span className="text-xs opacity-70">{t("settings.days")}</span>
                           </div>
                         </div>
                         <div>
-                          <label className="mb-1.5 block text-xs font-medium opacity-70">At time</label>
+                          <label className="mb-1.5 block text-xs font-medium opacity-70">{t("settings.atTime")}</label>
                           <div className="flex items-center gap-2">
                             <CustomSelect
                               options={Array.from({ length: 24 }, (_, i) => ({
@@ -505,7 +513,7 @@ export function SettingsModal({
                               isDarkMode={isDarkMode}
                               className="w-20"
                             />
-                            <span className="text-[11px] opacity-50">Hour&nbsp;&middot;&nbsp;Min</span>
+                            <span className="text-[11px] opacity-50">{t("settings.hourMin")}</span>
                           </div>
                         </div>
                       </div>
@@ -518,10 +526,10 @@ export function SettingsModal({
             {/* Article Settings + Media Outlet Blacklist */}
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
-              <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Article Settings</p>
+              <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{t("settings.articleSettings")}</p>
               <div className="space-y-3">
                 <div>
-                  <label className="mb-1.5 block text-xs font-medium opacity-70">Number of news per category per pull</label>
+                  <label className="mb-1.5 block text-xs font-medium opacity-70">{t("settings.newsPerCategory")}</label>
                   <div className="flex items-center gap-2">
                     <input
                       type="number"
@@ -548,13 +556,13 @@ export function SettingsModal({
                           : "border-zinc-300 bg-zinc-200 text-zinc-700"
                       }`}
                     >
-                      Detailed
+                      {t("settings.detailed")}
                     </button>
                   </div>
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-xs font-medium opacity-70">Process past date articles</label>
-                  <p className="mb-1.5 text-xs opacity-50">Include articles from previous dates in the feed</p>
+                  <label className="mb-1.5 block text-xs font-medium opacity-70">{t("settings.processPastDate")}</label>
+                  <p className="mb-1.5 text-xs opacity-50">{t("settings.processPastDateHint")}</p>
                   <label className="flex cursor-pointer items-center gap-2">
                     <NeonCheckbox
                       checked={settings.processPastDateArticles}
@@ -563,14 +571,14 @@ export function SettingsModal({
                         saveSetting("processPastDateArticles", checked ? "true" : "false");
                       }}
                       isDarkMode={isDarkMode}
-                      ariaLabel="Process past date articles"
+                      ariaLabel={t("settings.processPastDate")}
                     />
-                    <span className="text-xs font-medium">Process past date articles</span>
+                    <span className="text-xs font-medium">{t("settings.processPastDate")}</span>
                   </label>
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-xs font-medium opacity-70">Scrape cooldown (hours)</label>
-                  <p className="mb-1.5 text-xs opacity-50">Min time between website scrapes. 0 = always scrape.</p>
+                  <label className="mb-1.5 block text-xs font-medium opacity-70">{t("settings.scrapeCooldown")}</label>
+                  <p className="mb-1.5 text-xs opacity-50">{t("settings.scrapeCooldownHint")}</p>
                   <div>
                     <div className="relative h-6 w-full">
                       <div className={`absolute top-1/2 h-1.5 w-full -translate-y-1/2 rounded-full ${isDarkMode ? "bg-zinc-700" : "bg-zinc-300"}`} />
@@ -605,8 +613,8 @@ export function SettingsModal({
                 </div>
                 <div className="grid grid-cols-2 gap-4 items-start">
                   <div>
-                    <label className="mb-1.5 block text-xs font-medium opacity-70">LLM batch size</label>
-                    <p className="mb-1.5 h-4 text-xs opacity-50 line-clamp-1">{settings.llmBatchSize} article{settings.llmBatchSize !== 1 ? "s" : ""} per prompt.</p>
+                    <label className="mb-1.5 block text-xs font-medium opacity-70">{t("settings.llmBatchSize")}</label>
+                    <p className="mb-1.5 h-4 text-xs opacity-50 line-clamp-1">{t("settings.articlesPerPrompt", { count: settings.llmBatchSize })}</p>
                     <div>
                       <div className="relative h-6 w-full">
                         <div className={`absolute top-1/2 h-1.5 w-full -translate-y-1/2 rounded-full ${isDarkMode ? "bg-zinc-700" : "bg-zinc-300"}`} />
@@ -640,8 +648,8 @@ export function SettingsModal({
                     </div>
                   </div>
                   <div>
-                    <label className="mb-1.5 block text-xs font-medium opacity-70">Concurrent requests</label>
-                    <p className="mb-1.5 h-4 text-xs opacity-50 line-clamp-1">Max parallel calls for cloud providers.</p>
+                    <label className="mb-1.5 block text-xs font-medium opacity-70">{t("settings.concurrentRequests")}</label>
+                    <p className="mb-1.5 h-4 text-xs opacity-50 line-clamp-1">{t("settings.maxParallelCalls")}</p>
                     <div>
                       <div className="relative h-6 w-full">
                         <div className={`absolute top-1/2 h-1.5 w-full -translate-y-1/2 rounded-full ${isDarkMode ? "bg-zinc-700" : "bg-zinc-300"}`} />
@@ -676,8 +684,8 @@ export function SettingsModal({
                   </div>
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-xs font-medium opacity-70">Summary bullet points</label>
-                  <p className="mb-1.5 text-xs opacity-50">Range of bullet points per article summary.</p>
+                  <label className="mb-1.5 block text-xs font-medium opacity-70">{t("settings.summaryBulletPoints")}</label>
+                  <p className="mb-1.5 text-xs opacity-50">{t("settings.summaryRangeHint")}</p>
                   {(() => {
                     const SLIDER_MIN = 1;
                     const SLIDER_MAX = 20;
@@ -734,7 +742,7 @@ export function SettingsModal({
                         </div>
                         <div className="mt-1 flex items-center justify-between">
                           <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{SLIDER_MIN}</span>
-                          <span className={`text-xs font-semibold ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>{minVal} &ndash; {maxVal} points</span>
+                          <span className={`text-xs font-semibold ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>{minVal} &ndash; {maxVal} {t("settings.points")}</span>
                           <span className={`text-[10px] ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{SLIDER_MAX}</span>
                         </div>
                       </div>
@@ -745,7 +753,7 @@ export function SettingsModal({
              </div>
 
               <div className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
-                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Media Outlet Blacklist</p>
+                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{t("settings.mediaBlacklist")}</p>
                 <div className="space-y-2">
                   {/* Search + Clear All */}
                   <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_auto]">
@@ -753,7 +761,7 @@ export function SettingsModal({
                       <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 opacity-50" />
                       <input
                         type="text"
-                        placeholder="Search source name"
+                        placeholder={t("settings.searchSource")}
                         value={blacklistQuery}
                         onChange={(e) => setBlacklistQuery(e.target.value)}
                         className={`w-full rounded-lg border py-2 pl-8 pr-3 text-xs focus:outline-none ${
@@ -769,7 +777,7 @@ export function SettingsModal({
                       disabled={settings.sourceBlacklist.length === 0}
                       className="rounded-lg bg-red-600 px-3 py-2 text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      Clear All
+{t("common.clearAll")}
                     </button>
                   </div>
 
@@ -777,7 +785,7 @@ export function SettingsModal({
                   <div className={`max-h-40 overflow-y-auto rounded-xl border news-scroll ${isDarkMode ? "news-scroll-dark border-zinc-800" : "news-scroll-light border-zinc-200"}`}>
                     {filteredBlacklistSources.length === 0 ? (
                       <p className={`p-3 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-                        {settings.sourceBlacklist.length === 0 ? "No blacklisted sources yet." : "No sources match your search."}
+                        {settings.sourceBlacklist.length === 0 ? t("settings.noBlacklisted") : t("settings.noSourcesMatch")}
                       </p>
                     ) : (
                       <div className={`divide-y ${isDarkMode ? "divide-zinc-800/70" : "divide-zinc-200"}`}>
@@ -793,7 +801,7 @@ export function SettingsModal({
                                   : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
                               }`}
                             >
-                              <Trash2 size={11} /> Remove
+                              <Trash2 size={11} /> {t("common.remove")}
                             </button>
                           </div>
                         ))}
@@ -805,7 +813,7 @@ export function SettingsModal({
                   <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_auto]">
                     <input
                       type="text"
-                      placeholder="Add source name manually"
+                      placeholder={t("settings.addManually")}
                       value={blacklistDraft}
                       onChange={(e) => setBlacklistDraft(e.target.value)}
                       onKeyDown={(e) => {
@@ -826,7 +834,7 @@ export function SettingsModal({
                           : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
                       }`}
                     >
-                      Add
+{t("common.add")}
                     </button>
                   </div>
                 </div>
@@ -844,9 +852,9 @@ export function SettingsModal({
                   } ${googleNewsVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
                     <div className="flex items-start justify-between gap-3">
                       <p className="text-xs leading-relaxed">
-                        <strong className={isDarkMode ? "text-white" : "text-cyan-600"}>Choose your regions for news!</strong> 
+                        <strong className={isDarkMode ? "text-white" : "text-cyan-600"}>{t("settings.chooseRegions")}</strong> 
                         <br />{}
-                        Multiple regions supported!
+                        {t("settings.multipleRegions")}
                       </p>
                       <button
                         type="button"
@@ -858,8 +866,8 @@ export function SettingsModal({
                     </div>
                   </div>
                 )}
-                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Google News Regions</p>
-                <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>Select regions for Google News sources</p>
+                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{t("settings.googleNewsRegions")}</p>
+                <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>{t("settings.selectRegions")}</p>
                 <div className="space-y-2">
                   {AVAILABLE_REGIONS.map((region) => {
                     const checked = settings.selectedRegions.includes(region.id);
@@ -876,15 +884,15 @@ export function SettingsModal({
                           }}
                           isDarkMode={isDarkMode}
                           size="sm"
-                          ariaLabel={`Toggle ${region.label}`}
-                        />
-                        <span className="text-sm">{region.label}</span>
+ariaLabel={`Toggle ${t(region.labelKey)}`}
+                         />
+                        <span className="text-sm">{t(region.labelKey)}</span>
                       </label>
                     );
                   })}
                 </div>
                 {settings.selectedRegions.length === 0 && (
-                  <p className="mt-2 text-xs text-amber-500">No regions selected. Google News RSS will be skipped during scraping.</p>
+                  <p className="mt-2 text-xs text-amber-500">{t("settings.noRegionsSelected")}</p>
                 )}
               </div>
 
@@ -898,8 +906,8 @@ export function SettingsModal({
                   } ${rssVisible ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
                     <div className="flex items-start justify-between gap-3">
                       <p className="text-xs leading-relaxed">
-                        <strong className={isDarkMode ? "text-white" : "text-cyan-600"}>Add your own RSS sources!</strong>
-                        <br />{} Or select what we provides!
+                        <strong className={isDarkMode ? "text-white" : "text-cyan-600"}>{t("settings.rssBubbleTitle")}</strong>
+                        <br />{} {t("settings.rssBubbleSubtitle")}
                       </p>
                       <button
                         type="button"
@@ -911,9 +919,9 @@ export function SettingsModal({
                     </div>
                   </div>
                 )}
-                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>RSS Feed Settings</p>
+                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{t("settings.rssFeedSettings")}</p>
                 <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
-                  Configure custom RSS feeds. Assign sources to feeds in Feed Settings.
+                  {t("settings.rssFeedHint")}
                 </p>
                 <div className="space-y-2">
                   <button
@@ -925,8 +933,8 @@ export function SettingsModal({
                         : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
                     }`}
                   >
-                    <span>Custom RSS Feed</span>
-                    <span className="text-[10px] opacity-70">{feedSources.filter((s) => ["ann", "automaton", "gcores", "yys", "custom_rss"].includes(s.source_type)).length} saved</span>
+                    <span>{t("settings.customRssFeed")}</span>
+                    <span className="text-[10px] opacity-70">{t("settings.saved", { count: feedSources.filter((s) => ["ann", "automaton", "gcores", "yys", "custom_rss"].includes(s.source_type)).length })}</span>
                   </button>
                 </div>
               </div>
@@ -934,10 +942,10 @@ export function SettingsModal({
 
             <div className={`grid grid-cols-1 gap-4 ${settings.aiModeEnabled ? "lg:grid-cols-2" : "lg:grid-cols-1"}`}>
               <div ref={embeddingSectionRef} className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
-                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Embedding Settings</p>
+                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{t("settings.embeddingSettings")}</p>
                 <div className="space-y-3">
                   <div>
-                    <label className="mb-1.5 block text-xs font-medium opacity-70">Local Embedding Model (Relevance)</label>
+                    <label className="mb-1.5 block text-xs font-medium opacity-70">{t("settings.localEmbeddingModel")}</label>
                     <select
                       value={effectiveEmbeddingModel}
                       disabled={embeddingSelectionLocked}
@@ -961,7 +969,7 @@ export function SettingsModal({
                     </select>
                     {!embeddingSelectionLocked && (
                       <p className={`mt-2 text-[11px] ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
-                        Choose your embedding model and click Download Model. The model is only saved after the download succeeds.
+                        {t("settings.chooseModel")}
                       </p>
                     )}
                     <div className="mt-2 flex items-start justify-end">
@@ -976,13 +984,11 @@ export function SettingsModal({
                         } shrink-0 disabled:opacity-50 ${showOnboardingHints && !downloadButtonDisabled && !embeddingIsBusy ? "embedding-download-glow" : ""}`}
                       >
                         <RefreshCw size={12} className={embeddingIsBusy ? "animate-spin" : ""} />
-                        {embeddingIsBusy ? "Preparing..." : selectedModelReady ? "Downloaded" : "Download Model"}
+                        {embeddingIsBusy ? t("settings.preparing") : selectedModelReady ? t("settings.downloaded") : t("settings.downloadModel")}
                       </button>
                     </div>
                     <p className={`mt-2 break-all text-[11px] ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
-                      {localEmbeddingStatus
-                        ? localEmbeddingStatus.message
-                        : "Model status unavailable"}
+                      {getEmbeddingStatusMessage(localEmbeddingStatus)}
                     </p>
                     {embeddingIsBusy && (
                       <DotsSpinner size={20} className="mt-3 text-zinc-500" />
@@ -999,7 +1005,7 @@ export function SettingsModal({
                       }`}
                     >
                       <FolderOpen className="h-4 w-4 shrink-0" />
-                      Open App Data Folder
+                      {t("settings.openAppDataFolder")}
                     </button>
                   </div>
                 </div>
@@ -1007,10 +1013,10 @@ export function SettingsModal({
 
               {settings.aiModeEnabled && (
                 <div ref={llmSectionRef} className={`rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"} ${llmGlowing ? "llm-section-glow" : ""}`}>
-                  <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>LLM Provider Settings</p>
+                  <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{t("settings.llmProviderSettings")}</p>
                   <div className="space-y-3">
                     <div>
-                      <label className="mb-1.5 block text-xs font-medium opacity-70">LLM Provider</label>
+                      <label className="mb-1.5 block text-xs font-medium opacity-70">{t("settings.llmProvider")}</label>
                       <select
                         value={settings.llmProvider}
                         onChange={(e) => {
@@ -1024,7 +1030,7 @@ export function SettingsModal({
                             : "border-zinc-300 bg-zinc-200 text-zinc-900"
                         }`}
                       >
-                        <option value="ollama">Ollama (Local)</option>
+                        <option value="ollama">{t("settings.ollamaLocal")}</option>
                         <option value="openai">OpenAI</option>
                         <option value="claude">Claude (Anthropic)</option>
                         <option value="gemini">Google Gemini</option>
@@ -1036,7 +1042,7 @@ export function SettingsModal({
                       <>
                         <div>
                           <div className="mb-2 flex items-center justify-between gap-2">
-                            <label className="text-xs font-medium opacity-70">Ollama Endpoint Address</label>
+                            <label className="text-xs font-medium opacity-70">{t("settings.ollamaEndpoint")}</label>
                             <div className="flex items-center gap-2">
                               <span
                                 className={`h-2.5 w-2.5 rounded-full ${
@@ -1046,7 +1052,7 @@ export function SettingsModal({
                                       ? "bg-red-500"
                                       : "bg-zinc-500"
                                 }`}
-                                title={ollamaConnectionState === "ok" ? "Connected" : ollamaConnectionState === "fail" ? "Connection failed" : "Not tested"}
+                                title={ollamaConnectionState === "ok" ? t("settings.connected") : ollamaConnectionState === "fail" ? t("settings.connectionFailed") : t("settings.notTested")}
                               />
                               <button
                                 type="button"
@@ -1058,7 +1064,7 @@ export function SettingsModal({
                                     : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
                                 } disabled:opacity-50`}
                               >
-                                {isTestingOllama ? "Testing..." : "Test Connection"}
+                                {isTestingOllama ? t("settings.testing") : t("settings.testConnection")}
                               </button>
                             </div>
                           </div>
@@ -1081,7 +1087,7 @@ export function SettingsModal({
                         </div>
                         <div>
                           <div className="mb-2 flex items-center justify-between gap-2">
-                            <label className="text-xs font-medium opacity-70">Ollama LLM Model</label>
+                            <label className="text-xs font-medium opacity-70">{t("settings.ollamaModel")}</label>
                             <button
                               type="button"
                               onClick={() => void refreshOllamaModels(settings.ollamaAddress, settings.ollamaModel)}
@@ -1092,8 +1098,8 @@ export function SettingsModal({
                                   : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
                               } disabled:opacity-50`}
                             >
-                              <RefreshCw size={12} className={isRefreshingModels ? "animate-spin" : ""} />
-                              Refresh
+<RefreshCw size={12} className={isRefreshingModels ? "animate-spin" : ""} />
+                                {t("common.refresh")}
                             </button>
                           </div>
                           <select
@@ -1110,7 +1116,7 @@ export function SettingsModal({
                             }`}
                           >
                             {ollamaModels.length === 0 ? (
-                              <option value={settings.ollamaModel}>{settings.ollamaModel || "No models found"}</option>
+                              <option value={settings.ollamaModel}>{settings.ollamaModel || t("settings.noModelsFound")}</option>
                             ) : (
                               ollamaModels.map((model) => (
                                 <option key={`provider-${model}`} value={model}>{model}</option>
@@ -1118,7 +1124,7 @@ export function SettingsModal({
                             )}
                           </select>
                           <p className={`mt-2 text-[11px] ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
-                            Small model like Qwen2.5:3b would work.
+                            {t("settings.smallModelHint")}
                           </p>
                         </div>
                       </>
@@ -1202,11 +1208,11 @@ export function SettingsModal({
            </div>
 
            <div>
-            <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-red-500">Danger Zone</p>
+            <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-red-500">{t("settings.dangerZone")}</p>
             <div className={`rounded-xl border border-red-500/30 p-4 ${isDarkMode ? "bg-red-950/20" : "bg-red-50"}`}>
-              <p className="mb-1 text-sm font-semibold">Clean Reset</p>
+              <p className="mb-1 text-sm font-semibold">{t("settings.cleanReset")}</p>
               <p className={`mb-4 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
-                Permanently deletes articles, cached thumbnails, and settings, then recreates a fresh default setup. Downloaded embedding models and default RSS feeds are preserved. This cannot be undone.
+                {t("settings.cleanResetWarning")}
               </p>
 
               {purgeConfirmStep === 0 && (
@@ -1215,20 +1221,20 @@ export function SettingsModal({
                   onClick={() => setPurgeConfirmStep(1)}
                   className="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-red-700"
                 >
-                  Clean Reset
+                  {t("settings.cleanReset")}
                 </button>
               )}
 
               {purgeConfirmStep === 1 && (
                 <div className="space-y-3">
-                  <p className="text-xs font-semibold text-red-500">Are you sure? All data will be lost.</p>
+                  <p className="text-xs font-semibold text-red-500">{t("settings.areYouSure")}</p>
                   <div className="flex gap-2">
                     <button
                       type="button"
                       onClick={() => setPurgeConfirmStep(2)}
                       className="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-red-700"
                     >
-                      Yes, continue
+                      {t("settings.yesContinue")}
                     </button>
                     <button
                       type="button"
@@ -1239,7 +1245,7 @@ export function SettingsModal({
                           : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
                       }`}
                     >
-                      Cancel
+                      {t("common.cancel")}
                     </button>
                   </div>
                 </div>
@@ -1247,7 +1253,7 @@ export function SettingsModal({
 
               {purgeConfirmStep === 2 && (
                 <div className="space-y-3">
-                  <p className="text-xs font-semibold text-red-500">Final confirmation — this will delete everything permanently.</p>
+                  <p className="text-xs font-semibold text-red-500">{t("settings.finalConfirmation")}</p>
                   <div className="flex gap-2">
                     <button
                       type="button"
@@ -1265,7 +1271,7 @@ export function SettingsModal({
                       }}
                       className="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-red-700 disabled:opacity-50"
                     >
-                      {isPurging ? "Resetting..." : "Yes, clean reset"}
+                      {isPurging ? t("settings.resetting") : t("settings.yesCleanReset")}
                     </button>
                     <button
                       type="button"
@@ -1277,7 +1283,7 @@ export function SettingsModal({
                           : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
                       } disabled:opacity-50`}
                     >
-                      Cancel
+                      {t("common.cancel")}
                     </button>
                   </div>
                 </div>

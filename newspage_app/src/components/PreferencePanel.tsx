@@ -1,4 +1,5 @@
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
 import { useSettingsStore } from "../stores/settingsStore";
 
 interface PreferencePanelProps {
@@ -22,10 +23,11 @@ function PreferencePanelComponent({
   onSetSortMode,
   onSetPreferenceConcepts,
 }: PreferencePanelProps): React.JSX.Element {
+  const { t } = useTranslation();
   const isEmbeddingReady = useSettingsStore((s) => s.isEmbeddingReady);
   return (
     <div className={`rounded-2xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/50" : "border-zinc-200 bg-zinc-150"} ${className}`.trim()}>
-      <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>Sort by:</p>
+      <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{t("preferences.sortBy")}</p>
       <div className={`flex items-center gap-0.5 rounded-full border p-1 text-xs font-semibold tracking-wide antialiased ${
         isDarkMode ? "border-zinc-800 bg-zinc-900" : "border-zinc-200 bg-zinc-150"
       }`}>
@@ -41,7 +43,7 @@ function PreferencePanelComponent({
                 : "text-zinc-500 hover:text-zinc-700"
           }`}
         >
-          Date
+          {t("preferences.date")}
         </button>
         <button
           onClick={() => isEmbeddingReady && onSetSortMode("score")}
@@ -60,7 +62,7 @@ function PreferencePanelComponent({
                 : "text-zinc-500 hover:text-zinc-700"
           }`}
         >
-          Topic
+          {t("preferences.topic")}
         </button>
       </div>
 
@@ -71,10 +73,10 @@ function PreferencePanelComponent({
       >
         <div className="min-h-0 space-y-3">
           <div>
-            <label className="mb-1.5 block text-xs font-medium opacity-70">Topics I enjoy</label>
+            <label className="mb-1.5 block text-xs font-medium opacity-70">{t("preferences.topicsEnjoy")}</label>
             <input
               type="text"
-              placeholder="indie games, retro hardware, game preservation"
+              placeholder={t("preferences.likedPlaceholder")}
               value={likedConcepts}
               onChange={(e) => onSetPreferenceConcepts("likedConcepts", e.target.value)}
               className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${
@@ -85,10 +87,10 @@ function PreferencePanelComponent({
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-xs font-medium opacity-70">Topics to avoid</label>
+            <label className="mb-1.5 block text-xs font-medium opacity-70">{t("preferences.topicsAvoid")}</label>
             <input
               type="text"
-              placeholder="mobile games, NFTs, battle royale"
+              placeholder={t("preferences.dislikedPlaceholder")}
               value={dislikedConcepts}
               onChange={(e) => onSetPreferenceConcepts("dislikedConcepts", e.target.value)}
               className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none ${

@@ -1,4 +1,5 @@
 import type React from "react";
+import { useTranslation } from "react-i18next";
 import { SlidersHorizontal, X } from "lucide-react";
 import type { UserSettings } from "../types/article";
 import { TOPIC_CATEGORIES } from "../constants/article";
@@ -21,6 +22,7 @@ export function CategoryLimitsModal({
   saveSetting,
   onClose,
 }: CategoryLimitsModalProps): React.JSX.Element | null {
+  const { t } = useTranslation();
   const { isMounted, isClosing } = usePanelTransition(show, 170);
 
   if (!isMounted) {
@@ -73,7 +75,7 @@ export function CategoryLimitsModal({
         >
           <div className="flex items-center gap-2">
             <SlidersHorizontal size={18} className="text-zinc-500" />
-            <h3 className="text-base font-bold uppercase tracking-widest">Per-Category Limits</h3>
+            <h3 className="text-base font-bold uppercase tracking-widest">{t("categoryLimits.title")}</h3>
           </div>
           <button type="button" onClick={onClose} className="hover:opacity-60" aria-label="Close per-category limits">
             <X size={18} />
@@ -83,8 +85,7 @@ export function CategoryLimitsModal({
         {/* Body */}
         <div className={`max-h-[calc(100vh-12rem)] overflow-y-auto p-5 space-y-4 news-scroll ${isDarkMode ? "news-scroll-dark" : "news-scroll-light"}`}>
           <p className={`text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>
-            Set how many articles to pull per category. <strong>0</strong> = pull all available.
-            Leave blank to use the global limit (<strong>{settings.newsLimit}</strong>).
+            <span dangerouslySetInnerHTML={{ __html: t("categoryLimits.description", { limit: settings.newsLimit }) }} />
           </p>
 
           <div className="space-y-2">
@@ -101,7 +102,7 @@ export function CategoryLimitsModal({
                     min={0}
                     max={100}
                     value={displayValue}
-                    placeholder={`Global (${settings.newsLimit})`}
+                    placeholder={t("categoryLimits.global", { limit: settings.newsLimit })}
                     onChange={(e) => handleChange(category, e.target.value)}
                     className={inputClass}
                   />
@@ -120,7 +121,7 @@ export function CategoryLimitsModal({
                 : "border-zinc-300 bg-zinc-200 text-zinc-700"
             }`}
           >
-            Reset all to global limit
+            {t("categoryLimits.resetAll")}
           </button>
         </div>
       </div>

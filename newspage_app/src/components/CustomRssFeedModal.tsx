@@ -1,5 +1,6 @@
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Check, FileCode, Pencil, Plus, Rss, Sparkles, Trash2, X } from "lucide-react";
 import { NeonCheckbox } from "./NeonCheckbox";
 import type { BackendArticle, FeedSource } from "../types/article";
@@ -28,6 +29,7 @@ interface ColorPickerProps {
 }
 
 function ColorPicker({ value, isDarkMode, disabled, onChange }: ColorPickerProps): React.JSX.Element {
+  const { t } = useTranslation();
   const hexInputRef = useRef<HTMLInputElement>(null);
 
   // Determine if the current value matches a preset exactly
@@ -84,12 +86,12 @@ function ColorPicker({ value, isDarkMode, disabled, onChange }: ColorPickerProps
           value={value.trim() !== "" ? value : "#71717a"}
           onChange={(e) => onChange(e.target.value)}
           className="sr-only"
-          aria-label="Pick custom color"
+          aria-label={t("customRss.pickCustomColor")}
         />
         <button
           type="button"
           disabled={disabled}
-          title="Pick custom color"
+          title={t("customRss.pickCustomColor")}
           onClick={() => hexInputRef.current?.click()}
           className={`h-5 w-5 flex-shrink-0 rounded-full border-2 transition-transform hover:scale-110 disabled:cursor-not-allowed disabled:opacity-50 ${
             isDarkMode ? "border-zinc-600" : "border-zinc-400"
@@ -112,6 +114,7 @@ export function CustomRssFeedModal({
   onRefresh,
   onClose,
 }: CustomRssFeedModalProps): React.JSX.Element | null {
+  const { t } = useTranslation();
   const [draftName, setDraftName] = useState("");
   const [draftFeed, setDraftFeed] = useState("");
   const [editingUrl, setEditingUrl] = useState<string | null>(null);
@@ -294,7 +297,7 @@ export function CustomRssFeedModal({
         >
           <div className="flex items-center gap-2">
             <Rss size={18} className="text-zinc-500" />
-            <h3 className="text-base font-bold uppercase tracking-widest">Custom RSS Feed</h3>
+            <h3 className="text-base font-bold uppercase tracking-widest">{t("customRss.customRssFeed")}</h3>
           </div>
           <button type="button" onClick={onClose} className="hover:opacity-60" aria-label="Close custom RSS feed settings">
             <X size={18} />
@@ -305,7 +308,7 @@ export function CustomRssFeedModal({
           <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)_auto]">
             <input
               type="text"
-              placeholder="Feed name"
+              placeholder={t("customRss.feedName")}
               value={draftName}
               onChange={(event) => setDraftName(event.target.value)}
               onKeyDown={(event) => {
@@ -340,7 +343,7 @@ export function CustomRssFeedModal({
                   : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
               } disabled:cursor-not-allowed disabled:opacity-50`}
             >
-              <Plus size={12} /> Add Feed
+              <Plus size={12} /> {t("customRss.addFeed")}
             </button>
           </div>
           <button
@@ -352,16 +355,16 @@ export function CustomRssFeedModal({
                 : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
             }`}
           >
-            <FileCode size={12} /> HTML to RSS
+            <FileCode size={12} /> {t("customRss.htmlToRss")}
           </button>
           <p className={`text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-            Each custom RSS feed needs a display name and a feed URL.
+            {t("customRss.feedUrlHint")}
           </p>
 
           <div className={`overflow-hidden rounded-xl border ${isDarkMode ? "border-zinc-800" : "border-zinc-200"}`}>
             {customFeeds.length === 0 ? (
               <p className={`p-4 text-sm ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-                No custom RSS feeds saved yet.
+                {t("customRss.noFeedsYet")}
               </p>
             ) : (
               <div className="divide-y divide-zinc-800/20">
@@ -440,7 +443,7 @@ export function CustomRssFeedModal({
                                   : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
                               } disabled:cursor-not-allowed disabled:opacity-50`}
                             >
-                              <Check size={12} /> Save
+                              <Check size={12} /> {t("common.save")}
                             </button>
                             <button
                               type="button"
@@ -451,7 +454,7 @@ export function CustomRssFeedModal({
                                   : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
                               }`}
                             >
-                              <X size={12} /> Cancel
+                              <X size={12} /> {t("common.cancel")}
                             </button>
                           </>
                         ) : (
@@ -459,7 +462,7 @@ export function CustomRssFeedModal({
                             {/* Tag color button — always shown when not in edit mode */}
                             <button
                               type="button"
-                              title="Tag color"
+                              title={t("customRss.tagColor")}
                               disabled={saving}
                               onClick={() => setColorPickerOpen(colorPickerOpen === source.source_ref ? null : source.source_ref)}
                               className={`h-5 w-5 flex-shrink-0 rounded-full border-2 transition-transform hover:scale-110 disabled:cursor-not-allowed disabled:opacity-50 ${
@@ -488,7 +491,7 @@ export function CustomRssFeedModal({
                                       : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
                                   }`}
                                 >
-                                  <Pencil size={12} /> Edit
+                                  <Pencil size={12} /> {t("customRss.edit")}
                                 </button>
                                 <button
                                   type="button"
@@ -500,7 +503,7 @@ export function CustomRssFeedModal({
                                       : "border-zinc-300 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
                                   }`}
                                 >
-                                  <Trash2 size={12} /> Delete
+                                  <Trash2 size={12} /> {t("customRss.delete")}
                                 </button>
                               </>
                             )}
@@ -526,7 +529,7 @@ export function CustomRssFeedModal({
                               onClick={() => void setTagColor(source, "")}
                               className={`text-[10px] font-bold uppercase tracking-widest opacity-50 hover:opacity-100 disabled:cursor-not-allowed ${isDarkMode ? "text-zinc-400" : "text-zinc-600"}`}
                             >
-                              Reset
+                              {t("common.reset")}
                             </button>
                           )}
                         </div>
@@ -555,7 +558,7 @@ export function CustomRssFeedModal({
             >
               <div className="flex items-center gap-2">
                 <FileCode size={18} className="text-zinc-500" />
-                <h3 className="text-base font-bold uppercase tracking-widest">HTML to RSS</h3>
+                <h3 className="text-base font-bold uppercase tracking-widest">{t("customRss.htmlToRss")}</h3>
               </div>
               <button type="button" onClick={() => setShowHtmlToRss(false)} className="hover:opacity-60" aria-label="Close HTML to RSS">
                 <X size={18} />
@@ -564,9 +567,9 @@ export function CustomRssFeedModal({
 
             <div className={`max-h-[calc(100vh-12rem)] space-y-4 overflow-y-auto p-5 news-scroll ${isDarkMode ? "news-scroll-dark" : "news-scroll-light"}`}>
               <div>
-                <label className="mb-1 block text-sm font-semibold">Source Name <span className="text-red-400 font-normal text-xs">(required)</span></label>
+                <label className="mb-1 block text-sm font-semibold">{t("customRss.sourceName")} <span className="text-red-400 font-normal text-xs">({t("customRss.required")})</span></label>
                 <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-                  A display name for this feed source.
+                  {t("customRss.sourceNameHint")}
                 </p>
                 <input
                   type="text"
@@ -578,9 +581,9 @@ export function CustomRssFeedModal({
               </div>
 
               <div>
-                <label className="mb-1 block text-sm font-semibold">URL <span className="text-red-400 font-normal text-xs">(required)</span></label>
+                <label className="mb-1 block text-sm font-semibold">{t("customRss.url")} <span className="text-red-400 font-normal text-xs">({t("customRss.required")})</span></label>
                 <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-                  The webpage to scrape for article links.
+                  {t("customRss.urlHint")}
                 </p>
                 <input
                   type="text"
@@ -631,12 +634,12 @@ export function CustomRssFeedModal({
                         : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
                     } disabled:cursor-not-allowed disabled:opacity-50`}
                   >
-                    <Sparkles size={12} /> {htmlToRssAiLoading ? "Analyzing..." : "Use AI"}
+                    <Sparkles size={12} /> {htmlToRssAiLoading ? t("customRss.analyzing") : t("customRss.useAi")}
                   </button>
                   <span className={`text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
                     {htmlToRssAiLoading
-                      ? `Fetching page and analyzing with ${settings.llmProvider}...`
-                      : "Auto-fill all selectors below by letting AI analyze the page structure."}
+                      ? t("customRss.analyzing") + "..."
+                      : t("customRss.autoFill")}
                   </span>
                 </div>
                 {htmlToRssAiError && (
@@ -645,9 +648,9 @@ export function CustomRssFeedModal({
               </div>
 
               <div>
-                <label className="mb-1 block text-sm font-semibold">Container CSS Selector <span className="text-red-400 font-normal text-xs">(required)</span></label>
+                <label className="mb-1 block text-sm font-semibold">{t("customRss.containerLabel")} <span className="text-red-400 font-normal text-xs">({t("customRss.required")})</span></label>
                 <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-                  CSS selector matching each repeating article block on the page. Each matched element is treated as one article.
+                  {t("customRss.containerHint")}
                 </p>
                 <input
                   type="text"
@@ -664,9 +667,9 @@ export function CustomRssFeedModal({
 
               <div className="grid grid-cols-1 gap-x-4 gap-y-4 md:grid-cols-2">
                 <div>
-                  <label className="mb-1 block text-sm font-semibold">Title CSS Selector <span className="text-red-400 font-normal text-xs">(required)</span></label>
+                  <label className="mb-1 block text-sm font-semibold">{t("customRss.titleLabel")} <span className="text-red-400 font-normal text-xs">({t("customRss.required")})</span></label>
                   <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-                    CSS selector matching the article title element. The inner text will be used as the title.
+                    {t("customRss.titleHint")}
                   </p>
                   <input
                     type="text"
@@ -682,9 +685,9 @@ export function CustomRssFeedModal({
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-sm font-semibold">Link CSS Selector <span className="text-red-400 font-normal text-xs">(required)</span></label>
+                  <label className="mb-1 block text-sm font-semibold">{t("customRss.linkLabel")} <span className="text-red-400 font-normal text-xs">({t("customRss.required")})</span></label>
                   <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-                    CSS selector matching the anchor (&lt;a&gt;) element. The href attribute will be used as the article link.
+                    {t("customRss.linkHint")}
                   </p>
                   <input
                     type="text"
@@ -700,9 +703,9 @@ export function CustomRssFeedModal({
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-sm font-semibold">PubDate CSS Selector <span className="text-zinc-500 font-normal text-xs">(optional)</span></label>
+                  <label className="mb-1 block text-sm font-semibold">{t("customRss.dateLabel")} <span className="text-zinc-500 font-normal text-xs">({t("customRss.optional")})</span></label>
                   <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-                    CSS selector matching the publication date element. The inner text or datetime attribute will be parsed as the date.
+                    {t("customRss.dateHint")}
                   </p>
                   <input
                     type="text"
@@ -718,9 +721,9 @@ export function CustomRssFeedModal({
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-sm font-semibold">Thumbnail CSS Selector <span className="text-zinc-500 font-normal text-xs">(optional)</span></label>
+                  <label className="mb-1 block text-sm font-semibold">{t("customRss.thumbnailLabel")} <span className="text-zinc-500 font-normal text-xs">({t("customRss.optional")})</span></label>
                   <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-                    CSS selector matching a thumbnail image element. The <code>src</code> attribute will be used as the thumbnail URL.
+                    {t("customRss.thumbnailHint")}
                   </p>
                   <input
                     type="text"
@@ -736,9 +739,9 @@ export function CustomRssFeedModal({
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-sm font-semibold">Snippet CSS Selector <span className="text-zinc-500 font-normal text-xs">(optional)</span></label>
+                  <label className="mb-1 block text-sm font-semibold">{t("customRss.snippetLabel")} <span className="text-zinc-500 font-normal text-xs">({t("customRss.optional")})</span></label>
                   <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-                    CSS selector matching a summary or description element. The inner text will be used as the article snippet.
+                    {t("customRss.snippetHint")}
                   </p>
                   <input
                     type="text"
@@ -754,9 +757,9 @@ export function CustomRssFeedModal({
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-sm font-semibold">Author CSS Selector <span className="text-zinc-500 font-normal text-xs">(optional)</span></label>
+                  <label className="mb-1 block text-sm font-semibold">{t("customRss.authorLabel")} <span className="text-zinc-500 font-normal text-xs">({t("customRss.optional")})</span></label>
                   <p className={`mb-1.5 text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-                    CSS selector matching the author element. The inner text will be used as the article author. Leave blank if not available.
+                    {t("customRss.authorHint")}
                   </p>
                   <input
                     type="text"
@@ -810,7 +813,7 @@ export function CustomRssFeedModal({
                       : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
                   } disabled:cursor-not-allowed disabled:opacity-50`}
                 >
-                  <Check size={12} /> {htmlToRssLoading ? "Scraping..." : "Confirm"}
+                  <Check size={12} /> {htmlToRssLoading ? t("customRss.scraping") : t("common.confirm")}
                 </button>
               </div>
             </div>
@@ -833,10 +836,10 @@ export function CustomRssFeedModal({
             >
               <div className="flex items-center gap-2">
                 <FileCode size={18} className="text-zinc-500" />
-                <h3 className="text-base font-bold uppercase tracking-widest">Scrape Result</h3>
+                <h3 className="text-base font-bold uppercase tracking-widest">{t("customRss.scrapeResult")}</h3>
                 {!htmlToRssPreviewError && (
                   <span className={`text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-                    {htmlToRssPreviewArticles.length} article{htmlToRssPreviewArticles.length !== 1 ? "s" : ""} found
+                    {t("customRss.articlesFound", { count: htmlToRssPreviewArticles.length })}
                   </span>
                 )}
               </div>
@@ -851,7 +854,7 @@ export function CustomRssFeedModal({
               ) : (
                 <>
                   <p className={`mb-3 text-sm ${isDarkMode ? "text-zinc-400" : "text-zinc-600"}`}>
-                    Are these results correct?
+                    {t("customRss.areResultsCorrect")}
                   </p>
                   <div className="space-y-2">
                     {htmlToRssPreviewArticles.slice(0, 10).map((article) => (
@@ -890,7 +893,7 @@ export function CustomRssFeedModal({
                     ))}
                     {htmlToRssPreviewArticles.length > 10 && (
                       <p className={`text-xs ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-                        ...and {htmlToRssPreviewArticles.length - 10} more
+                        {t("customRss.andMore", { count: htmlToRssPreviewArticles.length - 10 })}
                       </p>
                     )}
                   </div>
@@ -909,7 +912,7 @@ export function CustomRssFeedModal({
                     : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
                 } disabled:cursor-not-allowed disabled:opacity-50`}
               >
-                Cancel
+                {t("common.cancel")}
               </button>
               {!htmlToRssPreviewError && (
                 <button
@@ -946,7 +949,7 @@ export function CustomRssFeedModal({
                       : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
                   } disabled:cursor-not-allowed disabled:opacity-50`}
                 >
-                  <Check size={12} /> {htmlToRssSaving ? "Saving..." : "Confirm"}
+                  <Check size={12} /> {htmlToRssSaving ? t("common.save") + "..." : t("common.confirm")}
                 </button>
               )}
             </div>

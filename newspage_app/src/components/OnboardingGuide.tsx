@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Settings, X } from "lucide-react";
 import type React from "react";
 import { usePanelTransition } from "../hooks/usePanelTransition";
@@ -15,6 +16,7 @@ export function OnboardingGuide({
   onDismiss,
   onGoToSettings,
 }: OnboardingGuideProps): React.JSX.Element | null {
+  const { t } = useTranslation();
   const { isMounted, isClosing } = usePanelTransition(show, 170);
 
   if (!isMounted) {
@@ -47,7 +49,7 @@ export function OnboardingGuide({
             >
               <img src="/icon.png" alt="NewsPage" className="h-5 w-5" />
             </div>
-            <h3 className="text-sm font-bold uppercase tracking-widest">Welcome to NewsPage</h3>
+            <h3 className="text-sm font-bold uppercase tracking-widest">{t("onboarding.welcome")}</h3>
           </div>
           <button
             onClick={onDismiss}
@@ -62,7 +64,7 @@ export function OnboardingGuide({
           {/* Main explanation */}
           <div className="space-y-3">
             <p className={`text-sm leading-relaxed ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>
-              Before fetching news, you need to download a <strong>local embedding model</strong>.
+              <span dangerouslySetInnerHTML={{ __html: t("onboarding.description") }} />
             </p>
             <div
               className={`rounded-xl border p-4 ${
@@ -70,9 +72,7 @@ export function OnboardingGuide({
               }`}
             >
               <p className={`text-xs leading-relaxed ${isDarkMode ? "text-cyan-300" : "text-cyan-700"}`}>
-                The embedding model runs <strong>entirely on your machine</strong> — no internet
-                required. It powers <strong>Relevance sorting</strong>, which ranks articles by how
-                well they match your interests and liked concepts.
+                <span dangerouslySetInnerHTML={{ __html: t("onboarding.explanation") }} />
               </p>
             </div>
           </div>
@@ -86,7 +86,7 @@ export function OnboardingGuide({
           }`}
         >
           <p className={`text-[11px] ${isDarkMode ? "text-zinc-600" : "text-zinc-400"}`}>
-            You can always set this up later via the <Settings size={11} className="inline mb-0.5" /> Settings button.
+            {t("onboarding.laterHint")} <Settings size={11} className="inline mb-0.5" />
           </p>
           <button
             type="button"
@@ -97,7 +97,7 @@ export function OnboardingGuide({
                 : "bg-cyan-600 text-white hover:bg-cyan-500"
             }`}
           >
-            Go to settings →
+            {t("onboarding.goToSettings")}
           </button>
         </div>
       </div>

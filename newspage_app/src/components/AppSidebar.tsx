@@ -1,4 +1,5 @@
 import { Calendar, SlidersHorizontal } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { offsetDateString } from "../utils/articleMeta";
 import { FeedNavigationList } from "./FeedNavigationList";
 import { PreferencePanel } from "./PreferencePanel";
@@ -45,18 +46,19 @@ export function AppSidebar({
   onSetDate,
   onShowCalendar,
 }: AppSidebarProps) {
+  const { t } = useTranslation();
   return (
     <aside className={`fixed left-0 top-0 z-20 hidden h-full w-64 flex-col border-r transition-colors md:flex ${isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-zinc-100 border-zinc-200"}`}>
       <div className="flex items-center gap-3 border-b border-inherit p-6">
         <div className={`${isDarkMode ? "bg-zinc-800 text-black" : "bg-zinc-150 text-white"} rounded-lg p-1 shadow-sm`}>
           <img src="/icon.svg" alt="NewsPage logo" className="h-8 w-8 block scale-110" />
         </div>
-        <h1 className={`text-xl font-bold tracking-tight ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>NewsPage</h1>
+        <h1 className={`text-xl font-bold tracking-tight ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{t("sidebar.appName")}</h1>
       </div>
 
       <nav className="hide-scrollbar flex-1 space-y-1.5 overflow-y-auto p-4">
         <div className="mb-3 flex items-center justify-between px-3">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Feeds</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">{t("sidebar.feeds")}</p>
           <button
             onClick={onToggleCategoryManager}
             className={`inline-flex items-center rounded-full border p-1.5 transition-colors ${
@@ -80,7 +82,7 @@ export function AppSidebar({
 
         {availableFeeds.length === 0 && (
           <div className="rounded-2xl border border-dashed border-zinc-700 px-3 py-4 text-xs text-zinc-500">
-            Create or show at least one feed.
+            {t("sidebar.createFeedHint")}
           </div>
         )}
       </nav>
@@ -105,7 +107,7 @@ export function AppSidebar({
         >
           <Calendar size={18} />
           <div className="text-left">
-            <p className="text-[10px] font-bold uppercase tracking-tighter opacity-60">Browse Date</p>
+            <p className="text-[10px] font-bold uppercase tracking-tighter opacity-60">{t("sidebar.browseDate")}</p>
             <p className="text-xs font-bold">{selectedDate}</p>
           </div>
         </button>
@@ -118,7 +120,7 @@ export function AppSidebar({
                 : "border-zinc-200 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
             }`}
           >
-            Yesterday
+            {t("sidebar.yesterday")}
           </button>
           {canGoToNextDay && (
             <button
@@ -129,7 +131,7 @@ export function AppSidebar({
                   : "border-zinc-200 bg-zinc-150 text-zinc-700 hover:bg-zinc-200"
               }`}
             >
-              Next day
+              {t("sidebar.nextDay")}
             </button>
           )}
         </div>

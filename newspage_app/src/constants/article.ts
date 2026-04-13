@@ -15,8 +15,8 @@ export type LayoutMode = "grid" | "list" | "compact_list";
 export type OllamaConnectionState = "unknown" | "ok" | "fail";
 
 export const AVAILABLE_REGIONS = [
-  { id: "canada", label: "Canada (English)" },
-  { id: "chinese", label: "Chinese (Simplified)" },
+  { id: "canada", labelKey: "settings.regionCanada" },
+  { id: "chinese", labelKey: "settings.regionChinese" },
 ] as const;
 
 export const DEFAULT_EMBEDDING_MODEL = "multilingual-e5-small";

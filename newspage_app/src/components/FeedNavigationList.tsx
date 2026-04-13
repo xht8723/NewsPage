@@ -1,5 +1,6 @@
 import type React from "react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   DndContext,
   closestCenter,
@@ -75,6 +76,7 @@ export const FeedNavigationList = memo(function FeedNavigationListComponent({
   onRenameFeed,
   onToggleFeedVisibility,
 }: FeedNavigationListProps): React.JSX.Element {
+  const { t } = useTranslation();
   const [feedContextMenu, setFeedContextMenu] = useState<{ feedId: string; x: number; y: number } | null>(null);
   const [feedContextMenuClosing, setFeedContextMenuClosing] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
@@ -147,7 +149,7 @@ export const FeedNavigationList = memo(function FeedNavigationListComponent({
       await onRenameFeed(renamingFeed.id, trimmed);
       setRenameOpen(false);
     } catch {
-      setRenameError("Rename failed. Please try again.");
+      setRenameError(t("feedManager.renameFailed"));
     } finally {
       setIsBusy(false);
     }
@@ -221,7 +223,7 @@ export const FeedNavigationList = memo(function FeedNavigationListComponent({
                         {...attributes}
                         {...listeners}
                         className={`shrink-0 cursor-grab active:cursor-grabbing ${isDarkMode ? "text-zinc-600 hover:text-zinc-400" : "text-zinc-400 hover:text-zinc-600"}`}
-                        title="Drag to reorder"
+                        title={t("feedManager.dragToReorder")}
                       >
                         <GripVertical size={13} />
                       </span>
@@ -257,7 +259,7 @@ export const FeedNavigationList = memo(function FeedNavigationListComponent({
             } disabled:cursor-not-allowed disabled:opacity-50`}
           >
             <EyeOff size={13} />
-            <span>Hide this feed</span>
+            <span>{t("feedManager.hideFeed")}</span>
           </button>
           {contextMenuFeed.id !== "feed-all" && (
             <button
@@ -269,7 +271,7 @@ export const FeedNavigationList = memo(function FeedNavigationListComponent({
               } disabled:cursor-not-allowed disabled:opacity-50`}
             >
               <Pencil size={13} />
-              <span>Rename</span>
+              <span>{t("feedManager.rename")}</span>
             </button>
           )}
         </div>
@@ -288,7 +290,7 @@ export const FeedNavigationList = memo(function FeedNavigationListComponent({
         >
           <div className="mb-4 flex items-center gap-2">
             <Pencil size={15} className="shrink-0" />
-            <span className="text-sm font-semibold">Rename Feed</span>
+            <span className="text-sm font-semibold">{t("feedManager.renameFeed")}</span>
           </div>
           <input
             ref={renameInputRef}
@@ -326,7 +328,7 @@ export const FeedNavigationList = memo(function FeedNavigationListComponent({
                 isDarkMode ? "hover:bg-zinc-800 text-zinc-400" : "hover:bg-zinc-100 text-zinc-600"
               } disabled:opacity-50`}
             >
-              Cancel
+{t("common.cancel")}
             </button>
             <button
               type="button"
@@ -338,7 +340,7 @@ export const FeedNavigationList = memo(function FeedNavigationListComponent({
                   : "bg-cyan-600 hover:bg-cyan-500 text-white disabled:bg-zinc-300 disabled:text-zinc-500"
               } disabled:cursor-not-allowed`}
             >
-              {isBusy ? "Saving..." : "Confirm"}
+              {isBusy ? t("common.save") + "..." : t("common.confirm")}
             </button>
           </div>
         </div>

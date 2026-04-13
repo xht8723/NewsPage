@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+
 interface ConfigPopupDialogProps {
   isDarkMode: boolean;
   isClosing: boolean;
@@ -11,6 +13,7 @@ export function ConfigPopupDialog({
   message,
   onDismiss,
 }: ConfigPopupDialogProps) {
+  const { t } = useTranslation();
   return (
     <div
       className={`${isClosing ? "popup-overlay-out" : "popup-overlay"} fixed inset-0 z-[130] flex items-center justify-center bg-black/60 p-4`}
@@ -23,7 +26,7 @@ export function ConfigPopupDialog({
         }`}
       >
         <p className={`mb-1 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>
-          Setup required
+          {t("configPopup.setupRequired")}
         </p>
         <p className={`mb-5 text-sm leading-relaxed ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>
           {message}
@@ -37,7 +40,7 @@ export function ConfigPopupDialog({
                 : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
             }`}
           >
-            Dismiss
+{t("common.dismiss")}
           </button>
         </div>
       </div>

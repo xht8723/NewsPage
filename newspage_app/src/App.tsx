@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Moon,
   RefreshCw,
@@ -19,6 +20,7 @@ import { useLlmSettings } from "./hooks/useLlmSettings";
 import { useFeedManager } from "./hooks/useFeedManager";
 import { useNewsProcessor, STAGE_ORDER } from "./hooks/useNewsProcessor";
 import { useArticleFilter } from "./hooks/useArticleFilter";
+import { useLanguageSync } from "./hooks/useLanguageSync";
 import { LayoutSwitcher } from "./components/LayoutSwitcher";
 import { CardContextMenu } from "./components/CardContextMenu";
 import { SettingsModal } from "./components/SettingsModal";
@@ -35,6 +37,7 @@ import { StartupScreen } from "./components/StartupScreen";
 import { AppSidebar } from "./components/AppSidebar";
 import { FeedDeleteConfirmDialog } from "./components/FeedDeleteConfirmDialog";
 import { ConfigPopupDialog } from "./components/ConfigPopupDialog";
+
 import type { TranslationRuntimeConfig } from "./hooks/useLiveTranslation";
 import { normalizeSourceName, toNormalizedSourceSet } from "./utils/sourceBlacklist";
 import { articleService, llmService } from "./services";
@@ -43,6 +46,8 @@ import { createDefaultSettings } from "./stores/settingsStore";
 import "./App.css";
 
 function App(): React.JSX.Element {
+  const { t } = useTranslation();
+  useLanguageSync();
   const isDarkMode = useUIStore((s) => s.isDarkMode);
   const showCalendar = useUIStore((s) => s.showCalendar);
   const showSettings = useUIStore((s) => s.showSettings);
@@ -151,8 +156,8 @@ function App(): React.JSX.Element {
   );
 
   const selectedFeedName = useMemo(
-    () => availableFeeds.find((feed) => feed.id === selectedFeedId)?.name ?? "All",
-    [availableFeeds, selectedFeedId],
+    () => availableFeeds.find((feed) => feed.id === selectedFeedId)?.name ?? t("app.all"),
+    [availableFeeds, selectedFeedId, t],
   );
 
   const isRelevanceMode = settings.sortMode === "score";
@@ -437,13 +442,13 @@ function App(): React.JSX.Element {
           <div>
             <h2 className={`text-2xl font-black ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{selectedFeedName}</h2>
             <p className="text-xs font-medium text-zinc-500">
-              {`Briefings for ${selectedDate}`}
+              {t("app.briefingsFor", { date: selectedDate })}
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               {STAGE_ORDER.map((stage) => {
                 const item = stageStatus[stage];
                 const isRunning = item.state === "running";
-                const stageLabel = stage.charAt(0).toUpperCase() + stage.slice(1);
+                const stageLabel = t(`stages.${stage}`);
                 const badgeClass = item.state === "error"
                   ? (isDarkMode ? "border-red-500/40 bg-red-500/15 text-red-300" : "border-red-400 bg-red-50 text-red-700")
                   : item.state === "done"
@@ -469,7 +474,7 @@ function App(): React.JSX.Element {
                   isDarkMode ? "text-zinc-500 hover:text-zinc-300" : "text-zinc-500 hover:text-zinc-700"
                 }`}
               >
-                LOGS
+                {t("app.logs")}
               </button>
               {relevanceWarning && settings.sortMode === "score" ? (
                 <button
@@ -477,7 +482,7 @@ function App(): React.JSX.Element {
                   onClick={() => setRelevanceWarning(null)}
                   className={`text-[10px] font-semibold ${isDarkMode ? "text-amber-300 hover:text-amber-200" : "text-amber-700 hover:text-amber-800"}`}
                 >
-                  Relevance warning
+                  {t("app.relevanceWarning")}
                 </button>
               ) : null}
               {enrichmentError ? (
@@ -486,7 +491,7 @@ function App(): React.JSX.Element {
                   onClick={() => setEnrichmentError(null)}
                   className={`text-[10px] font-semibold ${isDarkMode ? "text-red-300 hover:text-red-200" : "text-red-700 hover:text-red-800"}`}
                 >
-                  {getProviderLabel(settings.llmProvider)} error
+                  {t("app.providerError", { provider: getProviderLabel(settings.llmProvider) })}
                 </button>
               ) : null}
             </div>
@@ -503,7 +508,7 @@ function App(): React.JSX.Element {
               <button
                 onClick={() => setShowTranslatePanel((current) => !current)}
                 className={`rounded-full border p-2 transition-colors ${isDarkMode ? "border-zinc-800 hover:bg-zinc-800" : "border-zinc-300 bg-white hover:bg-zinc-200"}`}
-                title="Live translation"
+                title={t("app.liveTranslation")}
               >
                 <Languages size={18} />
               </button>
@@ -514,9 +519,9 @@ function App(): React.JSX.Element {
                   }`}
                 >
                   <p className={`mb-2 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-                    Live translation
+                    {t("app.liveTranslation")}
                   </p>
-                  <label className="mb-1 block text-xs font-semibold opacity-80">Target language</label>
+                  <label className="mb-1 block text-xs font-semibold opacity-80">{t("app.targetLanguage")}</label>
                   <select
                     value={settings.translationTargetLanguage}
                     onChange={(event) => {
@@ -528,11 +533,11 @@ function App(): React.JSX.Element {
                       isDarkMode ? "border-zinc-700 bg-zinc-800 text-zinc-100" : "border-zinc-300 bg-zinc-100 text-zinc-900"
                     }`}
                   >
-                    <option value="en">English</option>
-                    <option value="zh-CN">Chinese</option>
+                    <option value="en">{t("app.english")}</option>
+                    <option value="zh-CN">{t("app.chinese")}</option>
                   </select>
                   <label className="flex items-center justify-between gap-2 text-xs font-semibold">
-                    <span>Enable live translation</span>
+                    <span>{t("app.enableLiveTranslation")}</span>
                     <NeonCheckbox
                       checked={settings.liveTranslationEnabled}
                       onChange={(enabled) => {
@@ -541,7 +546,7 @@ function App(): React.JSX.Element {
                       }}
                       isDarkMode={isDarkMode}
                       size="sm"
-                      ariaLabel="Enable live translation"
+                      ariaLabel={t("app.enableLiveTranslation")}
                     />
                   </label>
                 </div>
@@ -562,7 +567,7 @@ function App(): React.JSX.Element {
                 } disabled:opacity-50`}
               >
                 {newsProcessor.loading ? <RefreshCw className="animate-spin" size={16} /> : <Sparkles size={16} />}
-                Get news!
+                {t("app.getNews")}
               </button>
               {newsProcessor.loading ? (
                 <button
@@ -574,7 +579,7 @@ function App(): React.JSX.Element {
                   }`}
                 >
                   <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-500" />
-                  {newsProcessor.stopping ? "Stopping..." : "Stop"}
+                  {newsProcessor.stopping ? t("app.stopping") : t("app.stop")}
                 </button>
               ) : null}
             </div>
@@ -691,7 +696,7 @@ function App(): React.JSX.Element {
             <div className={`flex items-center justify-between border-b px-5 py-4 ${isDarkMode ? "border-zinc-800" : "border-zinc-200"}`}>
               <div className="flex items-center gap-2">
                 <LayoutList size={18} className="text-zinc-500" />
-                <h3 className="text-base font-bold uppercase tracking-widest">Feed Settings</h3>
+                <h3 className="text-base font-bold uppercase tracking-widest">{t("app.feedSettings")}</h3>
               </div>
               <button
                 type="button"

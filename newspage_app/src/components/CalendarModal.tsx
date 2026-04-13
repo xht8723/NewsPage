@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { usePanelTransition } from "../hooks/usePanelTransition";
 
 interface CalendarModalProps {
@@ -15,6 +16,7 @@ export function CalendarModal({
   onSelectDate,
   onClose,
 }: CalendarModalProps): React.JSX.Element | null {
+  const { t } = useTranslation();
   const { isMounted, isClosing } = usePanelTransition(showCalendar, 170);
 
   if (!isMounted) {
@@ -29,7 +31,7 @@ export function CalendarModal({
           isDarkMode ? "border-zinc-800 bg-zinc-900" : "border-zinc-200 bg-zinc-150"
         }`}
       >
-        <h3 className="mb-6 text-sm font-black uppercase tracking-widest opacity-60">Jump to Date</h3>
+        <h3 className="mb-6 text-sm font-black uppercase tracking-widest opacity-60">{t("calendar.jumpToDate")}</h3>
         <input
           type="date"
           value={selectedDate}
@@ -50,7 +52,7 @@ export function CalendarModal({
               : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
           }`}
         >
-          Confirm
+          {t("common.confirm")}
         </button>
       </div>
     </div>

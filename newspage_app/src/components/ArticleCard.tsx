@@ -1,36 +1,38 @@
 import { Clock } from "lucide-react";
 import { ChevronRight } from "lucide-react";
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "../i18n";
 import { ARTICLE_THUMBNAIL_FALLBACK_URL, type LayoutMode } from "../constants/article";
 import { useImageFallback } from "../hooks/useImageFallback";
 import { useLiveTranslation, type TranslationRuntimeConfig } from "../hooks/useLiveTranslation";
 import type { FeedSource, NewsArticle } from "../types/article";
 import { resolveTagColor } from "../utils/articleMeta";
 
-function formatRelativeTime(timestamp: number): string {
+function formatRelativeTime(timestamp: number, language: string): string {
   const now = Date.now();
   const diffMs = now - timestamp;
-  if (diffMs < 0) return "just now";
+  if (diffMs < 0) return i18n.t("article.justNow");
   const minutes = Math.floor(diffMs / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 1) return i18n.t("article.justNow");
+  if (minutes < 60) return i18n.t("article.minutesAgo", { count: minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return i18n.t("article.hoursAgo", { count: hours });
   const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
+  if (days < 30) return i18n.t("article.daysAgo", { count: days });
   const date = new Date(timestamp);
-  return `${date.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+  return date.toLocaleDateString(language === "zh-CN" ? "zh-CN" : "en-US", { month: "short", day: "numeric" });
 }
 
-function formatExactDateTime(timestamp: number): string {
+function formatExactDateTime(timestamp: number, language: string): string {
   const date = new Date(timestamp);
-  return date.toLocaleString("en-US", {
+  return date.toLocaleString(language === "zh-CN" ? "zh-CN" : "en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
-    hour12: true,
+    hour12: language !== "zh-CN",
   });
 }
 
@@ -63,6 +65,8 @@ function ArticleCardComponent({
   onSelect,
   onOpenContextMenu,
 }: ArticleCardProps): React.JSX.Element {
+  const { t, i18n } = useTranslation();
+  const language = i18n.language;
   const isListLayout = layout === "list";
   const isCompactListLayout = layout === "compact_list";
   const isTitleOnlyCard = item.status !== "enriched";
@@ -122,7 +126,7 @@ function ArticleCardComponent({
           </span>
           {sortMode === "score" && item.preferenceScore !== 0 && (
             <span
-              title={`Relevance score: ${item.preferenceScore.toFixed(3)}`}
+              title={t("article.relevanceScore", { score: item.preferenceScore.toFixed(3) })}
               className={`ml-auto rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-widest ${
                 item.preferenceScore > 0
                   ? isDarkMode ? "bg-emerald-500/20 text-emerald-400" : "bg-emerald-100 text-emerald-700"
@@ -135,7 +139,7 @@ function ArticleCardComponent({
           )}
           {sortMode === "score" && item.preferenceScore === 0 && (
             <span
-              title="No embedding available for this article"
+              title={t("article.noEmbedding")}
               className={`ml-auto rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-widest ${
                 isDarkMode ? "bg-zinc-700/40 text-zinc-500" : "bg-zinc-100 text-zinc-400"
               }`}
@@ -171,11 +175,11 @@ function ArticleCardComponent({
             isDarkMode ? "text-zinc-500" : "text-zinc-600"
           }`}>
             <span className="truncate">{item.sourceName}</span>
-            <span title={formatExactDateTime(item.timestamp)} className={`flex items-center gap-1 ${isCompactListLayout ? "text-[8px]" : "text-[9px]"} font-medium normal-case tracking-normal ${isDarkMode ? "text-zinc-600" : "text-zinc-400"}`}>
+            <span title={formatExactDateTime(item.timestamp, language)} className={`flex items-center gap-1 ${isCompactListLayout ? "text-[8px]" : "text-[9px]"} font-medium normal-case tracking-normal ${isDarkMode ? "text-zinc-600" : "text-zinc-400"}`}>
               <Clock size={10} />
-              {formatRelativeTime(item.timestamp)}
+              {formatRelativeTime(item.timestamp, language)}
               <span className="mx-0.5 opacity-40">&middot;</span>
-              {formatExactDateTime(item.timestamp)}
+              {formatExactDateTime(item.timestamp, language)}
             </span>
           </div>
           <div
@@ -183,7 +187,7 @@ function ArticleCardComponent({
               isDarkMode ? "text-zinc-400" : "text-zinc-900"
             }`}
           >
-            Open Brief <ChevronRight size={12} className="ml-1" />
+            {t("article.openBrief")} <ChevronRight size={12} className="ml-1" />
           </div>
         </div>
       </div>

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { ChevronRight } from "lucide-react";
 import type React from "react";
 import type { CardContextMenuState } from "../types/article";
@@ -23,6 +24,7 @@ export function CardContextMenu({
   onReprocess,
   onHideSource,
 }: CardContextMenuProps): React.JSX.Element {
+  const { t } = useTranslation();
   const isCurrentCardReprocessing = reprocessingArticleId === contextMenu.article.id;
 
   return (
@@ -42,7 +44,7 @@ export function CardContextMenu({
             isDarkMode ? "hover:bg-zinc-800" : "hover:bg-zinc-200"
           } disabled:cursor-not-allowed disabled:opacity-50`}
         >
-          <span>{isCurrentCardReprocessing ? "Re-processing..." : "Re-process this news"}</span>
+          <span>{isCurrentCardReprocessing ? t("article.reprocessing") : t("article.reprocess")}</span>
           <ChevronRight size={14} />
         </button>
         <button
@@ -55,8 +57,8 @@ export function CardContextMenu({
         >
           <span>
             {isSourceBlacklisted
-              ? `"${contextMenu.article.sourceName}" already hidden`
-              : `Hide future news from "${contextMenu.article.sourceName}"`}
+              ? t("article.sourceAlreadyHidden", { source: contextMenu.article.sourceName })
+              : t("article.hideSource", { source: contextMenu.article.sourceName })}
           </span>
           <ChevronRight size={14} />
         </button>

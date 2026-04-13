@@ -1,5 +1,6 @@
 import type React from "react";
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   DndContext,
   closestCenter,
@@ -157,6 +158,7 @@ export function FeedManagerPanel({
   onReorderFeed,
   onReorderFeedByDrag,
 }: FeedManagerPanelProps): React.JSX.Element {
+  const { t } = useTranslation();
   const [draftName, setDraftName] = useState("");
   const [renamingFeedId, setRenamingFeedId] = useState<string | null>(null);
   const [renamingValue, setRenamingValue] = useState("");
@@ -194,12 +196,12 @@ export function FeedManagerPanel({
   return (
     <div className={`mb-4 space-y-3 rounded-2xl border p-3 ${isDarkMode ? "border-zinc-800 bg-zinc-950/70" : "border-zinc-200 bg-zinc-150"}`}>
       <div className="space-y-2 rounded-xl border border-zinc-700/40 p-2">
-        <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Create Feed</p>
+        <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">{t("feedManager.createFeed")}</p>
         <input
           type="text"
           value={draftName}
           onChange={(event) => setDraftName(event.target.value)}
-          placeholder="Feed name"
+          placeholder={t("feedManager.feedName")}
           className={`w-full rounded-lg border px-2 py-1.5 text-xs focus:outline-none ${
             isDarkMode
               ? "border-zinc-700 bg-zinc-800 text-zinc-100 placeholder-zinc-500"
@@ -224,7 +226,7 @@ export function FeedManagerPanel({
               : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
           }`}
         >
-          <Plus size={12} /> Add Feed
+          <Plus size={12} /> {t("feedManager.addFeed")}
         </button>
       </div>
 
@@ -263,7 +265,7 @@ export function FeedManagerPanel({
                     {...attributes}
                     {...listeners}
                     className={`shrink-0 cursor-grab active:cursor-grabbing ${isDarkMode ? "text-zinc-600 hover:text-zinc-400" : "text-zinc-400 hover:text-zinc-600"}`}
-                    title="Drag to reorder"
+                    title={t("feedManager.dragToReorder")}
                   >
                     <GripVertical size={13} />
                   </span>
@@ -300,7 +302,7 @@ export function FeedManagerPanel({
                     type="button"
                     onClick={() => toggleFeedExpanded(feed.id)}
                     className="flex min-w-0 flex-1 items-center gap-1 rounded px-1 py-0.5 text-left"
-                    title={isExpanded ? "Collapse" : "Expand"}
+                    title={isExpanded ? t("feedManager.collapse") : t("feedManager.expand")}
                   >
                     <ChevronRight size={13} className={`shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
                     <span className="truncate text-xs font-bold">{feed.name}</span>
@@ -319,8 +321,8 @@ export function FeedManagerPanel({
                         ? "border-zinc-700/50 text-zinc-400 hover:border-cyan-700/70 hover:bg-zinc-800 hover:text-zinc-200"
                         : "border-zinc-300 text-zinc-500 hover:border-emerald-400/80 hover:bg-zinc-200 hover:text-zinc-700"
                     }`}
-                    title="Rename"
-                    aria-label={`Rename ${feed.name}`}
+                    title={t("feedManager.rename")}
+                    aria-label={`${t("feedManager.rename")} ${feed.name}`}
                   >
                     <Pencil size={12} />
                   </button>
@@ -353,7 +355,7 @@ export function FeedManagerPanel({
                 <button
                   type="button"
                   onClick={() => void onToggleFeedVisibility(feed.id, !feed.is_visible)}
-                  title={feed.is_visible ? "Hide feed" : "Show feed"}
+                  title={feed.is_visible ? t("feedManager.hideFeed") : t("feedManager.showFeed")}
                   aria-label={feed.is_visible ? `Hide ${feed.name}` : `Show ${feed.name}`}
                   className={`rounded border p-1 transition-colors ${
                     feed.is_visible
@@ -398,7 +400,7 @@ export function FeedManagerPanel({
                           active={active}
                           tagColor={CATEGORY_HEX[category] || "#71717a"}
                           isDarkMode={isDarkMode}
-                          title={active ? `Remove "${category}" articles from this feed` : `Include "${category}" articles in this feed`}
+                          title={active ? t("feedManager.removeFromFeed", { category }) : t("feedManager.includeInFeed", { category })}
                           onClick={async () => {
                             const next = active
                               ? normalizedNewsCategories.filter((item) => item !== key)
@@ -412,9 +414,9 @@ export function FeedManagerPanel({
                     })}
                   </div>
 
-                  <p className={`mt-3 mb-1 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>RSS Sources</p>
+                  <p className={`mt-3 mb-1 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{t("feedManager.rssSources")}</p>
                   {sortedSources.length === 0 ? (
-                    <p className="text-xs text-zinc-500">No RSS sources configured.</p>
+                    <p className="text-xs text-zinc-500">{t("feedManager.noRssSources")}</p>
                   ) : (
                     <div className="flex flex-wrap gap-1">
                       {sortedSources.map((source) => {

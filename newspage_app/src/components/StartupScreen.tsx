@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { DotsSpinner } from "./DotsSpinner";
 import type { LocalEmbeddingStatus } from "../types/article";
 
@@ -20,20 +21,21 @@ export function StartupScreen({
   onRetry,
   onCleanReset,
 }: StartupScreenProps) {
+  const { t } = useTranslation();
   const startupMessage = startupPhase === "loading-settings"
-    ? "Loading settings..."
+    ? t("startup.loadingSettings")
     : startupPhase === "preparing-embedding"
-      ? `Loading embedding model '${settingsLocalEmbeddingModel}'...`
+      ? t("startup.loadingModel", { model: settingsLocalEmbeddingModel })
       : startupErrorMessage;
 
   return (
     <div className={`min-h-screen ${isDarkMode ? "bg-zinc-950 text-zinc-200" : "bg-white text-zinc-900"} flex items-center justify-center p-6`}>
       <div className={`w-full max-w-lg rounded-3xl border p-8 shadow-2xl ${isDarkMode ? "border-zinc-800 bg-zinc-900" : "border-zinc-200 bg-zinc-50"}`}>
         <p className={`mb-2 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
-          {startupPhase === "error" ? "Embedding load failed" : "Starting NewsPage"}
+          {startupPhase === "error" ? t("startup.embeddingLoadFailed") : t("startup.starting")}
         </p>
         <h1 className={`mb-3 text-2xl font-black ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>
-          {startupPhase === "error" ? "Embedding model could not be loaded" : "Preparing your workspace"}
+          {startupPhase === "error" ? t("startup.embeddingFailed") : t("startup.preparing")}
         </h1>
         <p className={`text-sm leading-relaxed ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>
           {startupMessage}
@@ -54,14 +56,14 @@ export function StartupScreen({
                 isDarkMode ? "border-zinc-700 bg-zinc-800 text-zinc-200 hover:bg-zinc-700" : "border-zinc-300 bg-zinc-200 text-zinc-700 hover:bg-zinc-300"
               }`}
             >
-              Retry Load
+              {t("startup.retryLoad")}
             </button>
             <button
               type="button"
               onClick={onCleanReset}
               className="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-red-700"
             >
-              Clean Reset
+              {t("startup.cleanReset")}
             </button>
           </div>
         )}

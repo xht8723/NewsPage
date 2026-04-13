@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { X } from "lucide-react";
 import type { ProcessLogEntry } from "../types/article";
 import { usePanelTransition } from "../hooks/usePanelTransition";
@@ -34,6 +35,7 @@ function formatTimestamp(raw: string): string {
 }
 
 export function LogPanel({ isDarkMode, logs, isOpen, onClear, onClose }: LogPanelProps): React.JSX.Element | null {
+  const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const { isMounted, isClosing } = usePanelTransition(isOpen, 170);
 
@@ -79,8 +81,8 @@ export function LogPanel({ isDarkMode, logs, isOpen, onClear, onClose }: LogPane
           }`}
         >
           <div>
-            <h3 className={`text-sm font-black ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>Process Details</h3>
-            <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">{logs.length} entries</p>
+            <h3 className={`text-sm font-black ${isDarkMode ? "text-zinc-100" : "text-zinc-900"}`}>{t("logs.title")}</h3>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">{t("logs.entries", { count: logs.length })}</p>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -92,7 +94,7 @@ export function LogPanel({ isDarkMode, logs, isOpen, onClear, onClose }: LogPane
                   : "border-zinc-300 text-zinc-700 hover:bg-zinc-200"
               }`}
             >
-              Clear
+{t("logs.clear")}
             </button>
             <button
               type="button"
@@ -109,7 +111,7 @@ export function LogPanel({ isDarkMode, logs, isOpen, onClear, onClose }: LogPane
 
         <div ref={containerRef} className={`min-h-0 flex-1 space-y-2 overflow-y-auto p-3 font-mono text-xs leading-5 ${isDarkMode ? "news-scroll news-scroll-dark" : "news-scroll news-scroll-light"}`}>
           {logs.length === 0 ? (
-            <p className="text-zinc-500">No logs yet.</p>
+            <p className="text-zinc-500">{t("logs.noLogs")}</p>
           ) : (
             logs.map((entry, idx) => {
               const categoryClass = categoryColorMap[entry.category] ?? (isDarkMode ? "text-zinc-300" : "text-zinc-700");

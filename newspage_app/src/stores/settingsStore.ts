@@ -67,6 +67,7 @@ export function createDefaultSettings(): UserSettings {
     autoScrapeHourInterval: 1,
     autoScrapeDayInterval: 1,
     autoScrapeTime: "09:00",
+    uiLanguage: "",
   };
 }
 

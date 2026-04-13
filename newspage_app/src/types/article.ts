@@ -96,6 +96,7 @@ export interface UserSettings {
   autoScrapeHourInterval: number;
   autoScrapeDayInterval: number;
   autoScrapeTime: string;
+  uiLanguage: string;
 }
 
 export interface LocalEmbeddingStatus {

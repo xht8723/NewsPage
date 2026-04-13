@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactElement } from "react";
+import { useTranslation } from "react-i18next";
 import { ArrowLeft } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { ARTICLE_HERO_FALLBACK_URL } from "../constants/article";
@@ -33,6 +34,7 @@ export function ArticleDetailModal({
   onOpenUrl,
   onReprocessArticle,
 }: ArticleDetailModalProps): ReactElement | null {
+  const { t } = useTranslation();
   const [articleSnapshot, setArticleSnapshot] = useState<NewsArticle | null>(null);
   const { isMounted, isClosing } = usePanelTransition(!!selectedArticle, 170);
   const activeArticle = selectedArticle ?? articleSnapshot;
@@ -83,7 +85,7 @@ export function ArticleDetailModal({
           }`}
         >
           <ArrowLeft size={14} />
-          Return
+          {t("article.returnBtn")}
         </button>
       </div>
 
@@ -166,7 +168,7 @@ export function ArticleDetailModal({
                     : "bg-zinc-200 text-zinc-900 hover:bg-zinc-300"
                 }`}
               >
-                Go to original page
+                {t("article.goToOriginal")}
               </button>
             )}
             <button
@@ -179,7 +181,7 @@ export function ArticleDetailModal({
                   : "bg-zinc-200 text-zinc-900 hover:bg-zinc-300"
               } disabled:cursor-not-allowed disabled:opacity-50`}
             >
-              {reprocessingArticleId === activeArticle.id ? "Re-processing..." : "Re-process this news"}
+              {reprocessingArticleId === activeArticle.id ? t("article.reprocessing") : t("article.reprocess")}
             </button>
           </div>
         </div>
