@@ -13,16 +13,69 @@ import { TOPIC_CATEGORIES } from "../constants/article";
 import type { FeedDefinition, FeedSource } from "../types/article";
 import { useFeedDragReorder } from "../hooks/useFeedDragReorder";
 
-function pillClass(active: boolean, isDarkMode: boolean): string {
+const CATEGORY_HEX: Record<string, string> = {
+  World: "#0ea5e9",
+  Nation: "#06b6d4",
+  Business: "#10b981",
+  Technology: "#6366f1",
+  Entertainment: "#d946ef",
+  Science: "#f59e0b",
+  Sports: "#f97316",
+  Health: "#14b8a6",
+  Anime: "#ec4899",
+  Gaming: "#8b5cf6",
+};
+
+function inactivePillClass(isDarkMode: boolean): string {
   return `rounded-md border px-2 py-1 text-[10px] font-bold uppercase tracking-wide transition-all duration-200 hover:scale-[1.03] ${
-    active
-      ? isDarkMode
-        ? "border-cyan-500/80 bg-cyan-600/12 text-cyan-200 shadow-[0_0_8px_rgba(8,145,178,0.28)]"
-        : "border-emerald-600 bg-emerald-600/10 text-emerald-800 shadow-[0_0_7px_rgba(5,150,105,0.24)]"
-      : isDarkMode
-        ? "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-cyan-800/70 hover:shadow-[0_0_7px_rgba(82,82,91,0.26)]"
-        : "border-zinc-300 bg-zinc-100 text-zinc-600 hover:border-emerald-400/80 hover:shadow-[0_0_7px_rgba(113,113,122,0.18)]"
+    isDarkMode
+      ? "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-cyan-800/70 hover:shadow-[0_0_7px_rgba(82,82,91,0.26)]"
+      : "border-zinc-300 bg-zinc-100 text-zinc-600 hover:border-emerald-400/80 hover:shadow-[0_0_7px_rgba(113,113,122,0.18)]"
   }`;
+}
+
+function RssPillButton({ active, tagColor, isDarkMode, title, children, onClick }: {
+  active: boolean;
+  tagColor: string;
+  isDarkMode: boolean;
+  title: string;
+  children: React.ReactNode;
+  onClick: () => void;
+}): React.JSX.Element {
+  const [hovered, setHovered] = useState(false);
+  const hex = tagColor.trim() || "#71717a";
+
+  if (active) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        title={title}
+        className="rounded px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-white shadow-sm transition-all duration-200 hover:scale-[1.03]"
+        style={{ backgroundColor: hex }}
+      >
+        {children}
+      </button>
+    );
+  }
+
+  const hoverStyle = hovered
+    ? { backgroundColor: hex + "18", borderColor: hex + "70", color: hex, boxShadow: `0 0 7px ${hex}30` }
+    : undefined;
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+        className={inactivePillClass(isDarkMode)}
+      style={hoverStyle}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {children}
+    </button>
+  );
 }
 
 interface FeedManagerPanelProps {
@@ -334,25 +387,27 @@ export function FeedManagerPanel({
                   isExpanded ? "mt-2 grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0 pointer-events-none"
                 }`}
               >
-                <div className="min-h-0 space-y-0">
+                <div className="min-h-0 space-y-0 p-1">
                   <div className="flex flex-wrap gap-1">
                     {TOPIC_CATEGORIES.map((category) => {
                       const key = category.toLowerCase();
                       const active = normalizedNewsCategories.includes(key);
                       return (
-                        <button
+                        <RssPillButton
                           key={`${feed.id}-${category}`}
-                          type="button"
+                          active={active}
+                          tagColor={CATEGORY_HEX[category] || "#71717a"}
+                          isDarkMode={isDarkMode}
+                          title={active ? `Remove "${category}" articles from this feed` : `Include "${category}" articles in this feed`}
                           onClick={async () => {
                             const next = active
                               ? normalizedNewsCategories.filter((item) => item !== key)
                               : [...normalizedNewsCategories, key];
                             await onSetFeedCategories(feed.id, next, normalizedRssCategories);
                           }}
-                          className={pillClass(active, isDarkMode)}
                         >
                           {category}
-                        </button>
+                        </RssPillButton>
                       );
                     })}
                   </div>
@@ -367,20 +422,21 @@ export function FeedManagerPanel({
                         const sourceCategory = source.display_name.toLowerCase();
                         const active = normalizedRssCategories.includes(sourceCategory);
                         return (
-                          <button
+                          <RssPillButton
                             key={key}
-                            type="button"
+                            active={active}
+                            tagColor={source.tag_color}
+                            isDarkMode={isDarkMode}
+                            title={active ? `Remove "${source.display_name}" articles from this feed` : `Include "${source.display_name}" articles in this feed`}
                             onClick={async () => {
                               const next = active
                                 ? normalizedRssCategories.filter((item) => item !== sourceCategory)
                                 : [...normalizedRssCategories, sourceCategory];
                               await onSetFeedCategories(feed.id, normalizedNewsCategories, next);
                             }}
-                            title={active ? `Remove "${source.display_name}" articles from this feed` : `Include "${source.display_name}" articles in this feed`}
-                            className={pillClass(active, isDarkMode)}
                           >
                             {source.display_name}
-                          </button>
+                          </RssPillButton>
                         );
                       })}
                     </div>

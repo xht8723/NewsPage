@@ -36,12 +36,33 @@ use rig::client::CompletionClient;
 use sqlx::sqlite::SqlitePool;
 use std::path::{Path, PathBuf};
 use std::collections::{HashMap, HashSet};
-use std::sync::{atomic::{AtomicBool, Ordering}, Mutex};
+use std::sync::{atomic::{AtomicBool, Ordering}, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, MouseButton, MouseButtonState, TrayIconEvent};
 use tauri_plugin_autostart::ManagerExt;
+
+static DATA_DIR: OnceLock<(PathBuf, bool)> = OnceLock::new();
+
+fn init_data_dir(app: &tauri::AppHandle) -> Result<(PathBuf, bool), Box<dyn std::error::Error>> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            if exe_dir.join("portable.marker").exists() {
+                let portable_dir = exe_dir.join("data");
+                std::fs::create_dir_all(&portable_dir)?;
+                return Ok((portable_dir, true));
+            }
+        }
+    }
+    let dir = app.path().app_data_dir()?;
+    std::fs::create_dir_all(&dir)?;
+    Ok((dir, false))
+}
+
+fn resolve_data_dir(_app: &tauri::AppHandle) -> &PathBuf {
+    &DATA_DIR.get().expect("DATA_DIR not initialized; call init_data_dir in setup() first").0
+}
 
 pub mod article_extract;
 pub mod db;
@@ -548,10 +569,7 @@ fn resolve_runtime_llm_context(
     app: &tauri::AppHandle,
     overrides: LlmOverrideArgs,
 ) -> Result<RuntimeLlmContext, String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data directory: {}", e))?;
+    let app_data_dir = resolve_data_dir(app).clone();
 
     let image_cache_dir = app_data_dir.join("img_cache");
     std::fs::create_dir_all(&image_cache_dir)
@@ -2293,10 +2311,7 @@ fn open_url(url: String) -> Result<(), String> {
 
 #[tauri::command]
 fn open_app_data_dir(app: tauri::AppHandle) -> Result<(), String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
+    let dir = resolve_data_dir(&app).clone();
     open::that(dir).map_err(|e| format!("Failed to open app data dir: {}", e))
 }
 
@@ -2348,11 +2363,7 @@ pub(crate) fn write_settings_map(settings_path: &Path, map: &HashMap<String, Str
 
 #[tauri::command]
 fn save_setting(app: tauri::AppHandle, key: String, value: String) -> Result<(), String> {
-    let settings_path = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?
-        .join("settings.json");
+    let settings_path = resolve_data_dir(&app).join("settings.json");
 
     let mut map: HashMap<String, String> = if settings_path.exists() {
         let raw = std::fs::read_to_string(&settings_path)
@@ -2369,11 +2380,7 @@ fn save_setting(app: tauri::AppHandle, key: String, value: String) -> Result<(),
 
 #[tauri::command]
 fn load_settings(app: tauri::AppHandle) -> Result<HashMap<String, String>, String> {
-    let settings_path = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?
-        .join("settings.json");
+    let settings_path = resolve_data_dir(&app).join("settings.json");
 
     if !settings_path.exists() {
         return Ok(HashMap::new());
@@ -2739,10 +2746,7 @@ async fn purge_database(app: tauri::AppHandle, state: tauri::State<'_, AppState>
         .await
         .map_err(|e| format!("Failed to reseed default feeds: {}", e))?;
 
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
+    let app_data = resolve_data_dir(&app).clone();
 
     let settings_path = app_data.join("settings.json");
     let img_cache_dir = app_data.join("img_cache");
@@ -3224,8 +3228,7 @@ pub(crate) async fn start_all_background_inner(app: tauri::AppHandle) -> Result<
     let state = app.state::<AppState>();
     begin_pipeline(&state, &app)?;
 
-    let app_data_dir = app.path().app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
+    let app_data_dir = resolve_data_dir(&app).clone();
     let settings_path = app_data_dir.join("settings.json");
     let settings_map = read_settings_map(&settings_path);
 
@@ -3311,8 +3314,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .setup(|app| {
-            let app_data_dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&app_data_dir)?;
+            let (app_data_dir, portable) = init_data_dir(app.handle())?;
+            DATA_DIR.set((app_data_dir.clone(), portable)).expect("DATA_DIR already initialized");
+            if portable {
+                app.asset_protocol_scope().allow_directory(&app_data_dir, true)?;
+            }
             logging::init(app.handle(), &app_data_dir)
                 .map_err(|e| -> Box<dyn std::error::Error> {
                     Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
@@ -3325,7 +3331,7 @@ pub fn run() {
             let db_path = format!("sqlite:{}", app_data_dir.join("news.db").to_string_lossy());
             logging::info(
                 "System",
-                format!("Application started; app data dir is {}", app_data_dir.to_string_lossy()),
+                format!("Application started; data dir is {} ({})", app_data_dir.to_string_lossy(), if portable { "portable" } else { "installed" }),
                 None,
             );
             let pool = tauri::async_runtime::block_on(db::init_db(&db_path))

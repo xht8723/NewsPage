@@ -1,5 +1,5 @@
 use crate::logging;
-use crate::{read_settings_map, write_settings_map, AppState};
+use crate::{read_settings_map, resolve_data_dir, write_settings_map, AppState};
 use chrono::{Local, Timelike};
 use std::collections::HashMap;
 use std::path::Path;
@@ -27,10 +27,7 @@ fn tick(app: &tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
+    let app_data_dir = resolve_data_dir(app).clone();
     let settings_path = app_data_dir.join("settings.json");
     let settings = read_settings_map(&settings_path);
 
