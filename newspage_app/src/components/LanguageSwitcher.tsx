@@ -12,6 +12,7 @@ export function LanguageSwitcher({ isDarkMode }: { isDarkMode: boolean }) {
   const saveSetting = useSettingsStore((s) => s.saveSetting);
 
   const handleChange = (lang: string) => {
+    void i18n.changeLanguage(lang);
     saveSetting("uiLanguage", lang);
   };
 

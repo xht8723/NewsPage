@@ -12,6 +12,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { ArrowDown, ArrowUp, ChevronRight, Eye, EyeOff, GripVertical, Pencil, Plus, Trash2 } from "lucide-react";
 import { TOPIC_CATEGORIES } from "../constants/article";
 import type { FeedDefinition, FeedSource } from "../types/article";
+import { getFeedDisplayName } from "../utils/feedNames";
 import { useFeedDragReorder } from "../hooks/useFeedDragReorder";
 
 const CATEGORY_HEX: Record<string, string> = {
@@ -295,7 +296,7 @@ export function FeedManagerPanel({
                 ) : feed.id === "feed-all" ? (
                   <span className="flex min-w-0 flex-1 items-center gap-1 px-1 py-0.5">
                     {!canDrag && <span className="w-[13px] shrink-0" />}
-                    <span className="truncate text-xs font-bold">{feed.name}</span>
+                    <span className="truncate text-xs font-bold">{getFeedDisplayName(feed.id, feed.name, t)}</span>
                   </span>
                 ) : (
                   <button
@@ -305,7 +306,7 @@ export function FeedManagerPanel({
                     title={isExpanded ? t("feedManager.collapse") : t("feedManager.expand")}
                   >
                     <ChevronRight size={13} className={`shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
-                    <span className="truncate text-xs font-bold">{feed.name}</span>
+                    <span className="truncate text-xs font-bold">{getFeedDisplayName(feed.id, feed.name, t)}</span>
                   </button>
                 )}
 
@@ -314,7 +315,7 @@ export function FeedManagerPanel({
                     type="button"
                     onClick={() => {
                       setRenamingFeedId(feed.id);
-                      setRenamingValue(feed.name);
+                      setRenamingValue(getFeedDisplayName(feed.id, feed.name, t));
                     }}
                     className={`rounded border p-1 transition-colors ${
                       isDarkMode

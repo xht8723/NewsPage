@@ -26,6 +26,11 @@ struct ModelSpec {
 
 const MODEL_SPECS: &[ModelSpec] = &[
     ModelSpec {
+        display_name: "all-MiniLM-L6-v2",
+        hf_repo: "sentence-transformers/all-MiniLM-L6-v2",
+        requires_prefix: false,
+    },
+    ModelSpec {
         display_name: "multilingual-e5-small",
         hf_repo: "intfloat/multilingual-e5-small",
         requires_prefix: true,

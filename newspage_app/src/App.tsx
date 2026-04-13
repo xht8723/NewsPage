@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { CardContextMenuState, FeedDefinition } from "./types/article";
 import { formatDateLocal, getProviderLabel } from "./utils/articleMeta";
+import { getFeedDisplayName } from "./utils/feedNames";
 import { getSelectedModel, getSelectedApiKey, getSelectedEndpoint } from "./utils/llmConfig";
 import { useEnrichedArticles } from "./hooks/useEnrichedArticles";
 import { usePanelTransition } from "./hooks/usePanelTransition";
@@ -156,7 +157,10 @@ function App(): React.JSX.Element {
   );
 
   const selectedFeedName = useMemo(
-    () => availableFeeds.find((feed) => feed.id === selectedFeedId)?.name ?? t("app.all"),
+    () => {
+      const feed = availableFeeds.find((f) => f.id === selectedFeedId);
+      return feed ? getFeedDisplayName(feed.id, feed.name, t) : t("app.all");
+    },
     [availableFeeds, selectedFeedId, t],
   );
 

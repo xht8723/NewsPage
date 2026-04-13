@@ -23,6 +23,7 @@ export const DEFAULT_EMBEDDING_MODEL = "multilingual-e5-small";
 export const ARTICLE_THUMBNAIL_FALLBACK_URL = "https://placehold.co/640x360/27272a/a1a1aa?text=News";
 export const ARTICLE_HERO_FALLBACK_URL = "https://placehold.co/1200x640/27272a/a1a1aa?text=News";
 export const LOCAL_EMBEDDING_MODELS = [
+  "all-MiniLM-L6-v2",
   "multilingual-e5-small",
   "multilingual-e5-base",
   "multilingual-e5-large",
@@ -32,6 +33,7 @@ export const LOCAL_EMBEDDING_MODELS = [
 ] as const;
 
 export const EMBEDDING_MODEL_INFO: Record<string, { size: string; dims: number; langs: string }> = {
+  "all-MiniLM-L6-v2":      { size: "~80 MB",  dims: 384,  langs: "English" },
   "multilingual-e5-small":  { size: "~470 MB", dims: 384,  langs: "100 languages" },
   "multilingual-e5-base":   { size: "~1.1 GB", dims: 768,  langs: "100 languages" },
   "multilingual-e5-large":  { size: "~2.2 GB", dims: 1024, langs: "100 languages" },

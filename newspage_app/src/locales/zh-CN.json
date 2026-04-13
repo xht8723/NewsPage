@@ -22,7 +22,7 @@
     "logs": "日志",
     "relevanceWarning": "相关性警告",
     "providerError": "{{provider}} 错误",
-    "getNews": "获取新闻！",
+    "getNews": "抓取文章！",
     "stopping": "停止中...",
     "stop": "停止",
     "feedSettings": "订阅设置",
@@ -70,7 +70,8 @@
     "description": "在获取新闻之前，您需要下载一个<strong>本地嵌入模型</strong>。",
     "explanation": "嵌入模型<strong>完全在您的机器上运行</strong>——下载后无需网络连接。它为<strong>相关性排序</strong>提供支持，根据文章与您兴趣和喜好概念的匹配程度进行排名。",
     "laterHint": "您随时可以通过设置按钮进行配置。",
-    "goToSettings": "前往设置 →"
+    "goToSettings": "前往设置 →",
+    "language": "语言"
   },
   "article": {
     "justNow": "刚刚",
@@ -221,6 +222,15 @@
     "noRssSources": "暂无已配置的 RSS 来源。",
     "removeFromFeed": "从此订阅中移除\"{{category}}\"文章",
     "includeInFeed": "在此订阅中包含\"{{category}}\"文章"
+  },
+  "feeds": {
+    "all": "全部",
+    "worldNation": "世界与国家",
+    "entertainment": "娱乐",
+    "scienceHealth": "科学与健康",
+    "sports": "体育",
+    "business": "商业",
+    "rss": "RSS"
   },
   "configPopup": {
     "setupRequired": "需要配置"

@@ -22,7 +22,7 @@
     "logs": "LOGS",
     "relevanceWarning": "Relevance warning",
     "providerError": "{{provider}} error",
-    "getNews": "Get news!",
+    "getNews": "Get Articles!",
     "stopping": "Stopping...",
     "stop": "Stop",
     "feedSettings": "Feed Settings",
@@ -70,7 +70,8 @@
     "description": "Before fetching news, you need to download a <strong>local embedding model</strong>.",
     "explanation": "The embedding model runs <strong>entirely on your machine</strong> — no internet required. It powers <strong>Relevance sorting</strong>, which ranks articles by how well they match your interests and liked concepts.",
     "laterHint": "You can always set this up later via the Settings button.",
-    "goToSettings": "Go to settings →"
+    "goToSettings": "Go to settings →",
+    "language": "Language"
   },
   "article": {
     "justNow": "just now",
@@ -221,6 +222,15 @@
     "noRssSources": "No RSS sources configured.",
     "removeFromFeed": "Remove \"{{category}}\" articles from this feed",
     "includeInFeed": "Include \"{{category}}\" articles in this feed"
+  },
+  "feeds": {
+    "all": "All",
+    "worldNation": "World & Nation",
+    "entertainment": "Entertainment",
+    "scienceHealth": "Science & Health",
+    "sports": "Sports",
+    "business": "Business",
+    "rss": "RSS"
   },
   "configPopup": {
     "setupRequired": "Setup required"

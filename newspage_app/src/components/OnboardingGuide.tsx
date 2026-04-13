@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Settings, X } from "lucide-react";
+import { LanguageSwitcher } from "./LanguageSwitcher";
 import type React from "react";
 import { usePanelTransition } from "../hooks/usePanelTransition";
 
@@ -61,6 +62,10 @@ export function OnboardingGuide({
 
         {/* Body */}
         <div className="space-y-5 px-6 py-6">
+          <div>
+            <label className="mb-1.5 block text-xs font-medium opacity-70">{t("onboarding.language")}</label>
+            <LanguageSwitcher isDarkMode={isDarkMode} />
+          </div>
           {/* Main explanation */}
           <div className="space-y-3">
             <p className={`text-sm leading-relaxed ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>

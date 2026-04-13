@@ -11,6 +11,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import { ChevronRight, EyeOff, GripVertical, Pencil } from "lucide-react";
 import type { FeedDefinition } from "../types/article";
+import { getFeedDisplayName } from "../utils/feedNames";
 import { usePanelTransition } from "../hooks/usePanelTransition";
 import { useFeedDragReorder } from "../hooks/useFeedDragReorder";
 
@@ -121,7 +122,7 @@ export const FeedNavigationList = memo(function FeedNavigationListComponent({
     setFeedContextMenu(null);
     setFeedContextMenuClosing(false);
     setRenamingFeed(feed);
-    setRenameValue(feed.name);
+    setRenameValue(getFeedDisplayName(feed.id, feed.name, t));
     setRenameError(null);
     setRenameOpen(true);
   }, []);
@@ -227,7 +228,7 @@ export const FeedNavigationList = memo(function FeedNavigationListComponent({
                       >
                         <GripVertical size={13} />
                       </span>
-                      <span className="flex-1">{feed.name}</span>
+                      <span className="flex-1">{getFeedDisplayName(feed.id, feed.name, t)}</span>
                       {selectedFeedId === feed.id && <ChevronRight size={14} className="shrink-0 mr-1" />}
                     </button>
                   </div>
