@@ -238,6 +238,18 @@
   "configPopup": {
     "setupRequired": "需要配置"
   },
+  "categories": {
+    "world": "国际",
+    "nation": "国内",
+    "business": "商业",
+    "technology": "科技",
+    "entertainment": "娱乐",
+    "science": "科学",
+    "sports": "体育",
+    "health": "健康",
+    "anime": "动漫",
+    "gaming": "游戏"
+  },
   "customRss": {
     "customRssFeed": "自定义 RSS 订阅",
     "addFeed": "添加订阅",

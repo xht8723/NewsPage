@@ -95,7 +95,7 @@ export function CategoryLimitsModal({
               return (
                 <div key={category} className="flex items-center gap-3">
                   <span className={`w-28 shrink-0 text-xs font-medium ${isDarkMode ? "text-zinc-300" : "text-zinc-700"}`}>
-                    {category}
+                    {t(`categories.${category.toLowerCase()}`, category)}
                   </span>
                   <input
                     type="number"

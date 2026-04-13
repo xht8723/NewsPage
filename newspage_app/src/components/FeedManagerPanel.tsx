@@ -386,13 +386,14 @@ export function FeedManagerPanel({
                     {TOPIC_CATEGORIES.map((category) => {
                       const key = category.toLowerCase();
                       const active = normalizedNewsCategories.includes(key);
+                      const label = t(`categories.${key}`, category);
                       return (
                         <RssPillButton
                           key={`${feed.id}-${category}`}
                           active={active}
                           tagColor={CATEGORY_HEX_COLORS[category] || "#71717a"}
                           isDarkMode={isDarkMode}
-                          title={active ? t("feedManager.removeFromFeed", { category }) : t("feedManager.includeInFeed", { category })}
+                          title={active ? t("feedManager.removeFromFeed", { category: label }) : t("feedManager.includeInFeed", { category: label })}
                           onClick={async () => {
                             const next = active
                               ? normalizedNewsCategories.filter((item) => item !== key)
@@ -400,7 +401,7 @@ export function FeedManagerPanel({
                             await onSetFeedCategories(feed.id, next, normalizedRssCategories);
                           }}
                         >
-                          {category}
+                          {label}
                         </RssPillButton>
                       );
                     })}

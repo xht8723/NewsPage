@@ -124,7 +124,7 @@ function ArticleCardComponent({
             className={`rounded px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-white shadow-sm${tagColor.type === "class" ? ` ${tagColor.value}` : ""}`}
             style={tagColor.type === "hex" ? { backgroundColor: tagColor.value } : undefined}
           >
-            {item.category}
+            {t(`categories.${item.category.toLowerCase()}`, item.category)}
           </span>
           {sortMode === "score" && item.preferenceScore !== 0 && (
             <span

@@ -240,6 +240,18 @@
   "configPopup": {
     "setupRequired": "Setup required"
   },
+  "categories": {
+    "world": "World",
+    "nation": "Nation",
+    "business": "Business",
+    "technology": "Technology",
+    "entertainment": "Entertainment",
+    "science": "Science",
+    "sports": "Sports",
+    "health": "Health",
+    "anime": "Anime",
+    "gaming": "Gaming"
+  },
   "customRss": {
     "customRssFeed": "Custom RSS Feed",
     "addFeed": "Add Feed",

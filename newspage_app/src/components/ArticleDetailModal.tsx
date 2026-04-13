@@ -108,7 +108,7 @@ export function ArticleDetailModal({
                   className={`mb-4 inline-block rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest text-white shadow-sm${tagColor.type === "class" ? ` ${tagColor.value}` : ""}`}
                   style={tagColor.type === "hex" ? { backgroundColor: tagColor.value } : undefined}
                 >
-                  {activeArticle.category}
+                  {t(`categories.${activeArticle.category.toLowerCase()}`, activeArticle.category)}
                 </span>
               );
             })()}
