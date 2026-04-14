@@ -126,7 +126,7 @@
     "identifier": "标识符",
     "githubRepo": "GitHub 仓库",
     "articleSettings": "文章设置",
-    "newsPerCategory": "每次抓取每类新闻数量",
+    "newsPerCategory": "每次抓取每类新闻数量（0 = 不限）",
     "detailed": "详细设置",
     "processPastDate": "处理过往日期文章",
     "processPastDateHint": "处理昨天以及更早日期的文章。关闭后仅处理当天的文章。",

@@ -126,7 +126,7 @@
     "identifier": "Identifier",
     "githubRepo": "GitHub Repository",
     "articleSettings": "Article Settings",
-    "newsPerCategory": "Number of news per category per pull",
+    "newsPerCategory": "Number of news per category per pull (0 = unlimited)",
     "detailed": "Detailed",
     "processPastDate": "Process past date articles",
     "processPastDateHint": "Include articles from previous dates in the feed",

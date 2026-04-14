@@ -3118,7 +3118,7 @@ async fn start_all_action(
     process_past_date_articles: Option<bool>,
 ) -> Result<(), String> {
     let ai_mode_enabled = ai_mode_enabled.unwrap_or(false);
-    let per_category_limit = limit.clamp(1, 100) as i64;
+    let per_category_limit = if limit == 0 { -1 } else { limit.clamp(1, 100) as i64 };
     let per_category_limits: HashMap<String, i64> = per_category_limits_json
         .as_deref()
         .filter(|s| !s.trim().is_empty())
@@ -3539,10 +3539,10 @@ pub(crate) async fn start_all_background_inner(app: tauri::AppHandle) -> Result<
     let settings_path = app_data_dir.join("settings.json");
     let settings_map = read_settings_map(&settings_path);
 
-    let limit: usize = settings_map.get("newsLimit")
+    let limit_raw: i64 = settings_map.get("newsLimit")
         .and_then(|v| v.parse().ok())
-        .unwrap_or(5)
-        .clamp(1, 100);
+        .unwrap_or(5);
+    let per_category_limit: i64 = if limit_raw == 0 { -1 } else { limit_raw.clamp(1, 100) };
     let cooldown_hours: u64 = settings_map.get("scrapeCooldownHours")
         .and_then(|v| v.parse().ok())
         .unwrap_or(2);
@@ -3551,7 +3551,7 @@ pub(crate) async fn start_all_background_inner(app: tauri::AppHandle) -> Result<
         .unwrap_or_else(|| vec!["opencritic".to_string()]);
 
     let result = run_pipeline(&app, &state, PipelineArgs {
-        per_category_limit: limit as i64,
+        per_category_limit,
         per_category_limits: settings_map.get("perCategoryNewsLimits").cloned()
             .as_deref()
             .filter(|s| !s.trim().is_empty())
