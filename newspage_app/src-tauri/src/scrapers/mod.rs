@@ -12,6 +12,7 @@ pub mod custom_rss;
 pub mod gcores;
 pub mod gl_rss;
 pub mod html_to_rss;
+pub mod open_critics;
 pub mod rss_common;
 pub mod yys;
 

@@ -173,10 +173,11 @@ let pool = SqlitePoolOptions::new()
 .max_connections(5)
 .connect_with(options)
 .await?;
-create_article_schema(&pool).await?;
+    create_article_schema(&pool).await?;
     create_vote_schema(&pool).await?;
     create_feed_tables(&pool).await?;
     create_cloud_models_table(&pool).await?;
+    create_upcoming_games_table(&pool).await?;
     seed_default_feeds(&pool).await?;
 logging::info("DB", format!("Initialized SQLite database at {}", db_path), None);
 Ok(pool)
@@ -527,6 +528,16 @@ VALUES (?1, ?2, ?3, 1, 0)",
     .execute(&mut *tx)
     .await?;
 
+    sqlx::query(
+        "INSERT INTO feed_definitions(id, name, slug, is_visible, sort_order)
+VALUES (?1, ?2, ?3, 1, 1)",
+    )
+    .bind("feed-upcoming-games")
+    .bind("Upcoming Games")
+    .bind("upcoming-games")
+    .execute(&mut *tx)
+    .await?;
+
     for (index, feed) in DEFAULT_FEED_TOPICS.iter().enumerate() {
         sqlx::query(
             "INSERT INTO feed_definitions(id, name, slug, is_visible, sort_order)
@@ -535,7 +546,7 @@ VALUES (?1, ?2, ?3, 1, ?4)",
         .bind(feed.id)
         .bind(feed.name)
         .bind(feed.slug)
-        .bind((index + 1) as i64)
+        .bind((index + 2) as i64)
         .execute(&mut *tx)
         .await?;
 
@@ -1080,10 +1091,22 @@ pub async fn upsert_article(pool: &SqlitePool, article: &Article) -> Result<(), 
             thumbnail = excluded.thumbnail,
             category = excluded.category,
             article_type = excluded.article_type,
-            status = excluded.status,
-            ai_summary = excluded.ai_summary,
-            og_content = excluded.og_content,
-            snippet = excluded.snippet
+            status = CASE
+                WHEN articles.status IN ('enriched', 'failed') THEN articles.status
+                ELSE excluded.status
+            END,
+            ai_summary = CASE
+                WHEN articles.status IN ('enriched', 'failed') THEN articles.ai_summary
+                ELSE excluded.ai_summary
+            END,
+            og_content = CASE
+                WHEN articles.status IN ('enriched', 'failed') THEN articles.og_content
+                ELSE excluded.og_content
+            END,
+            snippet = CASE
+                WHEN articles.status IN ('enriched', 'failed') THEN articles.snippet
+                ELSE excluded.snippet
+            END
         ",
     )
     .bind(&article.id)
@@ -1407,4 +1430,93 @@ pub async fn list_html_to_rss_rules(pool: &SqlitePool) -> Result<Vec<HtmlToRssRu
             display_name: row.get("display_name"),
         })
         .collect())
+}
+
+pub async fn create_upcoming_games_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS upcoming_games (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            platforms TEXT NOT NULL,
+            release_date TEXT NOT NULL,
+            cover_url TEXT NOT NULL,
+            score INTEGER NOT NULL DEFAULT -1,
+            opencritic_url TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct UpcomingGameRow {
+    pub id: String,
+    pub title: String,
+    pub platforms: String,
+    pub release_date: String,
+    pub cover_url: String,
+    pub score: i32,
+    pub opencritic_url: String,
+    pub updated_at: i64,
+}
+
+pub async fn replace_upcoming_games(pool: &SqlitePool, games: &[UpcomingGameRow]) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM upcoming_games")
+        .execute(&mut *tx)
+        .await?;
+    for game in games {
+        sqlx::query(
+            "INSERT INTO upcoming_games(id, title, platforms, release_date, cover_url, score, opencritic_url, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+        )
+        .bind(&game.id)
+        .bind(&game.title)
+        .bind(&game.platforms)
+        .bind(&game.release_date)
+        .bind(&game.cover_url)
+        .bind(game.score)
+        .bind(&game.opencritic_url)
+        .bind(game.updated_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await
+}
+
+fn row_to_upcoming_game(row: &sqlx::sqlite::SqliteRow) -> UpcomingGameRow {
+    UpcomingGameRow {
+        id: row.get("id"),
+        title: row.get("title"),
+        platforms: row.get("platforms"),
+        release_date: row.get("release_date"),
+        cover_url: row.get("cover_url"),
+        score: row.get("score"),
+        opencritic_url: row.get("opencritic_url"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+pub async fn get_all_upcoming_games(pool: &SqlitePool) -> Result<Vec<UpcomingGameRow>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT id, title, platforms, release_date, cover_url, score, opencritic_url, updated_at
+         FROM upcoming_games
+         ORDER BY release_date ASC"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.iter().map(|r| row_to_upcoming_game(r)).collect())
+}
+
+pub async fn is_feed_visible(pool: &SqlitePool, feed_id: &str) -> Result<bool, sqlx::Error> {
+    let row: Option<i64> = sqlx::query_scalar(
+        "SELECT is_visible FROM feed_definitions WHERE id = ?1"
+    )
+    .bind(feed_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.unwrap_or(0) != 0)
 }

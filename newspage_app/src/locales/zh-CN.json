@@ -134,6 +134,10 @@
     "summaryBulletPoints": "摘要要点数",
     "summaryRangeHint": "每篇文章摘要的要点数范围。",
     "points": "个要点",
+    "imgCacheLimit": "图片缓存上限",
+    "imgCacheLimitHint": "缓存图片的最大磁盘空间。启动时自动清理最早的文件。",
+    "maxVotedArticles": "最大投票文章数",
+    "maxVotedArticlesHint": "达到上限后，最早的投票将被自动移除。",
     "mediaBlacklist": "媒体来源黑名单",
     "searchSource": "搜索来源名称",
     "noBlacklisted": "暂无被拉黑的来源。",
@@ -228,6 +232,7 @@
   },
   "feeds": {
     "all": "全部",
+    "upcomingGames": "游戏发售日",
     "worldNation": "世界与国家",
     "entertainment": "娱乐",
     "scienceHealth": "科学与健康",

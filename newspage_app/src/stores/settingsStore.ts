@@ -69,6 +69,7 @@ export function createDefaultSettings(): UserSettings {
     autoScrapeTime: "09:00",
     uiLanguage: "",
     maxVotedArticles: 100,
+    imgCacheLimitMb: 500,
   };
 }
 

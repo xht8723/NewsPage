@@ -7,6 +7,7 @@ import { buildLLMArgs, getSelectedApiKey, getSelectedModel, getSelectedEndpoint 
 import { articleService, llmService } from "../services";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useNewsStore, useUIStore } from "../stores";
+import { useUpcomingGamesStore } from "../stores/upcomingGamesStore";
 
 type StageKey = "scrape" | "extract" | "enrich" | "persist";
 type StageState = "idle" | "running" | "done" | "error" | "stopped";
@@ -116,6 +117,10 @@ export function useNewsProcessor(deps: UseNewsProcessorDeps): UseNewsProcessorRe
         message: event.message,
       },
     }));
+
+    if (stage === "scrape" && nextState === "done") {
+      void useUpcomingGamesStore.getState().loadGames();
+    }
   }, [setStageStatus]);
 
   const stoppingRef = useRef(false);

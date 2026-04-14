@@ -39,12 +39,12 @@ const CustomRssFeedModal = lazy(() => import("./components/CustomRssFeedModal").
 const FeedDeleteConfirmDialog = lazy(() => import("./components/FeedDeleteConfirmDialog").then((m) => ({ default: m.FeedDeleteConfirmDialog })));
 const FeedManagerPanel = lazy(() => import("./components/FeedManagerPanel").then((m) => ({ default: m.FeedManagerPanel })));
 import { VirtualizedArticleList } from "./components/VirtualizedArticleList";
+import { UpcomingGamesGrid } from "./components/UpcomingGamesGrid";
 
 import type { TranslationRuntimeConfig } from "./hooks/useLiveTranslation";
 import { normalizeSourceName } from "./utils/sourceBlacklist";
 import { articleService, llmService } from "./services";
 import { useFeedStore, useNewsStore, useUIStore, useSettingsStore } from "./stores";
-import { createDefaultSettings } from "./stores/settingsStore";
 import "./App.css";
 
 function App() {
@@ -126,11 +126,11 @@ function App() {
     isEmbeddingConfigured,
     selectedEmbeddingModel,
     setSelectedEmbeddingModel,
-    layout,
-    setLayout,
     resetStartupState,
     retryEmbeddingLoad,
   } = useAppStartup();
+
+  const layout = useSettingsStore((s) => s.settings.layout);
 
   const { news, setNews, fetchEnrichedNews } = useEnrichedArticles({ selectedDate });
 
@@ -381,10 +381,8 @@ function App() {
   const handleCleanReset = useCallback(async () => {
     cancelPendingSave();
     await articleService.purgeDatabase();
-    const defaults = createDefaultSettings();
     resetSettings();
     setNews([]);
-    setLayout(defaults.layout);
     setEnrichmentError(null);
     setRelevanceWarning(null);
     setStageStatus({
@@ -401,7 +399,7 @@ function App() {
     resetStartupState();
     setFeedSources([]);
     await Promise.all([feedManager.loadFeeds(), feedManager.loadRssSources()]);
-  }, [cancelPendingSave, resetSettings, setNews, setLayout, setEnrichmentError, setRelevanceWarning, setStageStatus, setSelectedArticle, setContextMenu, setSelectedFeedId, setShowConfigPopup, setConfigPopupMessage, resetStartupState, setFeedSources, feedManager.loadFeeds, feedManager.loadRssSources]);
+  }, [cancelPendingSave, resetSettings, setNews, setEnrichmentError, setRelevanceWarning, setStageStatus, setSelectedArticle, setContextMenu, setSelectedFeedId, setShowConfigPopup, setConfigPopupMessage, resetStartupState, setFeedSources, feedManager.loadFeeds, feedManager.loadRssSources]);
 
   const handleSetDate = useCallback((date: string) => {
     if (selectedDate === date) return;
@@ -619,20 +617,24 @@ function App() {
         </header>
 
         <section className={`news-scroll min-h-0 flex-1 overflow-y-auto pb-24 pr-1 ${isDarkMode ? "news-scroll-dark" : "news-scroll-light"}`}>
-          <VirtualizedArticleList
-            articles={articleFilter.filteredNews}
-            feedSources={feedSources}
-            layout={layout}
-            isDarkMode={isDarkMode}
-            sortMode={settings.sortMode}
-            liveTranslationEnabled={settings.liveTranslationEnabled}
-            translationTargetLanguage={settings.translationTargetLanguage}
-            translationRuntime={translationRuntime}
-            isTransitioning={isFilterTransitioning}
-            shiftingArticleId={newsProcessor.shiftingArticleId}
-            onSelectArticle={setSelectedArticle}
-            onOpenContextMenu={handleOpenContextMenu}
-          />
+          {selectedFeedId === "feed-upcoming-games" ? (
+            <UpcomingGamesGrid isDarkMode={isDarkMode} />
+          ) : (
+            <VirtualizedArticleList
+              articles={articleFilter.filteredNews}
+              feedSources={feedSources}
+              layout={layout}
+              isDarkMode={isDarkMode}
+              sortMode={settings.sortMode}
+              liveTranslationEnabled={settings.liveTranslationEnabled}
+              translationTargetLanguage={settings.translationTargetLanguage}
+              translationRuntime={translationRuntime}
+              isTransitioning={isFilterTransitioning}
+              shiftingArticleId={newsProcessor.shiftingArticleId}
+              onSelectArticle={setSelectedArticle}
+              onOpenContextMenu={handleOpenContextMenu}
+            />
+          )}
         </section>
 
         <LayoutSwitcher show={showLayoutSwitcher} isDarkMode={isDarkMode} layout={layout} onSetLayout={articleFilter.handleSetLayout} />

@@ -100,6 +100,7 @@ export interface UserSettings {
   autoScrapeTime: string;
   uiLanguage: string;
   maxVotedArticles: number;
+  imgCacheLimitMb: number;
 }
 
 export interface LocalEmbeddingStatus {

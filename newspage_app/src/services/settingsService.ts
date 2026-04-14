@@ -11,4 +11,6 @@ export const settingsService = {
 
   setMinimizeToTray: (enabled: boolean): Promise<void> =>
     invoke("set_minimize_to_tray", { enabled }),
+
+  cleanupImgCache: (): Promise<void> => invoke("cleanup_img_cache"),
 };

@@ -91,6 +91,7 @@ const DEFAULT_DEEPSEEK_MODEL: &str = "deepseek-chat";
 const ARTICLE_PROCESS_TIMEOUT_SECS: u64 = 30;
 const RELEVANCE_UNAVAILABLE_TOKEN: &str = "RELEVANCE_EMBEDDING_UNAVAILABLE";
 const SYSTEM_ALL_TOPICS_FEED_ID: &str = "feed-all";
+pub(crate) const SYSTEM_UPCOMING_GAMES_FEED_ID: &str = "feed-upcoming-games";
 
 #[derive(serde::Deserialize)]
 struct OllamaTagsResponse {
@@ -167,7 +168,7 @@ const BROWSER_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
-async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str) -> Result<String, String> {
+pub(crate) async fn cache_thumbnail(cache_dir: &Path, article_id: &str, thumbnail_url: &str) -> Result<String, String> {
     // Normalize protocol-relative URLs (e.g. //www.news.cn/...)
     let url = if thumbnail_url.starts_with("//") {
         format!("https:{}", thumbnail_url)
@@ -782,31 +783,8 @@ async fn run_scrape_stage(
     app: &tauri::AppHandle,
     state: &AppState,
     resolved: &ResolvedLlmSettings,
-    cooldown_hours: u64,
     settings_path: &Path,
 ) -> Result<bool, String> {
-    emit_process_stage(
-        app,
-        "scrape",
-        "running",
-        "Scraping selected regions",
-        None,
-        None,
-    )?;
-
-    let last_scrape = *state.last_scrape.lock().unwrap();
-    if !should_run_scrape(last_scrape, cooldown_hours) {
-        emit_process_stage(
-            app,
-            "scrape",
-            "done",
-            "Skipped scrape due to cooldown",
-            None,
-            None,
-        )?;
-        return Ok(false);
-    }
-
     let rss_sources = list_feed_sources(&state.db)
         .await
         .map_err(|e| format!("Failed to load RSS sources: {}", e))?;
@@ -1901,6 +1879,15 @@ async fn get_enriched_articles(
 }
 
 #[tauri::command]
+async fn get_upcoming_games(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<db::UpcomingGameRow>, String> {
+    db::get_all_upcoming_games(&state.db)
+        .await
+        .map_err(|e| format!("Failed to load upcoming games: {}", e))
+}
+
+#[tauri::command]
 async fn compute_preference_scores(
     state: tauri::State<'_, AppState>,
     article_ids: Vec<String>,
@@ -2208,8 +2195,8 @@ async fn delete_feed_action(
     if feed_id.is_empty() {
         return Err("Feed id is required".to_string());
     }
-    if feed_id == SYSTEM_ALL_TOPICS_FEED_ID {
-        return Err("The default All Topics feed cannot be deleted".to_string());
+    if feed_id == SYSTEM_ALL_TOPICS_FEED_ID || feed_id == SYSTEM_UPCOMING_GAMES_FEED_ID {
+        return Err("This default feed cannot be deleted".to_string());
     }
 
     delete_feed(&state.db, feed_id)
@@ -2249,8 +2236,8 @@ async fn set_feed_categories_action(
     if feed_id.is_empty() {
         return Err("Feed id is required".to_string());
     }
-    if feed_id == SYSTEM_ALL_TOPICS_FEED_ID {
-        return Err("The default All Topics feed cannot be customized".to_string());
+    if feed_id == SYSTEM_ALL_TOPICS_FEED_ID || feed_id == SYSTEM_UPCOMING_GAMES_FEED_ID {
+        return Err("This default feed cannot be customized".to_string());
     }
 
     set_feed_categories(&state.db, feed_id, &request.news_categories, &request.rss_categories)
@@ -2419,6 +2406,7 @@ fn default_settings_map() -> HashMap<String, String> {
     map.insert("llmBatchSize".to_string(), "3".to_string());
     map.insert("concurrentLlmRequests".to_string(), "5".to_string());
     map.insert("ollamaEmbeddingModel".to_string(), DEFAULT_LOCAL_EMBEDDING_MODEL.to_string());
+    map.insert("imgCacheLimitMb".to_string(), "500".to_string());
     map
 }
 
@@ -2427,6 +2415,78 @@ pub(crate) fn write_settings_map(settings_path: &Path, map: &HashMap<String, Str
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
     std::fs::write(settings_path, json)
         .map_err(|e| format!("Failed to write settings.json: {}", e))
+}
+
+#[tauri::command]
+fn cleanup_img_cache(app: tauri::AppHandle) -> Result<(), String> {
+    let data_dir = resolve_data_dir(&app);
+    let settings_path = data_dir.join("settings.json");
+    let limit_mb: u64 = std::fs::read_to_string(&settings_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<HashMap<String, String>>(&raw).ok())
+        .and_then(|map| map.get("imgCacheLimitMb").and_then(|v| v.parse::<u64>().ok()))
+        .unwrap_or(500)
+        .clamp(100, 5000);
+    let limit_bytes = limit_mb * 1024 * 1024;
+    let target_bytes = limit_bytes / 5;
+
+    let img_cache_dir = data_dir.join("img_cache");
+    if !img_cache_dir.is_dir() {
+        return Ok(());
+    }
+
+    let entries: Vec<(u64, std::path::PathBuf, std::time::SystemTime)> = std::fs::read_dir(&img_cache_dir)
+        .map_err(|e| format!("Failed to read img_cache dir: {}", e))?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let meta = e.metadata().ok()?;
+            if meta.is_file() {
+                let len = meta.len();
+                let mtime = meta.modified().ok()?;
+                Some((len, e.path(), mtime))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let total_bytes: u64 = entries.iter().map(|(len, _, _)| *len).sum();
+    if total_bytes <= limit_bytes {
+        return Ok(());
+    }
+
+    let mut sorted = entries;
+    sorted.sort_by_key(|(_, _, mtime)| *mtime);
+
+    let mut freed: u64 = 0;
+    let mut removed: u32 = 0;
+    let needed = total_bytes - target_bytes;
+    for (len, path, _) in sorted {
+        if freed >= needed {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            freed += len;
+            removed += 1;
+        }
+    }
+
+    if removed > 0 {
+        logging::info(
+            "ImgCache",
+            format!(
+                "Cleaned {} file(s), freed {:.1} MB (limit {} MB, was {:.1} MB, target {:.1} MB)",
+                removed,
+                freed as f64 / (1024.0 * 1024.0),
+                limit_mb,
+                total_bytes as f64 / (1024.0 * 1024.0),
+                target_bytes as f64 / (1024.0 * 1024.0),
+            ),
+            None,
+        );
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -2809,6 +2869,10 @@ async fn purge_database(app: tauri::AppHandle, state: tauri::State<'_, AppState>
         .execute(&state.db)
         .await
         .map_err(|e| format!("Failed to purge cloud_models table: {}", e))?;
+    sqlx::query("DELETE FROM upcoming_games")
+        .execute(&state.db)
+        .await
+        .map_err(|e| format!("Failed to purge upcoming_games table: {}", e))?;
 
     seed_default_feeds(&state.db)
         .await
@@ -2909,14 +2973,32 @@ async fn run_pipeline(
 
     let runtime = resolve_runtime_llm_context(app, args.llm_overrides)?;
 
-    let scrape_stopped = run_scrape_stage(app, state, &runtime.resolved, args.cooldown_hours, &runtime.settings_path).await?;
-    if scrape_stopped {
-        return emit_enriched_articles_sync_complete(app, EnrichmentStageResult {
-            total: 0,
-            enriched_count: 0,
-            first_error: None,
-            stopped: true,
-        });
+    let last_scrape = *state.last_scrape.lock().unwrap();
+    let scrape_allowed = should_run_scrape(last_scrape, args.cooldown_hours);
+
+    if scrape_allowed {
+        if !state.stop_requested.load(Ordering::Relaxed) {
+            match scrapers::open_critics::scrape_upcoming_games(state, &state.stop_requested, &runtime.image_cache_dir).await {
+                Ok(count) => {
+                    logging::info("Pipeline", format!("Upcoming games scrape done: {} games", count), None);
+                }
+                Err(e) => {
+                    logging::warn("Pipeline", format!("Upcoming games scrape failed: {}", e), None);
+                }
+            }
+        }
+
+        let scrape_stopped = run_scrape_stage(app, state, &runtime.resolved, &runtime.settings_path).await?;
+        if scrape_stopped {
+            return emit_enriched_articles_sync_complete(app, EnrichmentStageResult {
+                total: 0,
+                enriched_count: 0,
+                first_error: None,
+                stopped: true,
+            });
+        }
+    } else {
+        emit_process_stage(app, "scrape", "done", "Skipped scrape due to cooldown", None, None)?;
     }
 
     let items_to_enrich_by_language = collect_items_to_enrich_by_language(
@@ -3486,6 +3568,7 @@ pub fn run() {
             get_available_regions,
             get_enriched_articles,
             get_enriched_article_by_id,
+            get_upcoming_games,
             compute_preference_scores,
             vote_article,
             list_feeds,
@@ -3520,7 +3603,8 @@ pub fn run() {
             delete_html_to_rss_rule_action,
             list_cloud_models,
             set_auto_start,
-            set_minimize_to_tray
+            set_minimize_to_tray,
+            cleanup_img_cache
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

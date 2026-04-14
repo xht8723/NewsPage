@@ -134,6 +134,8 @@
     "summaryBulletPoints": "Summary bullet points",
     "summaryRangeHint": "Range of bullet points per article summary.",
     "points": "points",
+    "imgCacheLimit": "Image cache limit",
+    "imgCacheLimitHint": "Max disk space for cached images. Oldest files are cleaned on startup.",
     "maxVotedArticles": "Max voted articles",
     "maxVotedArticlesHint": "Oldest votes are automatically removed when the limit is reached.",
     "mediaBlacklist": "Media Outlet Blacklist",
@@ -230,6 +232,7 @@
   },
   "feeds": {
     "all": "All",
+    "upcomingGames": "Upcoming Games",
     "worldNation": "World & Nation",
     "entertainment": "Entertainment",
     "scienceHealth": "Science & Health",

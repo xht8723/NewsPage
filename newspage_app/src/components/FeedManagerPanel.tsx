@@ -16,6 +16,8 @@ import type { FeedDefinition, FeedSource } from "../types/article";
 import { getFeedDisplayName } from "../utils/feedNames";
 import { useFeedDragReorder } from "../hooks/useFeedDragReorder";
 
+const PROTECTED_FEED_IDS = ["feed-all", "feed-upcoming-games"];
+
 function inactivePillClass(isDarkMode: boolean): string {
   return `rounded-md border px-2 py-1 text-[10px] font-bold uppercase tracking-wide transition-all duration-200 hover:scale-[1.03] ${
     isDarkMode
@@ -284,7 +286,7 @@ export function FeedManagerPanel({
                         : "border-zinc-300 bg-zinc-100 text-zinc-900"
                     }`}
                   />
-                ) : feed.id === "feed-all" ? (
+                ) : PROTECTED_FEED_IDS.includes(feed.id) ? (
                   <span className="flex min-w-0 flex-1 items-center gap-1 px-1 py-0.5">
                     {!canDrag && <span className="w-[13px] shrink-0" />}
                     <span className="truncate text-xs font-bold">{getFeedDisplayName(feed.id, feed.name, t)}</span>
@@ -301,7 +303,7 @@ export function FeedManagerPanel({
                   </button>
                 )}
 
-                {renamingFeedId !== feed.id && feed.id !== "feed-all" && (
+                {renamingFeedId !== feed.id && !PROTECTED_FEED_IDS.includes(feed.id) && (
                   <button
                     type="button"
                     onClick={() => {
@@ -361,7 +363,7 @@ export function FeedManagerPanel({
                 >
                   {feed.is_visible ? <Eye size={12} /> : <EyeOff size={12} />}
                 </button>
-                {feed.id !== "feed-all" && (
+                {!PROTECTED_FEED_IDS.includes(feed.id) && (
                   <button
                     type="button"
                     onClick={() => void onDeleteFeed(feed.id)}

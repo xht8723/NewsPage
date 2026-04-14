@@ -55,6 +55,7 @@ function VirtualizedArticleListComponent({
 
   useLayoutEffect(() => {
     if (!shiftingArticleId || !containerRef.current) return;
+    if (!articles.some((a) => a.id === shiftingArticleId)) return;
 
     const container = containerRef.current;
     const children = container.querySelectorAll<HTMLElement>("[data-article-id]");

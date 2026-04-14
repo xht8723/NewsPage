@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { LocalEmbeddingStatus } from "../types/article";
-import type { LayoutMode } from "../constants/article";
-import { DEFAULT_EMBEDDING_MODEL } from "../constants/article";
+import { DEFAULT_EMBEDDING_MODEL, type LayoutMode } from "../constants/article";
 import { llmService, settingsService } from "../services";
 import { parseSourceBlacklist } from "../utils/sourceBlacklist";
 import { useSettingsStore, createDefaultSettings } from "../stores/settingsStore";
@@ -16,8 +15,6 @@ interface UseAppStartupReturn {
   isEmbeddingConfigured: boolean;
   selectedEmbeddingModel: string;
   setSelectedEmbeddingModel: (model: string) => void;
-  setLayout: (mode: LayoutMode) => void;
-  layout: LayoutMode;
   resetStartupState: () => void;
   retryEmbeddingLoad: () => void;
 }
@@ -27,7 +24,6 @@ export function useAppStartup(): UseAppStartupReturn {
   const [startupErrorMessage, setStartupErrorMessage] = useState("");
   const [localEmbeddingStatus, setLocalEmbeddingStatus] = useState<LocalEmbeddingStatus | null>(null);
   const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState(DEFAULT_EMBEDDING_MODEL);
-  const [layout, setLayout] = useState<LayoutMode>("grid");
 
   const setSettings = useSettingsStore((s) => s.setSettings);
   const resetSettings = useSettingsStore((s) => s.resetSettings);
@@ -139,13 +135,9 @@ export function useAppStartup(): UseAppStartupReturn {
           autoScrapeHourInterval: saved.autoScrapeHourInterval ? Math.min(24, Math.max(1, Number(saved.autoScrapeHourInterval))) : defaults.autoScrapeHourInterval,
           autoScrapeDayInterval: saved.autoScrapeDayInterval ? Math.min(30, Math.max(1, Number(saved.autoScrapeDayInterval))) : defaults.autoScrapeDayInterval,
           autoScrapeTime: saved.autoScrapeTime?.match(/^\d{1,2}:\d{2}$/) ? saved.autoScrapeTime : defaults.autoScrapeTime,
+          imgCacheLimitMb: saved.imgCacheLimitMb ? Math.min(5000, Math.max(100, Number(saved.imgCacheLimitMb))) : defaults.imgCacheLimitMb,
         }));
         setSelectedEmbeddingModel(savedLocalEmbeddingModel || DEFAULT_EMBEDDING_MODEL);
-        if (nextLayout) {
-          setLayout(nextLayout);
-        } else {
-          setLayout(defaults.layout);
-        }
         if (saved.selectedFeedId?.trim()) {
           setSelectedFeedId(saved.selectedFeedId.trim());
         }
@@ -155,6 +147,7 @@ export function useAppStartup(): UseAppStartupReturn {
         }
 
         void settingsService.setAutoStart(saved.autoStartOnBoot === "true");
+        void settingsService.cleanupImgCache();
 
         if (savedLocalEmbeddingModel.length > 0) {
           void preloadEmbeddingOnStartup(savedLocalEmbeddingModel);
@@ -197,8 +190,6 @@ export function useAppStartup(): UseAppStartupReturn {
     isEmbeddingConfigured,
     selectedEmbeddingModel,
     setSelectedEmbeddingModel,
-    layout,
-    setLayout,
     resetStartupState,
     retryEmbeddingLoad,
   };
