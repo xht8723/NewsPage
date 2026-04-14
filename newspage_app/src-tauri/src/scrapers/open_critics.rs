@@ -1,5 +1,5 @@
 use crate::cache_thumbnail;
-use crate::db::{UpcomingGameRow, replace_upcoming_games, is_feed_visible};
+use crate::db::{UpcomingGameRow, replace_upcoming_games_by_source, is_feed_visible};
 use crate::image_search::{is_low_quality_thumbnail, search_image_by_title};
 use crate::logging;
 use crate::AppState;
@@ -114,11 +114,13 @@ fn parse_game_rows(html: &str) -> Vec<UpcomingGameRow> {
         games.push(UpcomingGameRow {
             id: format!("oc-{}", oc_id),
             title,
+            subtitle: String::new(),
             platforms: platforms_json,
             release_date,
             cover_url,
             score,
-            opencritic_url: href.to_string(),
+            source_url: href.to_string(),
+            source: "opencritic".to_string(),
             updated_at: now,
         });
     }
@@ -269,7 +271,7 @@ pub(crate) async fn scrape_upcoming_games(
         }
     }
 
-    replace_upcoming_games(&state.db, &all_games)
+    replace_upcoming_games_by_source(&state.db, "opencritic", &all_games)
         .await
         .map_err(|e| format!("Failed to save games: {}", e))?;
     logging::info("OpenCritic", format!("Saved {} games", count), None);

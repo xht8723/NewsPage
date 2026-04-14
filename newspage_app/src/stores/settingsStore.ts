@@ -70,6 +70,7 @@ export function createDefaultSettings(): UserSettings {
     uiLanguage: "",
     maxVotedArticles: 100,
     imgCacheLimitMb: 500,
+    upcomingGamesSources: ["opencritic"],
   };
 }
 

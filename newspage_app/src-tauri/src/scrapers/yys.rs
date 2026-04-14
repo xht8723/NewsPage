@@ -1,10 +1,17 @@
 use async_trait::async_trait;
 use reqwest::Client;
 use std::collections::HashSet;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tokio::sync::Semaphore;
 
-use crate::db::FeedSource;
+use crate::cache_thumbnail;
+use crate::db::{FeedSource, UpcomingGameRow, is_feed_visible, replace_upcoming_games_by_source};
 use crate::id_generator::generate_article_id;
 use crate::article::Article;
+use crate::logging;
+use crate::AppState;
 
 use super::rss_common::{decode_entities, fetch_rss_feed, first_img_src, parse_pub_date, strip_cdata, xml_tag_content};
 use super::{ScrapeContext, ScraperStage};
@@ -185,4 +192,225 @@ impl ScraperStage for YysScraperStage {
         let items = scrape_yys_sources(&active_sources).await?;
         Ok(items)
     }
+}
+
+// ---------------------------------------------------------------------------
+// YYS Upcoming Games Calendar Scraper
+// ---------------------------------------------------------------------------
+
+const YYS_CALENDAR_PAGE_URL: &str = "https://www.yystv.cn/games/game_calendar";
+const YYS_CALENDAR_API_URL: &str = "https://www.yystv.cn/games/game_calendar/get_games";
+const YYS_PAGES_PER_SCRAPE: usize = 5;
+const YYS_PAGE_DELAY_MS: u64 = 800;
+
+#[derive(serde::Deserialize)]
+struct YysCalendarGame {
+    id: String,
+    name: String,
+    oname: String,
+    cover: String,
+    platform: Vec<YysCalendarPlatform>,
+    releasetime: String,
+    releasetime_for_sort: String,
+    score: String,
+}
+
+#[derive(serde::Deserialize)]
+struct YysCalendarPlatform {
+    name: String,
+}
+
+#[derive(serde::Deserialize)]
+struct YysCalendarResponse {
+    errorcode: String,
+    data: Vec<YysCalendarGame>,
+}
+
+fn build_yys_client() -> Result<Client, String> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::ACCEPT,
+        reqwest::header::HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+    );
+    headers.insert(
+        reqwest::header::ACCEPT_LANGUAGE,
+        reqwest::header::HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8"),
+    );
+    Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+        .default_headers(headers)
+        .gzip(true)
+        .cookie_store(true)
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))
+}
+
+async fn init_yys_session(client: &Client) -> Result<(), String> {
+    logging::info("YYS_Calendar", "Initializing session".to_string(), None);
+    let resp = client.get(YYS_CALENDAR_PAGE_URL)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch YYS calendar page: {}", e))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("YYS calendar page returned status {}", status));
+    }
+    let _ = resp.text().await;
+    Ok(())
+}
+
+async fn fetch_yys_calendar_page(client: &Client, page: usize) -> Result<Vec<YysCalendarGame>, String> {
+    let url = format!("{}?page={}", YYS_CALENDAR_API_URL, page);
+    logging::info("YYS_Calendar", format!("Fetching {}", url), None);
+    let resp = client.get(&url)
+        .header("Referer", YYS_CALENDAR_PAGE_URL)
+        .header("X-Requested-With", "XMLHttpRequest")
+        .header("Accept", "application/json, text/javascript, */*; q=0.01")
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+    let body = resp.text().await.map_err(|e| format!("Failed to read response: {}", e))?;
+    let parsed: YysCalendarResponse = serde_json::from_str(&body)
+        .map_err(|e| {
+            let preview: String = body.chars().take(200).collect();
+            format!("Failed to parse YYS calendar JSON: {}. Response preview: {}", e, preview)
+        })?;
+    if parsed.errorcode != "20200" {
+        return Err(format!("YYS calendar API returned error code {}", parsed.errorcode));
+    }
+    Ok(parsed.data)
+}
+
+pub(crate) async fn scrape_upcoming_games_yys(
+    state: &AppState,
+    stop: &AtomicBool,
+    cache_dir: &Path,
+) -> Result<usize, String> {
+    let visible = is_feed_visible(&state.db, crate::SYSTEM_UPCOMING_GAMES_FEED_ID)
+        .await
+        .map_err(|e| format!("Failed to check feed visibility: {}", e))?;
+    if !visible {
+        logging::info("YYS_Calendar", "Feed is hidden, skipping scrape".to_string(), None);
+        return Ok(0);
+    }
+
+    if stop.load(Ordering::Relaxed) {
+        return Ok(0);
+    }
+
+    let client = build_yys_client()?;
+    init_yys_session(&client).await?;
+
+    if stop.load(Ordering::Relaxed) {
+        return Ok(0);
+    }
+
+    let mut all_games: Vec<UpcomingGameRow> = Vec::new();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    for page in 0..YYS_PAGES_PER_SCRAPE {
+        if stop.load(Ordering::Relaxed) {
+            logging::info("YYS_Calendar", "Stopped by user".to_string(), None);
+            return Ok(all_games.len());
+        }
+
+        let games = fetch_yys_calendar_page(&client, page).await?;
+        let count = games.len();
+        logging::info("YYS_Calendar", format!("Page {}: found {} games", page, count), None);
+
+        for game in games {
+            let platforms: Vec<String> = game.platform.iter()
+                .map(|p| p.name.clone())
+                .collect();
+            let platforms_json = serde_json::to_string(&platforms).unwrap_or_else(|_| "[]".to_string());
+
+            let score: i32 = game.score.parse().unwrap_or(0);
+            let display_score = if score == 0 { -1 } else { score };
+
+            let title = if game.name.trim().is_empty() {
+                game.oname.clone()
+            } else {
+                game.name.clone()
+            };
+
+            let subtitle = if game.oname.trim().is_empty() || game.oname == game.name {
+                String::new()
+            } else {
+                game.oname.clone()
+            };
+
+            let release_date = if game.releasetime.ends_with("-01-01")
+                && game.releasetime_for_sort.ends_with("-12-31")
+            {
+                game.releasetime.get(..4).unwrap_or(&game.releasetime).to_string()
+            } else {
+                game.releasetime.clone()
+            };
+
+            let source_url = format!("https://www.yystv.cn/g/{}", game.id);
+
+            all_games.push(UpcomingGameRow {
+                id: format!("yys-{}", game.id),
+                title,
+                subtitle,
+                platforms: platforms_json,
+                release_date,
+                cover_url: game.cover,
+                score: display_score,
+                source_url,
+                source: "yys".to_string(),
+                updated_at: now,
+            });
+        }
+
+        if count < 20 {
+            break;
+        }
+
+        if page < YYS_PAGES_PER_SCRAPE - 1 {
+            tokio::time::sleep(std::time::Duration::from_millis(YYS_PAGE_DELAY_MS)).await;
+        }
+    }
+
+    let count = all_games.len();
+    let shared_cache_dir = Arc::new(cache_dir.to_path_buf());
+
+    let needs_cache: Vec<usize> = all_games.iter().enumerate()
+        .filter(|(_, g)| g.cover_url.starts_with("http://") || g.cover_url.starts_with("https://"))
+        .map(|(i, _)| i)
+        .collect();
+
+    if !needs_cache.is_empty() {
+        logging::info("YYS_Calendar", format!("Caching {} game covers locally", needs_cache.len()), None);
+        let sem = Arc::new(Semaphore::new(5));
+        let mut handles: Vec<tokio::task::JoinHandle<(usize, String)>> = Vec::new();
+        for &idx in &needs_cache {
+            let game_id = all_games[idx].id.clone();
+            let cover_url = all_games[idx].cover_url.clone();
+            let cache_dir = shared_cache_dir.clone();
+            let sem = sem.clone();
+            handles.push(tokio::spawn(async move {
+                let _permit = sem.acquire().await.unwrap();
+                match cache_thumbnail(&cache_dir, &game_id, &cover_url).await {
+                    Ok(cached) => (idx, cached),
+                    Err(_) => (idx, cover_url),
+                }
+            }));
+        }
+        for handle in handles {
+            if let Ok((idx, url)) = handle.await {
+                all_games[idx].cover_url = url;
+            }
+        }
+    }
+
+    replace_upcoming_games_by_source(&state.db, "yys", &all_games)
+        .await
+        .map_err(|e| format!("Failed to save YYS games: {}", e))?;
+    logging::info("YYS_Calendar", format!("Saved {} games", count), None);
+
+    Ok(count)
 }

@@ -173,6 +173,7 @@ export function useNewsProcessor(deps: UseNewsProcessorDeps): UseNewsProcessorRe
         cooldownHours: settings.scrapeCooldownHours,
         aiModeEnabled: settings.aiModeEnabled,
         processPastDateArticles: settings.processPastDateArticles,
+        upcomingGamesSources: JSON.stringify(settings.upcomingGamesSources),
         ...llmArgs,
       });
     } catch (error) {

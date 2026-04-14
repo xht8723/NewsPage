@@ -1437,16 +1437,26 @@ pub async fn create_upcoming_games_table(pool: &SqlitePool) -> Result<(), sqlx::
         "CREATE TABLE IF NOT EXISTS upcoming_games (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
+            subtitle TEXT NOT NULL DEFAULT '',
             platforms TEXT NOT NULL,
             release_date TEXT NOT NULL,
             cover_url TEXT NOT NULL,
             score INTEGER NOT NULL DEFAULT -1,
-            opencritic_url TEXT NOT NULL,
+            source_url TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT 'opencritic',
             updated_at INTEGER NOT NULL
         )",
     )
     .execute(pool)
     .await?;
+
+    let _ = sqlx::query("ALTER TABLE upcoming_games ADD COLUMN subtitle TEXT NOT NULL DEFAULT ''")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE upcoming_games ADD COLUMN source TEXT NOT NULL DEFAULT 'opencritic'")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE upcoming_games RENAME COLUMN opencritic_url TO source_url")
+        .execute(pool).await;
+
     Ok(())
 }
 
@@ -1454,31 +1464,36 @@ pub async fn create_upcoming_games_table(pool: &SqlitePool) -> Result<(), sqlx::
 pub struct UpcomingGameRow {
     pub id: String,
     pub title: String,
+    pub subtitle: String,
     pub platforms: String,
     pub release_date: String,
     pub cover_url: String,
     pub score: i32,
-    pub opencritic_url: String,
+    pub source_url: String,
+    pub source: String,
     pub updated_at: i64,
 }
 
-pub async fn replace_upcoming_games(pool: &SqlitePool, games: &[UpcomingGameRow]) -> Result<(), sqlx::Error> {
+pub async fn replace_upcoming_games_by_source(pool: &SqlitePool, source: &str, games: &[UpcomingGameRow]) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM upcoming_games")
+    sqlx::query("DELETE FROM upcoming_games WHERE source = ?1")
+        .bind(source)
         .execute(&mut *tx)
         .await?;
     for game in games {
         sqlx::query(
-            "INSERT INTO upcoming_games(id, title, platforms, release_date, cover_url, score, opencritic_url, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+            "INSERT INTO upcoming_games(id, title, subtitle, platforms, release_date, cover_url, score, source_url, source, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
         )
         .bind(&game.id)
         .bind(&game.title)
+        .bind(&game.subtitle)
         .bind(&game.platforms)
         .bind(&game.release_date)
         .bind(&game.cover_url)
         .bind(game.score)
-        .bind(&game.opencritic_url)
+        .bind(&game.source_url)
+        .bind(&game.source)
         .bind(game.updated_at)
         .execute(&mut *tx)
         .await?;
@@ -1490,20 +1505,26 @@ fn row_to_upcoming_game(row: &sqlx::sqlite::SqliteRow) -> UpcomingGameRow {
     UpcomingGameRow {
         id: row.get("id"),
         title: row.get("title"),
+        subtitle: row.get("subtitle"),
         platforms: row.get("platforms"),
         release_date: row.get("release_date"),
         cover_url: row.get("cover_url"),
         score: row.get("score"),
-        opencritic_url: row.get("opencritic_url"),
+        source_url: row.get("source_url"),
+        source: row.get("source"),
         updated_at: row.get("updated_at"),
     }
 }
 
 pub async fn get_all_upcoming_games(pool: &SqlitePool) -> Result<Vec<UpcomingGameRow>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT id, title, platforms, release_date, cover_url, score, opencritic_url, updated_at
+        "SELECT id, title, subtitle, platforms, release_date, cover_url, score, source_url, source, updated_at
          FROM upcoming_games
-         ORDER BY release_date ASC"
+         ORDER BY CASE
+           WHEN release_date = '' THEN '9999'
+           WHEN length(release_date) <= 4 THEN release_date || '-99-99'
+           ELSE release_date
+         END ASC"
     )
     .fetch_all(pool)
     .await?;

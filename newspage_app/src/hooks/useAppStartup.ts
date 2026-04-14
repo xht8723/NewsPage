@@ -136,6 +136,7 @@ export function useAppStartup(): UseAppStartupReturn {
           autoScrapeDayInterval: saved.autoScrapeDayInterval ? Math.min(30, Math.max(1, Number(saved.autoScrapeDayInterval))) : defaults.autoScrapeDayInterval,
           autoScrapeTime: saved.autoScrapeTime?.match(/^\d{1,2}:\d{2}$/) ? saved.autoScrapeTime : defaults.autoScrapeTime,
           imgCacheLimitMb: saved.imgCacheLimitMb ? Math.min(5000, Math.max(100, Number(saved.imgCacheLimitMb))) : defaults.imgCacheLimitMb,
+          upcomingGamesSources: saved.upcomingGamesSources ? (() => { try { return JSON.parse(saved.upcomingGamesSources) as string[]; } catch { return defaults.upcomingGamesSources; } })() : defaults.upcomingGamesSources,
         }));
         setSelectedEmbeddingModel(savedLocalEmbeddingModel || DEFAULT_EMBEDDING_MODEL);
         if (saved.selectedFeedId?.trim()) {

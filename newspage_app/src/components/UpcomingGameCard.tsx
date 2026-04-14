@@ -4,21 +4,39 @@ import type { UpcomingGame } from "../types/upcomingGame";
 
 const PLATFORM_COLORS: Record<string, string> = {
   PS5: "bg-blue-500/20 text-blue-300 border-blue-500/30",
+  PS4: "bg-blue-500/20 text-blue-300 border-blue-500/30",
   "Xbox Series X|S": "bg-green-500/20 text-green-300 border-green-500/30",
+  "Xbox Series X/S": "bg-green-500/20 text-green-300 border-green-500/30",
   PC: "bg-amber-500/20 text-amber-300 border-amber-500/30",
   Switch: "bg-red-500/20 text-red-300 border-red-500/30",
+  NS: "bg-red-500/20 text-red-300 border-red-500/30",
   "Switch 2": "bg-rose-500/20 text-rose-300 border-rose-500/30",
+  NS2: "bg-rose-500/20 text-rose-300 border-rose-500/30",
+  Steam: "bg-amber-500/20 text-amber-300 border-amber-500/30",
 };
 
 const PLATFORM_COLORS_LIGHT: Record<string, string> = {
   PS5: "bg-blue-100 text-blue-700 border-blue-300",
+  PS4: "bg-blue-100 text-blue-700 border-blue-300",
   "Xbox Series X|S": "bg-green-100 text-green-700 border-green-300",
+  "Xbox Series X/S": "bg-green-100 text-green-700 border-green-300",
   PC: "bg-amber-100 text-amber-700 border-amber-300",
   Switch: "bg-red-100 text-red-700 border-red-300",
+  NS: "bg-red-100 text-red-700 border-red-300",
   "Switch 2": "bg-rose-100 text-rose-700 border-rose-300",
+  NS2: "bg-rose-100 text-rose-700 border-rose-300",
+  Steam: "bg-amber-100 text-amber-700 border-amber-300",
 };
 
+const YEAR_ONLY_RE = /^\d{4}$/;
+
+function isFuzzyDate(releaseDate: string): boolean {
+  return !releaseDate || YEAR_ONLY_RE.test(releaseDate);
+}
+
 function formatDate(releaseDate: string): string {
+  if (!releaseDate) return "TBA";
+  if (YEAR_ONLY_RE.test(releaseDate)) return releaseDate;
   const date = new Date(releaseDate + "T00:00:00");
   return date.toLocaleDateString("en-US", {
     month: "short",
@@ -28,6 +46,7 @@ function formatDate(releaseDate: string): string {
 }
 
 function daysUntil(releaseDate: string): number {
+  if (!releaseDate || YEAR_ONLY_RE.test(releaseDate)) return Infinity;
   const target = new Date(releaseDate + "T00:00:00");
   const now = new Date();
   now.setHours(0, 0, 0, 0);
@@ -50,9 +69,10 @@ export const UpcomingGameCard = memo(function UpcomingGameCard({
   game,
   isDarkMode,
 }: UpcomingGameCardProps): React.JSX.Element {
-  const days = daysUntil(game.releaseDate);
-  const isReleased = days < 0;
-  const isSoon = days >= 0 && days <= 30;
+  const fuzzy = isFuzzyDate(game.releaseDate);
+  const days = fuzzy ? Infinity : daysUntil(game.releaseDate);
+  const isReleased = !fuzzy && days < 0;
+  const isSoon = !fuzzy && days >= 0 && days <= 30;
 
   const colorMap = isDarkMode ? PLATFORM_COLORS : PLATFORM_COLORS_LIGHT;
 
@@ -96,6 +116,12 @@ export const UpcomingGameCard = memo(function UpcomingGameCard({
         >
           {game.title}
         </h3>
+
+        {game.subtitle && (
+          <p className={`-mt-1 line-clamp-1 text-[11px] ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>
+            {game.subtitle}
+          </p>
+        )}
 
         <div className="mt-auto flex flex-wrap gap-1">
           {game.platforms.map((p) => (

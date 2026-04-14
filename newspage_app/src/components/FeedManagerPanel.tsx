@@ -15,8 +15,17 @@ import { CATEGORY_HEX_COLORS } from "../utils/articleMeta";
 import type { FeedDefinition, FeedSource } from "../types/article";
 import { getFeedDisplayName } from "../utils/feedNames";
 import { useFeedDragReorder } from "../hooks/useFeedDragReorder";
+import { NeonCheckbox } from "./NeonCheckbox";
+import { useSettingsStore } from "../stores/settingsStore";
+import { settingsService } from "../services";
 
 const PROTECTED_FEED_IDS = ["feed-all", "feed-upcoming-games"];
+const NO_EXPAND_FEED_IDS = ["feed-all"];
+
+const UPCOMING_GAMES_SOURCES = [
+  { id: "opencritic", label: "OpenCritic" },
+  { id: "yys", label: "游研社" },
+] as const;
 
 function inactivePillClass(isDarkMode: boolean): string {
   return `rounded-md border px-2 py-1 text-[10px] font-bold uppercase tracking-wide transition-all duration-200 hover:scale-[1.03] ${
@@ -153,6 +162,8 @@ export function FeedManagerPanel({
   onReorderFeedByDrag,
 }: FeedManagerPanelProps): React.JSX.Element {
   const { t } = useTranslation();
+  const upcomingGamesSources = useSettingsStore((s) => s.settings.upcomingGamesSources);
+  const setSettings = useSettingsStore((s) => s.setSettings);
   const [draftName, setDraftName] = useState("");
   const [renamingFeedId, setRenamingFeedId] = useState<string | null>(null);
   const [renamingValue, setRenamingValue] = useState("");
@@ -286,7 +297,7 @@ export function FeedManagerPanel({
                         : "border-zinc-300 bg-zinc-100 text-zinc-900"
                     }`}
                   />
-                ) : PROTECTED_FEED_IDS.includes(feed.id) ? (
+                ) : NO_EXPAND_FEED_IDS.includes(feed.id) ? (
                   <span className="flex min-w-0 flex-1 items-center gap-1 px-1 py-0.5">
                     {!canDrag && <span className="w-[13px] shrink-0" />}
                     <span className="truncate text-xs font-bold">{getFeedDisplayName(feed.id, feed.name, t)}</span>
@@ -383,59 +394,86 @@ export function FeedManagerPanel({
                   isExpanded ? "mt-2 grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0 pointer-events-none"
                 }`}
               >
-                <div className="min-h-0 space-y-0 p-1">
-                  <div className="flex flex-wrap gap-1">
-                    {TOPIC_CATEGORIES.map((category) => {
-                      const key = category.toLowerCase();
-                      const active = normalizedNewsCategories.includes(key);
-                      const label = t(`categories.${key}`, category);
-                      return (
-                        <RssPillButton
-                          key={`${feed.id}-${category}`}
-                          active={active}
-                          tagColor={CATEGORY_HEX_COLORS[category] || "#71717a"}
-                          isDarkMode={isDarkMode}
-                          title={active ? t("feedManager.removeFromFeed", { category: label }) : t("feedManager.includeInFeed", { category: label })}
-                          onClick={async () => {
-                            const next = active
-                              ? normalizedNewsCategories.filter((item) => item !== key)
-                              : [...normalizedNewsCategories, key];
-                            await onSetFeedCategories(feed.id, next, normalizedRssCategories);
-                          }}
-                        >
-                          {label}
-                        </RssPillButton>
-                      );
-                    })}
-                  </div>
-
-                  <p className={`mt-3 mb-1 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{t("feedManager.rssSources")}</p>
-                  {sortedSources.length === 0 ? (
-                    <p className="text-xs text-zinc-500">{t("feedManager.noRssSources")}</p>
-                  ) : (
-                    <div className="flex flex-wrap gap-1">
-                      {sortedSources.map((source) => {
-                        const key = `${source.source_type}:${source.source_ref}`;
-                        const sourceCategory = source.display_name.toLowerCase();
-                        const active = normalizedRssCategories.includes(sourceCategory);
+                <div className="min-h-0 p-1">
+                  {feed.id === "feed-upcoming-games" ? (
+                    <div className="space-y-2">
+                      {UPCOMING_GAMES_SOURCES.map((source) => {
+                        const isActive = upcomingGamesSources.includes(source.id);
                         return (
-                          <RssPillButton
-                            key={key}
-                            active={active}
-                            tagColor={source.tag_color}
-                            isDarkMode={isDarkMode}
-                            title={active ? `Remove "${source.display_name}" articles from this feed` : `Include "${source.display_name}" articles in this feed`}
-                            onClick={async () => {
-                              const next = active
-                                ? normalizedRssCategories.filter((item) => item !== sourceCategory)
-                                : [...normalizedRssCategories, sourceCategory];
-                              await onSetFeedCategories(feed.id, normalizedNewsCategories, next);
-                            }}
-                          >
-                            {source.display_name}
-                          </RssPillButton>
+                          <label key={source.id} className="flex cursor-pointer items-center gap-2">
+                            <NeonCheckbox
+                              checked={isActive}
+                              onChange={() => {
+                                const next = isActive
+                                  ? upcomingGamesSources.filter((s) => s !== source.id)
+                                  : [...upcomingGamesSources, source.id];
+                                setSettings((prev) => ({ ...prev, upcomingGamesSources: next }));
+                                void settingsService.save("upcomingGamesSources", JSON.stringify(next));
+                              }}
+                              isDarkMode={isDarkMode}
+                              ariaLabel={`Toggle ${source.label}`}
+                            />
+                            <span className="text-xs">{source.label}</span>
+                          </label>
                         );
                       })}
+                    </div>
+                  ) : (
+                    <div className="space-y-0">
+                      <div className="flex flex-wrap gap-1">
+                        {TOPIC_CATEGORIES.map((category) => {
+                          const key = category.toLowerCase();
+                          const active = normalizedNewsCategories.includes(key);
+                          const label = t(`categories.${key}`, category);
+                          return (
+                            <RssPillButton
+                              key={`${feed.id}-${category}`}
+                              active={active}
+                              tagColor={CATEGORY_HEX_COLORS[category] || "#71717a"}
+                              isDarkMode={isDarkMode}
+                              title={active ? t("feedManager.removeFromFeed", { category: label }) : t("feedManager.includeInFeed", { category: label })}
+                              onClick={async () => {
+                                const next = active
+                                  ? normalizedNewsCategories.filter((item) => item !== key)
+                                  : [...normalizedNewsCategories, key];
+                                await onSetFeedCategories(feed.id, next, normalizedRssCategories);
+                              }}
+                            >
+                              {label}
+                            </RssPillButton>
+                          );
+                        })}
+                      </div>
+
+                      <p className={`mt-3 mb-1 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{t("feedManager.rssSources")}</p>
+                      {sortedSources.length === 0 ? (
+                        <p className="text-xs text-zinc-500">{t("feedManager.noRssSources")}</p>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {sortedSources.map((source) => {
+                            const key = `${source.source_type}:${source.source_ref}`;
+                            const sourceCategory = source.display_name.toLowerCase();
+                            const active = normalizedRssCategories.includes(sourceCategory);
+                            return (
+                              <RssPillButton
+                                key={key}
+                                active={active}
+                                tagColor={source.tag_color}
+                                isDarkMode={isDarkMode}
+                                title={active ? `Remove "${source.display_name}" articles from this feed` : `Include "${source.display_name}" articles in this feed`}
+                                onClick={async () => {
+                                  const next = active
+                                    ? normalizedRssCategories.filter((item) => item !== sourceCategory)
+                                    : [...normalizedRssCategories, sourceCategory];
+                                  await onSetFeedCategories(feed.id, normalizedNewsCategories, next);
+                                }}
+                              >
+                                {source.display_name}
+                              </RssPillButton>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

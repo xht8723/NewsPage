@@ -20,6 +20,8 @@ export interface StartAllRequest {
   perCategoryLimitsJson: string;
   cooldownHours: number;
   aiModeEnabled: boolean;
+  upcomingGamesSources: string;
+  processPastDateArticles: boolean;
   llmProvider?: string;
   ollamaAddress?: string;
   ollamaModel?: string;
@@ -31,7 +33,6 @@ export interface StartAllRequest {
   geminiModel?: string;
   deepseekApiKey?: string;
   deepseekModel?: string;
-  processPastDateArticles: boolean;
   [key: string]: unknown;
 }
 

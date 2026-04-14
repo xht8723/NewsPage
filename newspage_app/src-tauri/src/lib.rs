@@ -2407,6 +2407,7 @@ fn default_settings_map() -> HashMap<String, String> {
     map.insert("concurrentLlmRequests".to_string(), "5".to_string());
     map.insert("ollamaEmbeddingModel".to_string(), DEFAULT_LOCAL_EMBEDDING_MODEL.to_string());
     map.insert("imgCacheLimitMb".to_string(), "500".to_string());
+    map.insert("upcomingGamesSources".to_string(), "[\"opencritic\"]".to_string());
     map
 }
 
@@ -2961,6 +2962,7 @@ struct PipelineArgs {
     ai_mode_enabled: bool,
     process_past_date: bool,
     llm_overrides: LlmOverrideArgs,
+    upcoming_games_sources: Vec<String>,
 }
 
 async fn run_pipeline(
@@ -2977,13 +2979,24 @@ async fn run_pipeline(
     let scrape_allowed = should_run_scrape(last_scrape, args.cooldown_hours);
 
     if scrape_allowed {
-        if !state.stop_requested.load(Ordering::Relaxed) {
+        if !state.stop_requested.load(Ordering::Relaxed) && args.upcoming_games_sources.iter().any(|s| s == "opencritic") {
             match scrapers::open_critics::scrape_upcoming_games(state, &state.stop_requested, &runtime.image_cache_dir).await {
                 Ok(count) => {
                     logging::info("Pipeline", format!("Upcoming games scrape done: {} games", count), None);
                 }
                 Err(e) => {
                     logging::warn("Pipeline", format!("Upcoming games scrape failed: {}", e), None);
+                }
+            }
+        }
+
+        if !state.stop_requested.load(Ordering::Relaxed) && args.upcoming_games_sources.iter().any(|s| s == "yys") {
+            match scrapers::yys::scrape_upcoming_games_yys(state, &state.stop_requested, &runtime.image_cache_dir).await {
+                Ok(count) => {
+                    logging::info("Pipeline", format!("YYS calendar scrape done: {} games", count), None);
+                }
+                Err(e) => {
+                    logging::warn("Pipeline", format!("YYS calendar scrape failed: {}", e), None);
                 }
             }
         }
@@ -3062,6 +3075,7 @@ async fn start_all_action(
     per_category_limits_json: Option<String>,
     cooldown_hours: u64,
     ai_mode_enabled: Option<bool>,
+    upcoming_games_sources: Option<String>,
     llm_provider: Option<String>,
     openai_api_key: Option<String>,
     claude_api_key: Option<String>,
@@ -3089,6 +3103,10 @@ async fn start_all_action(
                 .collect()
         })
         .unwrap_or_default();
+    let parsed_upcoming_games_sources: Vec<String> = upcoming_games_sources
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+        .unwrap_or_else(|| vec!["opencritic".to_string()]);
 
     begin_pipeline(&state, &app)?;
 
@@ -3098,6 +3116,7 @@ async fn start_all_action(
         cooldown_hours,
         ai_mode_enabled,
         process_past_date: process_past_date_articles.unwrap_or(false),
+        upcoming_games_sources: parsed_upcoming_games_sources,
         llm_overrides: LlmOverrideArgs {
             llm_provider,
             openai_api_key,
@@ -3389,6 +3408,9 @@ pub(crate) async fn start_all_background_inner(app: tauri::AppHandle) -> Result<
     let cooldown_hours: u64 = settings_map.get("scrapeCooldownHours")
         .and_then(|v| v.parse().ok())
         .unwrap_or(2);
+    let upcoming_games_sources: Vec<String> = settings_map.get("upcomingGamesSources")
+        .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+        .unwrap_or_else(|| vec!["opencritic".to_string()]);
 
     let result = run_pipeline(&app, &state, PipelineArgs {
         per_category_limit: limit as i64,
@@ -3406,6 +3428,7 @@ pub(crate) async fn start_all_background_inner(app: tauri::AppHandle) -> Result<
         cooldown_hours,
         ai_mode_enabled: settings_map.get("aiModeEnabled").map(|v| v == "true").unwrap_or(false),
         process_past_date: settings_map.get("processPastDateArticles").map(|v| v == "true").unwrap_or(false),
+        upcoming_games_sources,
         llm_overrides: LlmOverrideArgs {
             llm_provider: settings_map.get("llmProvider").cloned(),
             openai_api_key: settings_map.get("openaiApiKey").cloned(),

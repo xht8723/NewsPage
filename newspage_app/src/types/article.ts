@@ -101,6 +101,7 @@ export interface UserSettings {
   uiLanguage: string;
   maxVotedArticles: number;
   imgCacheLimitMb: number;
+  upcomingGamesSources: string[];
 }
 
 export interface LocalEmbeddingStatus {

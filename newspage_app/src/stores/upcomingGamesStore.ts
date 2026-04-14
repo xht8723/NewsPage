@@ -16,18 +16,19 @@ function resolveCoverSrc(coverUrl: string): string {
 
 function mapBackendGame(raw: BackendUpcomingGame): UpcomingGame {
   let platforms: string[] = [];
-  try {
-    platforms = JSON.parse(raw.platforms);
-  } catch { /* keep empty */ }
+  try { platforms = JSON.parse(raw.platforms); } catch { /* keep empty */ }
+  const subtitle = raw.subtitle?.trim() ?? "";
 
   return {
     id: raw.id,
     title: raw.title,
+    subtitle,
     platforms,
     releaseDate: raw.release_date,
     coverUrl: resolveCoverSrc(raw.cover_url),
     score: raw.score,
-    opencriticUrl: raw.opencritic_url,
+    sourceUrl: raw.source_url,
+    source: raw.source,
   };
 }
 
@@ -51,7 +52,7 @@ export const useUpcomingGamesStore = create<UpcomingGamesState>()((set, get) => 
       const games = raw.map(mapBackendGame);
       set({ games, hasLoaded: true });
     } catch {
-      set({ games: [] });
+      set({ hasLoaded: true });
     } finally {
       set({ isLoading: false });
     }
