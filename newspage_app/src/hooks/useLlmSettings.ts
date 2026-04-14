@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { LOCAL_EMBEDDING_MODELS, type OllamaConnectionState } from "../constants/article";
 import type { LocalEmbeddingStatus, UserSettings } from "../types/article";
 import { llmService, settingsService } from "../services";
@@ -24,7 +24,6 @@ interface UseLlmSettingsReturn {
 }
 
 export function useLlmSettings(deps: {
-  startupPhase: string;
   disableRelevanceSort: (reason: string) => void;
 }): UseLlmSettingsReturn {
   const settings = useSettingsStore((s) => s.settings);
@@ -149,16 +148,6 @@ export function useLlmSettings(deps: {
     } catch (_e) {
     }
   }, [settings, saveSetting, setSettings]);
-
-  const initialCloudFetchDone = useRef(false);
-  useEffect(() => {
-    if (initialCloudFetchDone.current) return;
-    if (deps.startupPhase === "loading-settings") return;
-    initialCloudFetchDone.current = true;
-    for (const p of ["openai", "claude", "gemini", "deepseek"]) {
-      void refreshCloudModels(p);
-    }
-  }, [deps.startupPhase, refreshCloudModels]);
 
   return {
     ollamaConnectionState,

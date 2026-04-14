@@ -6,7 +6,7 @@ import { parseSourceBlacklist } from "../utils/sourceBlacklist";
 import { useSettingsStore, createDefaultSettings } from "../stores/settingsStore";
 import { useFeedStore } from "../stores";
 
-type StartupPhase = "loading-settings" | "preparing-embedding" | "ready" | "error";
+type StartupPhase = "loading-settings" | "preparing-embedding" | "loading-data" | "ready" | "error";
 
 interface UseAppStartupReturn {
   startupPhase: StartupPhase;
@@ -17,6 +17,7 @@ interface UseAppStartupReturn {
   setSelectedEmbeddingModel: (model: string) => void;
   resetStartupState: () => void;
   retryEmbeddingLoad: () => void;
+  completeDataLoading: () => void;
 }
 
 export function useAppStartup(): UseAppStartupReturn {
@@ -39,7 +40,7 @@ export function useAppStartup(): UseAppStartupReturn {
     if (!normalizedModel) {
       setIsEmbeddingReady(false);
       setStartupErrorMessage("");
-      setStartupPhase("ready");
+      setStartupPhase("loading-data");
       return;
     }
 
@@ -58,7 +59,7 @@ export function useAppStartup(): UseAppStartupReturn {
       }
 
       setIsEmbeddingReady(true);
-      setStartupPhase("ready");
+      setStartupPhase("loading-data");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setLocalEmbeddingStatus((current) => ({
@@ -158,7 +159,7 @@ export function useAppStartup(): UseAppStartupReturn {
           setLocalEmbeddingStatus(null);
           setIsEmbeddingReady(false);
           setStartupErrorMessage("");
-          setStartupPhase("ready");
+          setStartupPhase("loading-data");
         }
       })
       .catch(() => {
@@ -167,7 +168,7 @@ export function useAppStartup(): UseAppStartupReturn {
         setLocalEmbeddingStatus(null);
         setIsEmbeddingReady(false);
         setStartupErrorMessage("");
-        setStartupPhase("ready");
+        setStartupPhase("loading-data");
       });
   }, [preloadEmbeddingOnStartup, setSettings, resetSettings, setSelectedFeedId]);
 
@@ -176,7 +177,7 @@ export function useAppStartup(): UseAppStartupReturn {
     setLocalEmbeddingStatus(null);
     setIsEmbeddingReady(false);
     setStartupErrorMessage("");
-    setStartupPhase("ready");
+    setStartupPhase("loading-data");
   }, []);
 
   const retryEmbeddingLoad = useCallback(() => {
@@ -185,6 +186,10 @@ export function useAppStartup(): UseAppStartupReturn {
       void preloadEmbeddingOnStartup(model);
     }
   }, [preloadEmbeddingOnStartup]);
+
+  const completeDataLoading = useCallback(() => {
+    setStartupPhase("ready");
+  }, []);
 
   return {
     startupPhase,
@@ -195,5 +200,6 @@ export function useAppStartup(): UseAppStartupReturn {
     setSelectedEmbeddingModel,
     resetStartupState,
     retryEmbeddingLoad,
+    completeDataLoading,
   };
 }

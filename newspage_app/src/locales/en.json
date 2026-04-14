@@ -63,7 +63,12 @@
     "loadingModel": "Loading embedding model '{{model}}'...",
     "retryLoad": "Retry Load",
     "cleanReset": "Clean Reset",
-    "embeddingLoadFailed": "Embedding load failed"
+    "embeddingLoadFailed": "Embedding load failed",
+    "loadingData": "Loading data...",
+    "loadingArticles": "Loading articles...",
+    "calculatingScores": "Calculating rankings...",
+    "loadingFeeds": "Loading feeds...",
+    "fetchingModels": "Fetching AI models..."
   },
   "onboarding": {
     "welcome": "Welcome to NewsPage",

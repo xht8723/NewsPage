@@ -27,6 +27,7 @@ import { CardContextMenu } from "./components/CardContextMenu";
 import { NeonCheckbox } from "./components/NeonCheckbox";
 import { OnboardingGuide } from "./components/OnboardingGuide";
 import { StartupScreen } from "./components/StartupScreen";
+import type { LoadingDataStep } from "./components/StartupScreen";
 import { AppSidebar } from "./components/AppSidebar";
 import { ConfigPopupDialog } from "./components/ConfigPopupDialog";
 
@@ -118,6 +119,7 @@ function App() {
   const [isScoringLoading, setIsScoringLoading] = useState(false);
   const scoringAbortRef = useRef(0);
   const articleIdsRef = useRef<string[]>([]);
+  const [loadingDataStep, setLoadingDataStep] = useState<LoadingDataStep>("");
 
   const translatePanelRef = useRef<HTMLDivElement | null>(null);
   const todayString = formatDateLocal(new Date());
@@ -132,6 +134,7 @@ function App() {
     setSelectedEmbeddingModel,
     resetStartupState,
     retryEmbeddingLoad,
+    completeDataLoading,
   } = useAppStartup();
 
   const layout = useSettingsStore((s) => s.settings.layout);
@@ -147,7 +150,6 @@ function App() {
   });
 
   const llm = useLlmSettings({
-    startupPhase,
     disableRelevanceSort: newsProcessor.disableRelevanceSort,
   });
 
@@ -261,8 +263,93 @@ function App() {
     return () => window.clearTimeout(timeout);
   }, [settings.sortMode, settings.likedConcepts, settings.dislikedConcepts, settings.localEmbeddingModel, voteVersion, runScoreComputation]);
 
+  const initialDataLoadDoneRef = useRef(false);
+
+  useEffect(() => {
+    if (startupPhase !== "loading-data") return;
+
+    initialDataLoadDoneRef.current = false;
+    let cancelled = false;
+
+    const steps: { key: LoadingDataStep; done: boolean }[] = [
+      { key: "articles", done: false },
+      { key: "scoring", done: settings.sortMode !== "score" },
+      { key: "feeds", done: false },
+      { key: "cloudModels", done: false },
+    ];
+
+    const updateStep = () => {
+      if (cancelled) return;
+      const next = steps.find((s) => !s.done);
+      if (next) {
+        setLoadingDataStep(next.key);
+      } else {
+        completeDataLoading();
+      }
+    };
+
+    updateStep();
+
+    fetchEnrichedNews()
+      .then(async (articles) => {
+        if (cancelled) return;
+        steps[0].done = true;
+
+        if (settings.sortMode === "score" && articles.length > 0) {
+          setLoadingDataStep("scoring");
+          try {
+            await runScoreComputation(
+              articles.map((a) => a.id),
+              () => cancelled,
+            );
+          } catch {
+          }
+          if (cancelled) return;
+          steps[1].done = true;
+        }
+
+        updateStep();
+      })
+      .catch(() => {
+        if (cancelled) return;
+        steps[0].done = true;
+        if (settings.sortMode === "score") steps[1].done = true;
+        updateStep();
+      });
+
+    Promise.all([feedManager.loadFeeds(), feedManager.loadRssSources()])
+      .then(() => {
+        if (cancelled) return;
+        steps[2].done = true;
+        updateStep();
+      })
+      .catch(() => {
+        if (cancelled) return;
+        steps[2].done = true;
+        updateStep();
+      });
+
+    Promise.all(
+      ["openai", "claude", "gemini", "deepseek"].map((p) =>
+        llm.refreshCloudModels(p).catch(() => {}),
+      ),
+    ).then(() => {
+      if (cancelled) return;
+      steps[3].done = true;
+      updateStep();
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [startupPhase]);
+
   useEffect(() => {
     if (startupPhase !== "ready") return;
+    if (!initialDataLoadDoneRef.current) {
+      initialDataLoadDoneRef.current = true;
+      return;
+    }
     if (settings.sortMode === "score") {
       const thisOp = ++scoringAbortRef.current;
       setIsScoringLoading(true);
@@ -280,11 +367,6 @@ function App() {
       void fetchEnrichedNews();
     }
   }, [fetchEnrichedNews, startupPhase, settings.sortMode, runScoreComputation]);
-
-  useEffect(() => {
-    void feedManager.loadFeeds();
-    void feedManager.loadRssSources();
-  }, [feedManager.loadFeeds, feedManager.loadRssSources]);
 
   useEffect(() => {
     if (availableFeeds.length === 0) return;
@@ -434,8 +516,7 @@ function App() {
     setConfigPopupMessage("");
     resetStartupState();
     setFeedSources([]);
-    await Promise.all([feedManager.loadFeeds(), feedManager.loadRssSources()]);
-  }, [cancelPendingSave, resetSettings, setNews, setEnrichmentError, setRelevanceWarning, setStageStatus, setSelectedArticle, setContextMenu, setSelectedFeedId, setShowConfigPopup, setConfigPopupMessage, resetStartupState, setFeedSources, feedManager.loadFeeds, feedManager.loadRssSources]);
+  }, [cancelPendingSave, resetSettings, setNews, setEnrichmentError, setRelevanceWarning, setStageStatus, setSelectedArticle, setContextMenu, setSelectedFeedId, setShowConfigPopup, setConfigPopupMessage, resetStartupState, setFeedSources]);
 
   const handleSetDate = useCallback((date: string) => {
     if (selectedDate === date) return;
@@ -486,6 +567,7 @@ function App() {
         startupErrorMessage={startupErrorMessage}
         localEmbeddingStatus={startupEmbeddingStatus}
         settingsLocalEmbeddingModel={settings.localEmbeddingModel}
+        loadingDataStep={loadingDataStep}
         onRetry={retryEmbeddingLoad}
         onCleanReset={() => void handleCleanReset()}
       />
