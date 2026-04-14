@@ -178,6 +178,7 @@ let pool = SqlitePoolOptions::new()
     create_feed_tables(&pool).await?;
     create_cloud_models_table(&pool).await?;
     create_upcoming_games_table(&pool).await?;
+    create_weekly_anime_table(&pool).await?;
     seed_default_feeds(&pool).await?;
 logging::info("DB", format!("Initialized SQLite database at {}", db_path), None);
 Ok(pool)
@@ -538,6 +539,16 @@ VALUES (?1, ?2, ?3, 1, 1)",
     .execute(&mut *tx)
     .await?;
 
+    sqlx::query(
+        "INSERT INTO feed_definitions(id, name, slug, is_visible, sort_order)
+ VALUES (?1, ?2, ?3, 1, 2)"
+    )
+    .bind("feed-weekly-anime")
+    .bind("Weekly Anime")
+    .bind("weekly-anime")
+    .execute(&mut *tx)
+    .await?;
+
     for (index, feed) in DEFAULT_FEED_TOPICS.iter().enumerate() {
         sqlx::query(
             "INSERT INTO feed_definitions(id, name, slug, is_visible, sort_order)
@@ -546,7 +557,7 @@ VALUES (?1, ?2, ?3, 1, ?4)",
         .bind(feed.id)
         .bind(feed.name)
         .bind(feed.slug)
-        .bind((index + 2) as i64)
+        .bind((index + 3) as i64)
         .execute(&mut *tx)
         .await?;
 
@@ -1540,4 +1551,146 @@ pub async fn is_feed_visible(pool: &SqlitePool, feed_id: &str) -> Result<bool, s
     .fetch_optional(pool)
     .await?;
     Ok(row.unwrap_or(0) != 0)
+}
+
+pub async fn create_weekly_anime_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS weekly_anime (
+            id TEXT PRIMARY KEY,
+            title_en TEXT NOT NULL DEFAULT '',
+            title_ja TEXT NOT NULL DEFAULT '',
+            title_zh TEXT NOT NULL DEFAULT '',
+            subtitle_en TEXT NOT NULL DEFAULT '',
+            subtitle_ja TEXT NOT NULL DEFAULT '',
+            subtitle_zh TEXT NOT NULL DEFAULT '',
+            studio TEXT NOT NULL DEFAULT '',
+            genres TEXT NOT NULL DEFAULT '[]',
+            current_episode INTEGER NOT NULL DEFAULT 0,
+            total_episodes INTEGER NOT NULL DEFAULT 0,
+            airing_day TEXT NOT NULL DEFAULT '',
+            cover_url TEXT NOT NULL DEFAULT '',
+            source_url TEXT NOT NULL DEFAULT '',
+            bangumi_score REAL NOT NULL DEFAULT 0,
+            watching INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    let _ = sqlx::query("ALTER TABLE weekly_anime ADD COLUMN title_en TEXT NOT NULL DEFAULT ''")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE weekly_anime ADD COLUMN title_ja TEXT NOT NULL DEFAULT ''")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE weekly_anime ADD COLUMN title_zh TEXT NOT NULL DEFAULT ''")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE weekly_anime ADD COLUMN subtitle_en TEXT NOT NULL DEFAULT ''")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE weekly_anime ADD COLUMN subtitle_ja TEXT NOT NULL DEFAULT ''")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE weekly_anime ADD COLUMN subtitle_zh TEXT NOT NULL DEFAULT ''")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE weekly_anime ADD COLUMN bangumi_score REAL NOT NULL DEFAULT 0")
+        .execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE weekly_anime ADD COLUMN watching INTEGER NOT NULL DEFAULT 0")
+        .execute(pool).await;
+
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct WeeklyAnimeRow {
+    pub id: String,
+    pub title_en: String,
+    pub title_ja: String,
+    pub title_zh: String,
+    pub subtitle_en: String,
+    pub subtitle_ja: String,
+    pub subtitle_zh: String,
+    pub studio: String,
+    pub genres: String,
+    pub current_episode: i32,
+    pub total_episodes: i32,
+    pub airing_day: String,
+    pub cover_url: String,
+    pub source_url: String,
+    pub bangumi_score: f64,
+    pub watching: i32,
+    pub updated_at: i64,
+}
+
+pub async fn replace_weekly_anime(pool: &SqlitePool, anime: &[WeeklyAnimeRow]) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM weekly_anime")
+        .execute(&mut *tx)
+        .await?;
+    for a in anime {
+        sqlx::query(
+            "INSERT INTO weekly_anime(id, title_en, title_ja, title_zh, subtitle_en, subtitle_ja, subtitle_zh, studio, genres, current_episode, total_episodes, airing_day, cover_url, source_url, bangumi_score, watching, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)"
+        )
+        .bind(&a.id)
+        .bind(&a.title_en)
+        .bind(&a.title_ja)
+        .bind(&a.title_zh)
+        .bind(&a.subtitle_en)
+        .bind(&a.subtitle_ja)
+        .bind(&a.subtitle_zh)
+        .bind(&a.studio)
+        .bind(&a.genres)
+        .bind(a.current_episode)
+        .bind(a.total_episodes)
+        .bind(&a.airing_day)
+        .bind(&a.cover_url)
+        .bind(&a.source_url)
+        .bind(a.bangumi_score)
+        .bind(a.watching)
+        .bind(a.updated_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await
+}
+
+fn row_to_weekly_anime(row: &sqlx::sqlite::SqliteRow) -> WeeklyAnimeRow {
+    WeeklyAnimeRow {
+        id: row.get("id"),
+        title_en: row.get("title_en"),
+        title_ja: row.get("title_ja"),
+        title_zh: row.get("title_zh"),
+        subtitle_en: row.get("subtitle_en"),
+        subtitle_ja: row.get("subtitle_ja"),
+        subtitle_zh: row.get("subtitle_zh"),
+        studio: row.get("studio"),
+        genres: row.get("genres"),
+        current_episode: row.get("current_episode"),
+        total_episodes: row.get("total_episodes"),
+        airing_day: row.get("airing_day"),
+        cover_url: row.get("cover_url"),
+        source_url: row.get("source_url"),
+        bangumi_score: row.get("bangumi_score"),
+        watching: row.get("watching"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+pub async fn get_all_weekly_anime(pool: &SqlitePool) -> Result<Vec<WeeklyAnimeRow>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT id, title_en, title_ja, title_zh, subtitle_en, subtitle_ja, subtitle_zh, studio, genres, current_episode, total_episodes, airing_day, cover_url, source_url, bangumi_score, watching, updated_at
+         FROM weekly_anime
+         ORDER BY CASE airing_day
+            WHEN 'Monday' THEN 1
+            WHEN 'Tuesday' THEN 2
+            WHEN 'Wednesday' THEN 3
+            WHEN 'Thursday' THEN 4
+            WHEN 'Friday' THEN 5
+            WHEN 'Saturday' THEN 6
+            WHEN 'Sunday' THEN 7
+            ELSE 8
+         END ASC, title_ja ASC"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.iter().map(|r| row_to_weekly_anime(r)).collect())
 }

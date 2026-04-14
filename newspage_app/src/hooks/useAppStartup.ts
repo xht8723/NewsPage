@@ -137,6 +137,8 @@ export function useAppStartup(): UseAppStartupReturn {
           autoScrapeTime: saved.autoScrapeTime?.match(/^\d{1,2}:\d{2}$/) ? saved.autoScrapeTime : defaults.autoScrapeTime,
           imgCacheLimitMb: saved.imgCacheLimitMb ? Math.min(5000, Math.max(100, Number(saved.imgCacheLimitMb))) : defaults.imgCacheLimitMb,
           upcomingGamesSources: saved.upcomingGamesSources ? (() => { try { return JSON.parse(saved.upcomingGamesSources) as string[]; } catch { return defaults.upcomingGamesSources; } })() : defaults.upcomingGamesSources,
+          animeTitleLanguage: saved.animeTitleLanguage || defaults.animeTitleLanguage,
+          animeSubtitleLanguage: saved.animeSubtitleLanguage || defaults.animeSubtitleLanguage,
         }));
         setSelectedEmbeddingModel(savedLocalEmbeddingModel || DEFAULT_EMBEDDING_MODEL);
         if (saved.selectedFeedId?.trim()) {

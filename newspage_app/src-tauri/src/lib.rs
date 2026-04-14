@@ -92,6 +92,7 @@ const ARTICLE_PROCESS_TIMEOUT_SECS: u64 = 30;
 const RELEVANCE_UNAVAILABLE_TOKEN: &str = "RELEVANCE_EMBEDDING_UNAVAILABLE";
 const SYSTEM_ALL_TOPICS_FEED_ID: &str = "feed-all";
 pub(crate) const SYSTEM_UPCOMING_GAMES_FEED_ID: &str = "feed-upcoming-games";
+pub(crate) const SYSTEM_WEEKLY_ANIME_FEED_ID: &str = "feed-weekly-anime";
 
 #[derive(serde::Deserialize)]
 struct OllamaTagsResponse {
@@ -1888,6 +1889,15 @@ async fn get_upcoming_games(
 }
 
 #[tauri::command]
+async fn get_weekly_anime(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<db::WeeklyAnimeRow>, String> {
+    db::get_all_weekly_anime(&state.db)
+        .await
+        .map_err(|e| format!("Failed to load weekly anime: {}", e))
+}
+
+#[tauri::command]
 async fn compute_preference_scores(
     state: tauri::State<'_, AppState>,
     article_ids: Vec<String>,
@@ -2195,7 +2205,7 @@ async fn delete_feed_action(
     if feed_id.is_empty() {
         return Err("Feed id is required".to_string());
     }
-    if feed_id == SYSTEM_ALL_TOPICS_FEED_ID || feed_id == SYSTEM_UPCOMING_GAMES_FEED_ID {
+    if feed_id == SYSTEM_ALL_TOPICS_FEED_ID || feed_id == SYSTEM_UPCOMING_GAMES_FEED_ID || feed_id == SYSTEM_WEEKLY_ANIME_FEED_ID {
         return Err("This default feed cannot be deleted".to_string());
     }
 
@@ -2236,7 +2246,7 @@ async fn set_feed_categories_action(
     if feed_id.is_empty() {
         return Err("Feed id is required".to_string());
     }
-    if feed_id == SYSTEM_ALL_TOPICS_FEED_ID || feed_id == SYSTEM_UPCOMING_GAMES_FEED_ID {
+    if feed_id == SYSTEM_ALL_TOPICS_FEED_ID || feed_id == SYSTEM_UPCOMING_GAMES_FEED_ID || feed_id == SYSTEM_WEEKLY_ANIME_FEED_ID {
         return Err("This default feed cannot be customized".to_string());
     }
 
@@ -2408,6 +2418,8 @@ fn default_settings_map() -> HashMap<String, String> {
     map.insert("ollamaEmbeddingModel".to_string(), DEFAULT_LOCAL_EMBEDDING_MODEL.to_string());
     map.insert("imgCacheLimitMb".to_string(), "500".to_string());
     map.insert("upcomingGamesSources".to_string(), "[\"opencritic\"]".to_string());
+    map.insert("animeTitleLanguage".to_string(), "en".to_string());
+    map.insert("animeSubtitleLanguage".to_string(), "en".to_string());
     map
 }
 
@@ -2874,6 +2886,10 @@ async fn purge_database(app: tauri::AppHandle, state: tauri::State<'_, AppState>
         .execute(&state.db)
         .await
         .map_err(|e| format!("Failed to purge upcoming_games table: {}", e))?;
+    sqlx::query("DELETE FROM weekly_anime")
+        .execute(&state.db)
+        .await
+        .map_err(|e| format!("Failed to purge weekly_anime table: {}", e))?;
 
     seed_default_feeds(&state.db)
         .await
@@ -2997,6 +3013,17 @@ async fn run_pipeline(
                 }
                 Err(e) => {
                     logging::warn("Pipeline", format!("YYS calendar scrape failed: {}", e), None);
+                }
+            }
+        }
+
+        if !state.stop_requested.load(Ordering::Relaxed) {
+            match scrapers::bangumi::scrape_weekly_anime_bangumi(state, &state.stop_requested, &runtime.image_cache_dir).await {
+                Ok(count) => {
+                    logging::info("Pipeline", format!("Bangumi weekly anime scrape done: {} entries", count), None);
+                }
+                Err(e) => {
+                    logging::warn("Pipeline", format!("Bangumi weekly anime scrape failed: {}", e), None);
                 }
             }
         }
@@ -3301,6 +3328,117 @@ async fn translate_text(
 }
 
 #[tauri::command]
+async fn translate_text_batch(
+    state: tauri::State<'_, AppState>,
+    texts: Vec<String>,
+    source_language: String,
+    target_language: String,
+    provider: String,
+    model: String,
+    api_key: Option<String>,
+    endpoint: Option<String>,
+) -> Result<Vec<String>, String> {
+    let source = source_language.trim();
+    let target = target_language.trim();
+
+    let provider_normalized = provider.trim().to_ascii_lowercase();
+    let model_normalized = model.trim().to_string();
+    let endpoint_normalized = endpoint
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+
+    let mut results: Vec<String> = Vec::with_capacity(texts.len());
+    let mut uncached: Vec<(usize, String, String)> = Vec::new();
+
+    {
+        let cache = state.translation_cache.lock().unwrap();
+        for (i, text) in texts.iter().enumerate() {
+            let trimmed = text.trim();
+            if trimmed.is_empty() || source.eq_ignore_ascii_case(target) {
+                results.push(text.clone());
+                continue;
+            }
+            let key = format!(
+                "{}::{}::{}::{}::{}::{}",
+                provider_normalized,
+                model_normalized,
+                endpoint_normalized,
+                source.to_ascii_lowercase(),
+                target.to_ascii_lowercase(),
+                trimmed
+            );
+            if let Some(cached) = cache.get(&key).cloned() {
+                results.push(cached);
+            } else {
+                results.push(String::new());
+                uncached.push((i, trimmed.to_string(), key));
+            }
+        }
+    }
+
+    if !uncached.is_empty() {
+        let llm_provider: platform_llm::LLMProvider =
+            provider.parse().unwrap_or(platform_llm::LLMProvider::Ollama);
+        let is_local = llm_provider.is_local();
+        let config = platform_llm::LLMConfig {
+            provider: llm_provider,
+            api_key: api_key.clone(),
+            endpoint: endpoint.clone(),
+            model: model.clone(),
+        };
+
+        let translated: Vec<(usize, String, String)> = if is_local {
+            let llm = platform_llm::create_provider(&config)?;
+            let mut out = Vec::with_capacity(uncached.len());
+            for (idx, trimmed, key) in &uncached {
+                match llm.translate_text(trimmed, source, target).await {
+                    Ok(t) => out.push((*idx, t, key.clone())),
+                    Err(_) => out.push((*idx, texts[*idx].clone(), key.clone())),
+                }
+            }
+            out
+        } else {
+            let mut set = tokio::task::JoinSet::new();
+            for (idx, trimmed, key) in uncached {
+                let llm = platform_llm::create_provider(&config)?;
+                let source = source.to_string();
+                let target = target.to_string();
+                let fallback = texts[idx].clone();
+                set.spawn(async move {
+                    match llm.translate_text(&trimmed, &source, &target).await {
+                        Ok(t) => (idx, t, key),
+                        Err(_) => (idx, fallback, key),
+                    }
+                });
+            }
+            let mut out = Vec::with_capacity(set.len());
+            while let Some(res) = set.join_next().await {
+                match res {
+                    Ok(item) => out.push(item),
+                    Err(_) => continue,
+                }
+            }
+            out
+        };
+
+        {
+            let mut cache = state.translation_cache.lock().unwrap();
+            if cache.len() > 5000 {
+                cache.clear();
+            }
+            for (idx, value, key) in &translated {
+                cache.insert(key.clone(), value.clone());
+                results[*idx] = value.clone();
+            }
+        }
+    }
+
+    Ok(results)
+}
+
+#[tauri::command]
 fn list_local_embedding_models() -> Vec<String> {
     local_embedding::list_supported_models()
 }
@@ -3317,7 +3455,7 @@ async fn prepare_local_embedding_model(model: Option<String>) -> Result<local_em
 
 #[tauri::command]
 fn load_process_logs(limit: Option<usize>) -> Result<Vec<ProcessLogEvent>, String> {
-    let max = limit.unwrap_or(300).clamp(1, 2_000);
+    let max = limit.unwrap_or(50).clamp(1, 2_000);
     Ok(logging::load_recent(max))
 }
 
@@ -3592,6 +3730,7 @@ pub fn run() {
             get_enriched_articles,
             get_enriched_article_by_id,
             get_upcoming_games,
+            get_weekly_anime,
             compute_preference_scores,
             vote_article,
             list_feeds,
@@ -3607,6 +3746,7 @@ pub fn run() {
             list_ollama_models,
             test_provider_connection,
             translate_text,
+            translate_text_batch,
             list_local_embedding_models,
             get_local_embedding_status,
             prepare_local_embedding_model,

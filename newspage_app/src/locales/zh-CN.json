@@ -89,8 +89,8 @@
     "hideSource": "隐藏来自\"{{source}}\"的新闻",
     "likeTopic": "我喜欢这个主题",
     "dislikeTopic": "我不喜欢这个主题",
-    "votedLike": "✓ 我喜欢这个主题",
-    "votedDislike": "✓ 我不喜欢这个主题"
+    "votedLike": "✓ 取消喜欢",
+    "votedDislike": "✓ 取消不喜欢"
   },
   "settings": {
     "preferences": "偏好设置",
@@ -228,17 +228,27 @@
     "rssSources": "RSS 来源",
     "noRssSources": "暂无已配置的 RSS 来源。",
     "removeFromFeed": "从此订阅中移除\"{{category}}\"文章",
-    "includeInFeed": "在此订阅中包含\"{{category}}\"文章"
+    "includeInFeed": "在此订阅中包含\"{{category}}\"文章",
+    "animeTitleLanguage": "标题语言",
+    "animeSubtitleLanguage": "副标题语言"
   },
   "feeds": {
     "all": "全部",
     "upcomingGames": "游戏发售日",
+    "weeklyAnime": "每周动画",
     "worldNation": "世界与国家",
     "entertainment": "娱乐",
     "scienceHealth": "科学与健康",
     "sports": "体育",
     "business": "商业",
-    "rss": "RSS"
+    "rss": "RSS",
+    "noArticles": "暂无文章。",
+    "noArticlesHint": "点击「获取新闻」来抓取文章",
+    "noAnime": "暂无番组",
+    "noAnimeHint": "点击「获取新闻」来抓取每周番组",
+    "noGames": "暂无游戏",
+    "noGamesHint": "点击「获取新闻」来抓取游戏发售信息",
+    "calculatingScores": "正在计算排名..."
   },
   "configPopup": {
     "setupRequired": "需要配置"
@@ -296,5 +306,24 @@
     "authorHint": "匹配作者元素的 CSS 选择器。内部文本将用作文章作者。如不可用则留空。",
     "optional": "可选",
     "saving": "保存中..."
+  },
+  "weekday": {
+    "Sunday": "星期日",
+    "Monday": "星期一",
+    "Tuesday": "星期二",
+    "Wednesday": "星期三",
+    "Thursday": "星期四",
+    "Friday": "星期五",
+    "Saturday": "星期六",
+    "Today": "今天",
+    "Tomorrow": "明天"
+  },
+  "gameDate": {
+    "released": "已发售",
+    "outToday": "今日发售",
+    "tomorrow": "明天",
+    "daysOne": "{{count}}天后",
+    "daysOther": "{{count}}天后",
+    "tba": "待定"
   }
 }

@@ -40,6 +40,7 @@ const FeedDeleteConfirmDialog = lazy(() => import("./components/FeedDeleteConfir
 const FeedManagerPanel = lazy(() => import("./components/FeedManagerPanel").then((m) => ({ default: m.FeedManagerPanel })));
 import { VirtualizedArticleList } from "./components/VirtualizedArticleList";
 import { UpcomingGamesGrid } from "./components/UpcomingGamesGrid";
+import { WeeklyAnimeGrid } from "./components/WeeklyAnimeGrid";
 
 import type { TranslationRuntimeConfig } from "./hooks/useLiveTranslation";
 import { normalizeSourceName } from "./utils/sourceBlacklist";
@@ -114,6 +115,9 @@ function App() {
   const [purgeConfirmStep, setPurgeConfirmStep] = useState<0 | 1 | 2>(0);
   const [isPurging, setIsPurging] = useState(false);
   const [voteVersion, setVoteVersion] = useState(0);
+  const [isScoringLoading, setIsScoringLoading] = useState(false);
+  const scoringAbortRef = useRef(0);
+  const articleIdsRef = useRef<string[]>([]);
 
   const translatePanelRef = useRef<HTMLDivElement | null>(null);
   const todayString = formatDateLocal(new Date());
@@ -206,10 +210,76 @@ function App() {
 
   const contextMenuView = contextMenu ?? contextMenuSnapshot;
 
+  const runScoreComputation = useCallback(async (articleIds: string[], abortCheck: () => boolean) => {
+    if (articleIds.length === 0) return;
+
+    const liked = settings.likedConcepts.split(",").map((s) => s.trim()).filter(Boolean);
+    const disliked = settings.dislikedConcepts.split(",").map((s) => s.trim()).filter(Boolean);
+
+    try {
+      const scorePairs = await articleService.computePreferenceScores({
+        articleIds,
+        likedConcepts: liked,
+        dislikedConcepts: disliked,
+        localEmbeddingModel: settings.localEmbeddingModel,
+      });
+      if (abortCheck()) return;
+      const scoreMap = Object.fromEntries(scorePairs);
+      setNews((prev) => prev.map((a) => {
+        const newScore = scoreMap[a.id];
+        return newScore !== undefined && Math.abs(newScore - a.preferenceScore) > 0.0001
+          ? { ...a, preferenceScore: newScore }
+          : a;
+      }));
+      setRelevanceWarning(null);
+    } catch (error) {
+      if (abortCheck()) return;
+      if (String(error).includes("RELEVANCE_EMBEDDING_UNAVAILABLE")) {
+        newsProcessor.disableRelevanceSort(String(error));
+      }
+    }
+  }, [settings.likedConcepts, settings.dislikedConcepts, settings.localEmbeddingModel, setNews, setRelevanceWarning, newsProcessor.disableRelevanceSort]);
+
+  useEffect(() => {
+    articleIdsRef.current = news.map((a) => a.id);
+  }, [news]);
+
+  useEffect(() => {
+    if (settings.sortMode !== "score") return;
+
+    const timeout = window.setTimeout(async () => {
+      const currentIds = articleIdsRef.current;
+      if (currentIds.length === 0) return;
+      setIsScoringLoading(true);
+      try {
+        await runScoreComputation(currentIds, () => false);
+      } finally {
+        setIsScoringLoading(false);
+      }
+    }, 800);
+
+    return () => window.clearTimeout(timeout);
+  }, [settings.sortMode, settings.likedConcepts, settings.dislikedConcepts, settings.localEmbeddingModel, voteVersion, runScoreComputation]);
+
   useEffect(() => {
     if (startupPhase !== "ready") return;
-    void fetchEnrichedNews();
-  }, [fetchEnrichedNews, startupPhase]);
+    if (settings.sortMode === "score") {
+      const thisOp = ++scoringAbortRef.current;
+      setIsScoringLoading(true);
+      void fetchEnrichedNews().then(async (articles) => {
+        if (thisOp !== scoringAbortRef.current) return;
+        try {
+          await runScoreComputation(articles.map((a) => a.id), () => thisOp !== scoringAbortRef.current);
+        } finally {
+          if (thisOp === scoringAbortRef.current) {
+            setIsScoringLoading(false);
+          }
+        }
+      });
+    } else {
+      void fetchEnrichedNews();
+    }
+  }, [fetchEnrichedNews, startupPhase, settings.sortMode, runScoreComputation]);
 
   useEffect(() => {
     void feedManager.loadFeeds();
@@ -320,40 +390,6 @@ function App() {
     };
   }, []);
 
-  useEffect(() => {
-    if (settings.sortMode !== "score") return;
-    const liked = settings.likedConcepts.split(",").map((s) => s.trim()).filter(Boolean);
-    const disliked = settings.dislikedConcepts.split(",").map((s) => s.trim()).filter(Boolean);
-
-    const timeout = window.setTimeout(async () => {
-      if (news.length === 0) return;
-      const ids = news.map((a) => a.id);
-
-      try {
-        const scorePairs = await articleService.computePreferenceScores({
-          articleIds: ids,
-          likedConcepts: liked,
-          dislikedConcepts: disliked,
-          localEmbeddingModel: settings.localEmbeddingModel,
-        });
-        const scoreMap = Object.fromEntries(scorePairs);
-        setNews((prev) => prev.map((a) => {
-          const newScore = scoreMap[a.id];
-          return newScore !== undefined && Math.abs(newScore - a.preferenceScore) > 0.0001
-            ? { ...a, preferenceScore: newScore }
-            : a;
-        }));
-        setRelevanceWarning(null);
-      } catch (error) {
-        if (String(error).includes("RELEVANCE_EMBEDDING_UNAVAILABLE")) {
-          newsProcessor.disableRelevanceSort(String(error));
-        }
-      }
-    }, 800);
-
-    return () => window.clearTimeout(timeout);
-  }, [settings.sortMode, settings.likedConcepts, settings.dislikedConcepts, settings.localEmbeddingModel, news.length, voteVersion]);
-
   const handleVote = useCallback(async (articleId: string, direction: 1 | -1) => {
     const article = news.find((a) => a.id === articleId);
     if (!article) return;
@@ -403,13 +439,27 @@ function App() {
 
   const handleSetDate = useCallback((date: string) => {
     if (selectedDate === date) return;
-    setIsFilterTransitioning(true);
-    setTimeout(() => {
-      setSelectedDate(date);
+    setSelectedDate(date);
+
+    if (settings.sortMode === "score") {
+      const thisOp = ++scoringAbortRef.current;
+      setIsScoringLoading(true);
+      void fetchEnrichedNews(true, false, date).then(async (articles) => {
+        if (thisOp !== scoringAbortRef.current) return;
+        try {
+          await runScoreComputation(articles.map((a) => a.id), () => thisOp !== scoringAbortRef.current);
+        } finally {
+          if (thisOp === scoringAbortRef.current) {
+            setIsScoringLoading(false);
+          }
+        }
+      });
+    } else {
+      setIsFilterTransitioning(true);
       void fetchEnrichedNews(true, false, date);
       setTimeout(() => setIsFilterTransitioning(false), 50);
-    }, 150);
-  }, [selectedDate, fetchEnrichedNews, setIsFilterTransitioning]);
+    }
+  }, [selectedDate, settings.sortMode, fetchEnrichedNews, setIsFilterTransitioning, runScoreComputation]);
 
   const handleSelectFeed = useCallback((feedId: string) => {
     setSelectedFeedId(feedId);
@@ -619,6 +669,8 @@ function App() {
         <section className={`news-scroll min-h-0 flex-1 overflow-y-auto pb-24 pr-1 ${isDarkMode ? "news-scroll-dark" : "news-scroll-light"}`}>
           {selectedFeedId === "feed-upcoming-games" ? (
             <UpcomingGamesGrid isDarkMode={isDarkMode} />
+          ) : selectedFeedId === "feed-weekly-anime" ? (
+            <WeeklyAnimeGrid isDarkMode={isDarkMode} />
           ) : (
             <VirtualizedArticleList
               articles={articleFilter.filteredNews}
@@ -630,6 +682,7 @@ function App() {
               translationTargetLanguage={settings.translationTargetLanguage}
               translationRuntime={translationRuntime}
               isTransitioning={isFilterTransitioning}
+              isScoringLoading={isScoringLoading}
               shiftingArticleId={newsProcessor.shiftingArticleId}
               onSelectArticle={setSelectedArticle}
               onOpenContextMenu={handleOpenContextMenu}

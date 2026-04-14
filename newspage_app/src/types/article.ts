@@ -102,6 +102,8 @@ export interface UserSettings {
   maxVotedArticles: number;
   imgCacheLimitMb: number;
   upcomingGamesSources: string[];
+  animeTitleLanguage: string;
+  animeSubtitleLanguage: string;
 }
 
 export interface LocalEmbeddingStatus {

@@ -20,13 +20,13 @@ interface UseEnrichedArticlesParams {
 export function useEnrichedArticles(params: UseEnrichedArticlesParams): {
   news: NewsArticle[];
   setNews: Dispatch<SetStateAction<NewsArticle[]>>;
-  fetchEnrichedNews: (filterByDate?: boolean, preserveOnEmpty?: boolean, overrideDate?: string) => Promise<void>;
+  fetchEnrichedNews: (filterByDate?: boolean, preserveOnEmpty?: boolean, overrideDate?: string) => Promise<NewsArticle[]>;
 } {
   const { selectedDate } = params;
   const [news, setNews] = useState<NewsArticle[]>([]);
   const fetchCounterRef = useRef(0);
 
-  const fetchEnrichedNews = useCallback(async (filterByDate: boolean = true, preserveOnEmpty: boolean = false, overrideDate?: string) => {
+  const fetchEnrichedNews = useCallback(async (filterByDate: boolean = true, preserveOnEmpty: boolean = false, overrideDate?: string): Promise<NewsArticle[]> => {
     const thisFetch = ++fetchCounterRef.current;
     const date = overrideDate ?? selectedDate;
 
@@ -37,7 +37,7 @@ export function useEnrichedArticles(params: UseEnrichedArticlesParams): {
 
       const mapped = rows.map(mapBackendArticle);
       if (thisFetch !== fetchCounterRef.current) {
-        return;
+        return [];
       }
       setNews((prev) => {
         if (preserveOnEmpty && mapped.length === 0 && prev.length > 0) {
@@ -45,10 +45,12 @@ export function useEnrichedArticles(params: UseEnrichedArticlesParams): {
         }
         return mapped;
       });
+      return mapped;
     } catch (_error) {
       if (thisFetch !== fetchCounterRef.current) {
-        return;
+        return [];
       }
+      return [];
     }
   }, [selectedDate]);
 

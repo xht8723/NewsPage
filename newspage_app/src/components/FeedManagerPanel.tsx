@@ -19,7 +19,7 @@ import { NeonCheckbox } from "./NeonCheckbox";
 import { useSettingsStore } from "../stores/settingsStore";
 import { settingsService } from "../services";
 
-const PROTECTED_FEED_IDS = ["feed-all", "feed-upcoming-games"];
+const PROTECTED_FEED_IDS = ["feed-all", "feed-upcoming-games", "feed-weekly-anime"];
 const NO_EXPAND_FEED_IDS = ["feed-all"];
 
 const UPCOMING_GAMES_SOURCES = [
@@ -163,6 +163,7 @@ export function FeedManagerPanel({
 }: FeedManagerPanelProps): React.JSX.Element {
   const { t } = useTranslation();
   const upcomingGamesSources = useSettingsStore((s) => s.settings.upcomingGamesSources);
+  const settings = useSettingsStore((s) => s.settings);
   const setSettings = useSettingsStore((s) => s.setSettings);
   const [draftName, setDraftName] = useState("");
   const [renamingFeedId, setRenamingFeedId] = useState<string | null>(null);
@@ -417,6 +418,53 @@ export function FeedManagerPanel({
                           </label>
                         );
                       })}
+                    </div>
+                  ) : feed.id === "feed-weekly-anime" ? (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2">
+                        <label className={`text-xs font-medium ${isDarkMode ? "text-zinc-400" : "text-zinc-600"}`}>
+                          {t("feedManager.animeTitleLanguage")}
+                        </label>
+                        <select
+                          value={settings.animeTitleLanguage}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSettings((prev) => ({ ...prev, animeTitleLanguage: val }));
+                            void settingsService.save("animeTitleLanguage", val);
+                          }}
+                          className={`rounded border px-2 py-1 text-xs focus:outline-none ${
+                            isDarkMode
+                              ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                              : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                          }`}
+                        >
+                          <option value="en">English</option>
+                          <option value="ja">日本語</option>
+                          <option value="zh">中文</option>
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className={`text-xs font-medium ${isDarkMode ? "text-zinc-400" : "text-zinc-600"}`}>
+                          {t("feedManager.animeSubtitleLanguage")}
+                        </label>
+                        <select
+                          value={settings.animeSubtitleLanguage}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSettings((prev) => ({ ...prev, animeSubtitleLanguage: val }));
+                            void settingsService.save("animeSubtitleLanguage", val);
+                          }}
+                          className={`rounded border px-2 py-1 text-xs focus:outline-none ${
+                            isDarkMode
+                              ? "border-zinc-700 bg-zinc-800 text-zinc-100"
+                              : "border-zinc-300 bg-zinc-100 text-zinc-900"
+                          }`}
+                        >
+                          <option value="en">English</option>
+                          <option value="ja">日本語</option>
+                          <option value="zh">中文</option>
+                        </select>
+                      </div>
                     </div>
                   ) : (
                     <div className="space-y-0">

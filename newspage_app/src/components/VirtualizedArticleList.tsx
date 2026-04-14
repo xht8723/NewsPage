@@ -1,10 +1,12 @@
 import { memo, useMemo, useRef, useLayoutEffect, useCallback } from "react";
 import { ArticleCard } from "./ArticleCard";
 import { Search } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { NewsArticle, FeedSource } from "../types/article";
 import type { LayoutMode } from "../constants/article";
 import type { TranslationRuntimeConfig } from "../hooks/useLiveTranslation";
 import { buildTagColorMap } from "../utils/articleMeta";
+import { DotsSpinner } from "./DotsSpinner";
 
 interface VirtualizedArticleListProps {
   articles: NewsArticle[];
@@ -16,6 +18,7 @@ interface VirtualizedArticleListProps {
   translationTargetLanguage: "en" | "zh-CN";
   translationRuntime: TranslationRuntimeConfig;
   isTransitioning: boolean;
+  isScoringLoading?: boolean;
   shiftingArticleId?: string | null;
   onSelectArticle: (article: NewsArticle) => void;
   onOpenContextMenu: (article: NewsArticle, x: number, y: number) => void;
@@ -31,10 +34,12 @@ function VirtualizedArticleListComponent({
   translationTargetLanguage,
   translationRuntime,
   isTransitioning,
+  isScoringLoading,
   shiftingArticleId,
   onSelectArticle,
   onOpenContextMenu,
 }: VirtualizedArticleListProps) {
+  const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const prevPositions = useRef<Map<string, DOMRect>>(new Map());
 
@@ -105,12 +110,23 @@ function VirtualizedArticleListComponent({
     }
   }, [articles, shiftingArticleId, snapshotPositions]);
 
+  if (isScoringLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center space-y-4 py-32 text-center opacity-40">
+        <DotsSpinner size={48} className="text-zinc-500" />
+        <div>
+          <h3 className="text-lg font-bold">{t("feeds.calculatingScores")}</h3>
+        </div>
+      </div>
+    );
+  }
+
   if (articles.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center space-y-4 py-32 text-center opacity-40">
         <Search size={48} className="text-zinc-500" />
         <div>
-          <h3 className="text-lg font-bold">No articles yet.</h3>
+          <h3 className="text-lg font-bold">{t("feeds.noArticles")}</h3>
         </div>
       </div>
     );

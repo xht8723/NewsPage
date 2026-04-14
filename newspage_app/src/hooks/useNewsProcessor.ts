@@ -8,6 +8,7 @@ import { articleService, llmService } from "../services";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useNewsStore, useUIStore } from "../stores";
 import { useUpcomingGamesStore } from "../stores/upcomingGamesStore";
+import { useWeeklyAnimeStore } from "../stores/weeklyAnimeStore";
 
 type StageKey = "scrape" | "extract" | "enrich" | "persist";
 type StageState = "idle" | "running" | "done" | "error" | "stopped";
@@ -120,6 +121,7 @@ export function useNewsProcessor(deps: UseNewsProcessorDeps): UseNewsProcessorRe
 
     if (stage === "scrape" && nextState === "done") {
       void useUpcomingGamesStore.getState().loadGames();
+      void useWeeklyAnimeStore.getState().loadAnime();
     }
   }, [setStageStatus]);
 
@@ -240,7 +242,7 @@ export function useNewsProcessor(deps: UseNewsProcessorDeps): UseNewsProcessorRe
 
     const initListeners = async () => {
       try {
-        const persisted = await articleService.loadProcessLogs(300);
+        const persisted = await articleService.loadProcessLogs(50);
         if (!disposed) {
           seenLogKeysRef.current.clear();
           for (const entry of persisted) {

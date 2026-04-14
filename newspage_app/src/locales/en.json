@@ -89,8 +89,8 @@
     "hideSource": "Hide future news from \"{{source}}\"",
     "likeTopic": "I like this topic",
     "dislikeTopic": "I don't like this topic",
-    "votedLike": "✓ I liked this topic",
-    "votedDislike": "✓ I didn't like this topic"
+    "votedLike": "✓ Cancel like",
+    "votedDislike": "✓ Cancel dislike"
   },
   "settings": {
     "preferences": "Preferences",
@@ -228,17 +228,27 @@
     "rssSources": "RSS Sources",
     "noRssSources": "No RSS sources configured.",
     "removeFromFeed": "Remove \"{{category}}\" articles from this feed",
-    "includeInFeed": "Include \"{{category}}\" articles in this feed"
+    "includeInFeed": "Include \"{{category}}\" articles in this feed",
+    "animeTitleLanguage": "Title Language",
+    "animeSubtitleLanguage": "Subtitle Language"
   },
   "feeds": {
     "all": "All",
     "upcomingGames": "Upcoming Games",
+    "weeklyAnime": "Weekly Anime",
     "worldNation": "World & Nation",
     "entertainment": "Entertainment",
     "scienceHealth": "Science & Health",
     "sports": "Sports",
     "business": "Business",
-    "rss": "RSS"
+    "rss": "RSS",
+    "noArticles": "No articles yet.",
+    "noArticlesHint": "Run \"Get News\" to fetch articles",
+    "noAnime": "No anime scheduled",
+    "noAnimeHint": "Run \"Get News\" to fetch weekly anime",
+    "noGames": "No upcoming games",
+    "noGamesHint": "Run \"Get News\" to fetch games from OpenCritic",
+    "calculatingScores": "Calculating rankings..."
   },
   "configPopup": {
     "setupRequired": "Setup required"
@@ -296,5 +306,24 @@
     "authorHint": "CSS selector matching the author element. The inner text will be used as the article author. Leave blank if not available.",
     "optional": "optional",
     "saving": "Saving..."
+  },
+  "weekday": {
+    "Sunday": "Sunday",
+    "Monday": "Monday",
+    "Tuesday": "Tuesday",
+    "Wednesday": "Wednesday",
+    "Thursday": "Thursday",
+    "Friday": "Friday",
+    "Saturday": "Saturday",
+    "Today": "Today",
+    "Tomorrow": "Tomorrow"
+  },
+  "gameDate": {
+    "released": "Released",
+    "outToday": "Out today",
+    "tomorrow": "Tomorrow",
+    "daysOne": "{{count}} day",
+    "daysOther": "{{count}} days",
+    "tba": "TBA"
   }
 }

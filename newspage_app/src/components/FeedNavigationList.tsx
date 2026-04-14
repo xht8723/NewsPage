@@ -267,7 +267,7 @@ export const FeedNavigationList = memo(function FeedNavigationListComponent({
             <EyeOff size={13} />
             <span>{t("feedManager.hideFeed")}</span>
           </button>
-          {contextMenuFeed.id !== "feed-all" && contextMenuFeed.id !== "feed-upcoming-games" && (
+          {contextMenuFeed.id !== "feed-all" && contextMenuFeed.id !== "feed-upcoming-games" && contextMenuFeed.id !== "feed-weekly-anime" && (
             <button
               type="button"
               disabled={isBusy}

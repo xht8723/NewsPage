@@ -1,4 +1,5 @@
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
 import { Calendar } from "lucide-react";
 import type { UpcomingGame } from "../types/upcomingGame";
 
@@ -34,30 +35,12 @@ function isFuzzyDate(releaseDate: string): boolean {
   return !releaseDate || YEAR_ONLY_RE.test(releaseDate);
 }
 
-function formatDate(releaseDate: string): string {
-  if (!releaseDate) return "TBA";
-  if (YEAR_ONLY_RE.test(releaseDate)) return releaseDate;
-  const date = new Date(releaseDate + "T00:00:00");
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
 function daysUntil(releaseDate: string): number {
   if (!releaseDate || YEAR_ONLY_RE.test(releaseDate)) return Infinity;
   const target = new Date(releaseDate + "T00:00:00");
   const now = new Date();
   now.setHours(0, 0, 0, 0);
   return Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-}
-
-function formatDaysLabel(days: number): string {
-  if (days < 0) return "Released";
-  if (days === 0) return "Out today";
-  if (days === 1) return "Tomorrow";
-  return `${days} days`;
 }
 
 interface UpcomingGameCardProps {
@@ -69,12 +52,31 @@ export const UpcomingGameCard = memo(function UpcomingGameCard({
   game,
   isDarkMode,
 }: UpcomingGameCardProps): React.JSX.Element {
+  const { t, i18n } = useTranslation();
   const fuzzy = isFuzzyDate(game.releaseDate);
   const days = fuzzy ? Infinity : daysUntil(game.releaseDate);
   const isReleased = !fuzzy && days < 0;
   const isSoon = !fuzzy && days >= 0 && days <= 30;
 
   const colorMap = isDarkMode ? PLATFORM_COLORS : PLATFORM_COLORS_LIGHT;
+
+  const displayDate = (() => {
+    if (!game.releaseDate) return t("gameDate.tba");
+    if (YEAR_ONLY_RE.test(game.releaseDate)) return game.releaseDate;
+    const date = new Date(game.releaseDate + "T00:00:00");
+    return date.toLocaleDateString(i18n.language, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  })();
+
+  const daysLabel = (() => {
+    if (days < 0) return t("gameDate.released");
+    if (days === 0) return t("gameDate.outToday");
+    if (days === 1) return t("gameDate.tomorrow");
+    return t("gameDate.daysOther", { count: days });
+  })();
 
   return (
     <div
@@ -93,7 +95,7 @@ export const UpcomingGameCard = memo(function UpcomingGameCard({
         />
         {isSoon && (
           <span className="absolute right-2 top-2 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
-            {formatDaysLabel(days)}
+            {daysLabel}
           </span>
         )}
         {isReleased && game.score > 0 && (
@@ -103,7 +105,7 @@ export const UpcomingGameCard = memo(function UpcomingGameCard({
         )}
         {isReleased && (
           <span className="absolute right-2 top-2 rounded-full bg-zinc-700/90 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-zinc-300">
-            Released
+            {t("gameDate.released")}
           </span>
         )}
       </div>
@@ -146,7 +148,7 @@ export const UpcomingGameCard = memo(function UpcomingGameCard({
           }`}
         >
           <Calendar size={12} className="shrink-0" />
-          <span>{formatDate(game.releaseDate)}</span>
+          <span>{displayDate}</span>
         </div>
       </div>
     </div>

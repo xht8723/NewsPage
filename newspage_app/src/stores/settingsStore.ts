@@ -71,6 +71,8 @@ export function createDefaultSettings(): UserSettings {
     maxVotedArticles: 100,
     imgCacheLimitMb: 500,
     upcomingGamesSources: ["opencritic"],
+    animeTitleLanguage: "en",
+    animeSubtitleLanguage: "en",
   };
 }
 

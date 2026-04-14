@@ -3,6 +3,7 @@ import type { TFunction } from "i18next";
 const DEFAULT_FEED_KEYS: Record<string, string> = {
   "feed-all": "feeds.all",
   "feed-upcoming-games": "feeds.upcomingGames",
+  "feed-weekly-anime": "feeds.weeklyAnime",
   "feed-world-nation": "feeds.worldNation",
   "feed-entertainment": "feeds.entertainment",
   "feed-science-health": "feeds.scienceHealth",

@@ -8,6 +8,7 @@ use crate::logging;
 
 pub mod ann;
 pub mod automaton;
+pub mod bangumi;
 pub mod custom_rss;
 pub mod gcores;
 pub mod gl_rss;
