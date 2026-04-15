@@ -258,15 +258,38 @@ pub async fn fetch_article_text_and_thumbnail(
     let result = extract(&html, &Options::default())
         .map_err(|e| format!("trafilatura failed to extract text from '{}': {}", effective_url, e))?;
 
+    let content_text = scrub_cdn_error_urls(&result.content_text);
+
     // Check if the extracted text is junk (JS wall, paywall, anti-bot, etc.)
-    if let Some(reason) = is_junk_article_text(&result.content_text) {
+    if let Some(reason) = is_junk_article_text(&content_text) {
         return Err(format!(
             "Extracted text from '{}' is not usable: {}",
             effective_url, reason
         ));
     }
 
-    Ok((result.content_text, thumbnail))
+    Ok((content_text, thumbnail))
+}
+
+/// Remove CDN error/waf URLs from extracted article text so they don't
+/// pollute LLM-generated snippets or summaries.
+fn scrub_cdn_error_urls(text: &str) -> String {
+    let patterns = [
+        "errors.edgesuite.net/",
+        "cloudflare.com/cdn-cgi/",
+    ];
+    let mut result = text.to_string();
+    for pat in &patterns {
+        while let Some(start) = result.find(pat) {
+            let line_start = result[..start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let line_end = result[start..].find('\n').map(|i| start + i).unwrap_or(result.len());
+            result.replace_range(line_start..line_end, "");
+            if result.as_bytes().get(line_start) == Some(&b'\n') {
+                result.remove(line_start);
+            }
+        }
+    }
+    result
 }
 
 /// Extract a thumbnail URL from raw HTML.
@@ -384,6 +407,16 @@ const JUNK_PHRASES: &[&str] = &[
     "just a moment...",
 ];
 
+const CDN_ERROR_MARKERS: &[&str] = &[
+    "akamai",
+    "incident id",
+    "request id",
+    "reference #",
+    "error reference",
+    "support id",
+    "ray id",
+];
+
 /// Returns `Some(reason)` if the extracted article text looks like junk
 /// (JS wall, paywall, anti-bot page, etc.), or `None` if it looks legit.
 pub(crate) fn is_junk_article_text(text: &str) -> Option<&'static str> {
@@ -395,6 +428,11 @@ pub(crate) fn is_junk_article_text(text: &str) -> Option<&'static str> {
     for phrase in JUNK_PHRASES {
         if lower.contains(phrase) {
             return Some("extracted text contains JS wall / paywall / anti-bot phrase");
+        }
+    }
+    for marker in CDN_ERROR_MARKERS {
+        if lower.contains(marker) {
+            return Some("extracted text contains CDN error / WAF block marker");
         }
     }
     None

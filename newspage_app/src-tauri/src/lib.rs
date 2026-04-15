@@ -348,7 +348,7 @@ async fn persist_failed_with_embedding(
         local_embedding_model,
     )
     .await;
-    persist_enriched_article(db_pool, &failed).await?;
+    persist_enriched_article(db_pool, &failed, false).await?;
     if let Some(vec) = embedding {
         if let Err(e) = db::save_embedding(db_pool, &failed.id, &vec).await {
             logging::warn("Embedding", format!("Failed to save embedding for '{}': {}", failed.title, e), None);
@@ -357,8 +357,8 @@ async fn persist_failed_with_embedding(
     Ok(failed)
 }
 
-async fn persist_enriched_article(db_pool: &SqlitePool, enriched: &Article) -> Result<(), String> {
-    upsert_article(db_pool, enriched)
+async fn persist_enriched_article(db_pool: &SqlitePool, enriched: &Article, force_overwrite: bool) -> Result<(), String> {
+    upsert_article(db_pool, enriched, force_overwrite)
         .await
         .map_err(|e| format!("DB upsert error: {}", e))?;
     Ok(())
@@ -410,7 +410,12 @@ fn apply_enrichment_payload(
         item.og_content = text;
     }
     if overwrite_existing || item.snippet.trim().is_empty() {
-        item.snippet = snippet;
+        let trimmed = snippet.trim();
+        if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+            item.snippet = snippet;
+        } else if overwrite_existing {
+            item.snippet.clear();
+        }
     }
     if overwrite_existing || item.ai_summary.trim().is_empty() {
         item.ai_summary = ai_summary;
@@ -833,7 +838,7 @@ async fn run_scrape_stage(
             }
             let mut item = item.clone();
             item.title = strip_trailing_source(&item.title);
-            upsert_article(&state.db, &item)
+            upsert_article(&state.db, &item, false)
                 .await
                 .map_err(|e| format!("DB upsert error: {}", e))?;
         }
@@ -1019,8 +1024,7 @@ async fn run_none_ai_stage(
                 &settings.local_embedding_model,
             )
             .await;
-
-            persist_enriched_article(&state.db, &enriched).await?;
+            persist_enriched_article(&state.db, &enriched, false).await?;
 
             if let Some(vec) = embedding {
                 if let Err(e) = db::save_embedding(&state.db, &enriched.id, &vec).await {
@@ -1382,7 +1386,7 @@ async fn run_enrichment_stage_sequential(
                             Some(global_index),
                             Some(total),
                         )?;
-                        persist_enriched_article(&state.db, &enriched).await?;
+                        persist_enriched_article(&state.db, &enriched, false).await?;
 
                         if let Some(vec) = embedding {
                             if let Err(e) = db::save_embedding(&state.db, &enriched.id, &vec).await {
@@ -1691,7 +1695,7 @@ async fn run_enrichment_stage_concurrent(
                             Some(global_index),
                             Some(total),
                         )?;
-                        persist_enriched_article(&state.db, &enriched).await?;
+                        persist_enriched_article(&state.db, &enriched, false).await?;
 
                         if let Some(vec) = embedding {
                             if let Err(e) = db::save_embedding(&state.db, &enriched.id, &vec).await {
@@ -3224,8 +3228,7 @@ async fn reprocess_article(
     )
     .await;
 
-    persist_enriched_article(&state.db, &enriched).await?;
-
+    persist_enriched_article(&state.db, &enriched, true).await?;
     if let Some(vec) = embedding {
         if let Err(e) = db::save_embedding(&state.db, &enriched.id, &vec).await {
             logging::warn("Embedding", format!("Failed to save embedding for '{}': {}", enriched.title, e), None);

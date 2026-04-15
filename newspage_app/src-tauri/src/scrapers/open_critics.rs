@@ -14,7 +14,7 @@ use tokio::sync::Semaphore;
 const BASE_URL: &str = "https://opencritic.com/browse/all/all-time/date";
 const MAX_PAGES: usize = 2;
 const PAGE_DELAY_MS: u64 = 1200;
-const DDG_CONCURRENCY: usize = 5;
+const CDN_CONCURRENCY: usize = 5;
 
 fn build_client() -> Result<Client, String> {
     Client::builder()
@@ -221,16 +221,13 @@ pub(crate) async fn scrape_upcoming_games(
 
     if !needs_fallback.is_empty() {
         logging::info("OpenCritic", format!("Resolving covers for {} games via DDG", needs_fallback.len()), None);
-        let sem = Arc::new(Semaphore::new(DDG_CONCURRENCY));
         let mut handles: Vec<tokio::task::JoinHandle<(usize, String)>> = Vec::new();
         for &idx in &needs_fallback {
             let title = all_games[idx].title.clone();
             let cover_url = all_games[idx].cover_url.clone();
             let game_id = all_games[idx].id.clone();
             let cache_dir = shared_cache_dir.clone();
-            let sem = sem.clone();
             handles.push(tokio::spawn(async move {
-                let _permit = sem.acquire().await.unwrap();
                 let resolved = resolve_and_cache_cover(&title, &cover_url, &game_id, &cache_dir).await;
                 (idx, resolved)
             }));
@@ -249,7 +246,7 @@ pub(crate) async fn scrape_upcoming_games(
 
     if !needs_cache.is_empty() {
         logging::info("OpenCritic", format!("Caching {} game covers locally", needs_cache.len()), None);
-        let sem = Arc::new(Semaphore::new(DDG_CONCURRENCY));
+        let sem = Arc::new(Semaphore::new(CDN_CONCURRENCY));
         let mut handles: Vec<tokio::task::JoinHandle<(usize, String)>> = Vec::new();
         for &idx in &needs_cache {
             let game_id = all_games[idx].id.clone();

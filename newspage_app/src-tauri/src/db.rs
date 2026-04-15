@@ -1084,8 +1084,19 @@ pub async fn get_articles_with_embeddings(
         .collect())
 }
 
-pub async fn upsert_article(pool: &SqlitePool, article: &Article) -> Result<(), sqlx::Error> {
-    let _result = sqlx::query(
+pub async fn upsert_article(pool: &SqlitePool, article: &Article, force_overwrite: bool) -> Result<(), sqlx::Error> {
+    let (status_expr, ai_summary_expr, og_content_expr, snippet_expr) = if force_overwrite {
+        ("excluded.status", "excluded.ai_summary", "excluded.og_content", "excluded.snippet")
+    } else {
+        (
+            "CASE WHEN articles.status IN ('enriched', 'failed') THEN articles.status ELSE excluded.status END",
+            "CASE WHEN articles.status IN ('enriched', 'failed') THEN articles.ai_summary ELSE excluded.ai_summary END",
+            "CASE WHEN articles.status IN ('enriched', 'failed') THEN articles.og_content ELSE excluded.og_content END",
+            "CASE WHEN articles.status IN ('enriched', 'failed') THEN articles.snippet ELSE excluded.snippet END",
+        )
+    };
+
+    let sql = format!(
         "INSERT INTO articles (
             id, title, url, date, source_name, source_icon, authors,
             language, thumbnail, category, article_type, status,
@@ -1102,24 +1113,13 @@ pub async fn upsert_article(pool: &SqlitePool, article: &Article) -> Result<(), 
             thumbnail = excluded.thumbnail,
             category = excluded.category,
             article_type = excluded.article_type,
-            status = CASE
-                WHEN articles.status IN ('enriched', 'failed') THEN articles.status
-                ELSE excluded.status
-            END,
-            ai_summary = CASE
-                WHEN articles.status IN ('enriched', 'failed') THEN articles.ai_summary
-                ELSE excluded.ai_summary
-            END,
-            og_content = CASE
-                WHEN articles.status IN ('enriched', 'failed') THEN articles.og_content
-                ELSE excluded.og_content
-            END,
-            snippet = CASE
-                WHEN articles.status IN ('enriched', 'failed') THEN articles.snippet
-                ELSE excluded.snippet
-            END
-        ",
-    )
+            status = {status_expr},
+            ai_summary = {ai_summary_expr},
+            og_content = {og_content_expr},
+            snippet = {snippet_expr}"
+    );
+
+    let _result = sqlx::query(&sql)
     .bind(&article.id)
     .bind(&article.title)
     .bind(&article.url)

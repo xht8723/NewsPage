@@ -3164,6 +3164,7 @@ dependencies = [
  "chrono",
  "hf-hub",
  "ollama-rs",
+ "once_cell",
  "open",
  "reqwest 0.13.2",
  "rig-core",
