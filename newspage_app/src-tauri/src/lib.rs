@@ -2999,40 +2999,38 @@ async fn run_pipeline(
     let scrape_allowed = should_run_scrape(last_scrape, args.cooldown_hours);
 
     if scrape_allowed {
-        if !state.stop_requested.load(Ordering::Relaxed) && args.upcoming_games_sources.iter().any(|s| s == "opencritic") {
-            match scrapers::open_critics::scrape_upcoming_games(state, &state.stop_requested, &runtime.image_cache_dir).await {
-                Ok(count) => {
-                    logging::info("Pipeline", format!("Upcoming games scrape done: {} games", count), None);
-                }
-                Err(e) => {
-                    logging::warn("Pipeline", format!("Upcoming games scrape failed: {}", e), None);
-                }
-            }
-        }
+        let has_opencritic = args.upcoming_games_sources.iter().any(|s| s == "opencritic");
+        let has_yys = args.upcoming_games_sources.iter().any(|s| s == "yys");
+        let stop = &state.stop_requested;
+        let img_dir = &runtime.image_cache_dir;
 
-        if !state.stop_requested.load(Ordering::Relaxed) && args.upcoming_games_sources.iter().any(|s| s == "yys") {
-            match scrapers::yys::scrape_upcoming_games_yys(state, &state.stop_requested, &runtime.image_cache_dir).await {
-                Ok(count) => {
-                    logging::info("Pipeline", format!("YYS calendar scrape done: {} games", count), None);
+        let (_, _, _, scrape_result) = tokio::join!(
+            async {
+                if has_opencritic {
+                    match scrapers::open_critics::scrape_upcoming_games(state, stop, img_dir).await {
+                        Ok(count) => logging::info("Pipeline", format!("Upcoming games scrape done: {} games", count), None),
+                        Err(e) => logging::warn("Pipeline", format!("Upcoming games scrape failed: {}", e), None),
+                    }
                 }
-                Err(e) => {
-                    logging::warn("Pipeline", format!("YYS calendar scrape failed: {}", e), None);
+            },
+            async {
+                if has_yys {
+                    match scrapers::yys::scrape_upcoming_games_yys(state, stop, img_dir).await {
+                        Ok(count) => logging::info("Pipeline", format!("YYS calendar scrape done: {} games", count), None),
+                        Err(e) => logging::warn("Pipeline", format!("YYS calendar scrape failed: {}", e), None),
+                    }
                 }
-            }
-        }
+            },
+            async {
+                match scrapers::bangumi::scrape_weekly_anime_bangumi(state, stop, img_dir).await {
+                    Ok(count) => logging::info("Pipeline", format!("Bangumi weekly anime scrape done: {} entries", count), None),
+                    Err(e) => logging::warn("Pipeline", format!("Bangumi weekly anime scrape failed: {}", e), None),
+                }
+            },
+            run_scrape_stage(app, state, &runtime.resolved, &runtime.settings_path),
+        );
 
-        if !state.stop_requested.load(Ordering::Relaxed) {
-            match scrapers::bangumi::scrape_weekly_anime_bangumi(state, &state.stop_requested, &runtime.image_cache_dir).await {
-                Ok(count) => {
-                    logging::info("Pipeline", format!("Bangumi weekly anime scrape done: {} entries", count), None);
-                }
-                Err(e) => {
-                    logging::warn("Pipeline", format!("Bangumi weekly anime scrape failed: {}", e), None);
-                }
-            }
-        }
-
-        let scrape_stopped = run_scrape_stage(app, state, &runtime.resolved, &runtime.settings_path).await?;
+        let scrape_stopped = scrape_result?;
         if scrape_stopped {
             return emit_enriched_articles_sync_complete(app, EnrichmentStageResult {
                 total: 0,
