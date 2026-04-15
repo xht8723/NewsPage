@@ -184,6 +184,9 @@
 	.article-new-marker {
 		animation: none;
 	}
+	.filter-content-ready {
+		transition: none;
+	}
 }
 
 @keyframes article-fade-in {
@@ -205,17 +208,13 @@
 }
 
 /* Filter/sort transition animations */
-.filter-content {
-	transition: opacity 150ms ease-out;
-}
-
 .filter-content-transitioning {
 	opacity: 0;
-	pointer-events: none;
 }
 
 .filter-content-ready {
 	opacity: 1;
+	transition: opacity 250ms ease-out;
 }
 
 /* ─── Onboarding: embedding download button glow ─────────────────────────── */

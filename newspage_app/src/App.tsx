@@ -119,6 +119,7 @@ function App() {
   const [isScoringLoading, setIsScoringLoading] = useState(false);
   const scoringAbortRef = useRef(0);
   const articleIdsRef = useRef<string[]>([]);
+  const runScoreComputationRef = useRef<((ids: string[], check: () => boolean) => Promise<void>) | null>(null);
   const [loadingDataStep, setLoadingDataStep] = useState<LoadingDataStep>("");
 
   const translatePanelRef = useRef<HTMLDivElement | null>(null);
@@ -247,21 +248,25 @@ function App() {
   }, [news]);
 
   useEffect(() => {
+    runScoreComputationRef.current = runScoreComputation;
+  }, [runScoreComputation]);
+
+  useEffect(() => {
     if (settings.sortMode !== "score") return;
 
     const timeout = window.setTimeout(async () => {
       const currentIds = articleIdsRef.current;
-      if (currentIds.length === 0) return;
+      if (currentIds.length === 0 || !runScoreComputationRef.current) return;
       setIsScoringLoading(true);
       try {
-        await runScoreComputation(currentIds, () => false);
+        await runScoreComputationRef.current(currentIds, () => false);
       } finally {
         setIsScoringLoading(false);
       }
-    }, 800);
+    }, 300);
 
     return () => window.clearTimeout(timeout);
-  }, [settings.sortMode, settings.likedConcepts, settings.dislikedConcepts, settings.localEmbeddingModel, voteVersion, runScoreComputation]);
+  }, [settings.sortMode, settings.likedConcepts, settings.dislikedConcepts, settings.localEmbeddingModel, voteVersion]);
 
   const initialDataLoadDoneRef = useRef(false);
 
@@ -356,7 +361,7 @@ function App() {
       void fetchEnrichedNews().then(async (articles) => {
         if (thisOp !== scoringAbortRef.current) return;
         try {
-          await runScoreComputation(articles.map((a) => a.id), () => thisOp !== scoringAbortRef.current);
+          await runScoreComputationRef.current!(articles.map((a) => a.id), () => thisOp !== scoringAbortRef.current);
         } finally {
           if (thisOp === scoringAbortRef.current) {
             setIsScoringLoading(false);
@@ -366,7 +371,7 @@ function App() {
     } else {
       void fetchEnrichedNews();
     }
-  }, [fetchEnrichedNews, startupPhase, settings.sortMode, runScoreComputation]);
+  }, [fetchEnrichedNews, startupPhase, settings.sortMode]);
 
   useEffect(() => {
     if (availableFeeds.length === 0) return;
@@ -528,7 +533,7 @@ function App() {
       void fetchEnrichedNews(true, false, date).then(async (articles) => {
         if (thisOp !== scoringAbortRef.current) return;
         try {
-          await runScoreComputation(articles.map((a) => a.id), () => thisOp !== scoringAbortRef.current);
+          await runScoreComputationRef.current!(articles.map((a) => a.id), () => thisOp !== scoringAbortRef.current);
         } finally {
           if (thisOp === scoringAbortRef.current) {
             setIsScoringLoading(false);
@@ -538,14 +543,17 @@ function App() {
     } else {
       setIsFilterTransitioning(true);
       void fetchEnrichedNews(true, false, date);
-      setTimeout(() => setIsFilterTransitioning(false), 50);
+      setTimeout(() => setIsFilterTransitioning(false), 20);
     }
-  }, [selectedDate, settings.sortMode, fetchEnrichedNews, setIsFilterTransitioning, runScoreComputation]);
+  }, [selectedDate, settings.sortMode, fetchEnrichedNews, setIsFilterTransitioning]);
 
   const handleSelectFeed = useCallback((feedId: string) => {
+    if (feedId === selectedFeedId) return;
+    setIsFilterTransitioning(true);
     setSelectedFeedId(feedId);
     saveSetting("selectedFeedId", feedId);
-  }, [setSelectedFeedId, saveSetting]);
+    setTimeout(() => setIsFilterTransitioning(false), 20);
+  }, [selectedFeedId, setSelectedFeedId, saveSetting, setIsFilterTransitioning]);
 
   const handleToggleCategoryManager = useCallback(() => {
     setShowCategoryManager((current) => !current);
@@ -750,9 +758,13 @@ function App() {
 
         <section className={`news-scroll min-h-0 flex-1 overflow-y-auto pb-24 pr-1 ${isDarkMode ? "news-scroll-dark" : "news-scroll-light"}`}>
           {selectedFeedId === "feed-upcoming-games" ? (
-            <UpcomingGamesGrid isDarkMode={isDarkMode} />
+            <div className={isFilterTransitioning ? "filter-content-transitioning" : "filter-content-ready"}>
+              <UpcomingGamesGrid isDarkMode={isDarkMode} />
+            </div>
           ) : selectedFeedId === "feed-weekly-anime" ? (
-            <WeeklyAnimeGrid isDarkMode={isDarkMode} />
+            <div className={isFilterTransitioning ? "filter-content-transitioning" : "filter-content-ready"}>
+              <WeeklyAnimeGrid isDarkMode={isDarkMode} />
+            </div>
           ) : (
             <VirtualizedArticleList
               articles={articleFilter.filteredNews}

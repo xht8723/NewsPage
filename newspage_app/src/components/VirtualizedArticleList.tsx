@@ -136,7 +136,7 @@ function VirtualizedArticleListComponent({
     <div
       ref={containerRef}
       className={`
-        filter-content ${isTransitioning ? "filter-content-transitioning" : "filter-content-ready"}
+        ${isTransitioning ? "filter-content-transitioning" : "filter-content-ready"}
         ${layout === "grid" ? "grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3" : ""}
         ${layout === "list" ? "flex flex-col gap-4" : ""}
         ${layout === "compact_list" ? "flex flex-col gap-2" : ""}

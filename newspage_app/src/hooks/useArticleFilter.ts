@@ -73,23 +73,21 @@ export function useArticleFilter(deps: UseArticleFilterDeps): UseArticleFilterRe
   }, [deps.news, deps.selectedDate, selectedFeedId, availableFeeds, settings.sortMode, blacklistedSources, scoreComparator, dateComparator]);
 
   const setSortMode = useCallback((mode: "date" | "score") => {
+    if (settings.sortMode === mode) return;
     setIsFilterTransitioning(true);
-    setTimeout(() => {
-      setSettings((current) => (current.sortMode === mode ? current : { ...current, sortMode: mode }));
-      setRelevanceWarning(null);
-      saveSetting("sortMode", mode);
-      setTimeout(() => setIsFilterTransitioning(false), 50);
-    }, 150);
-  }, [setSettings, saveSetting, setRelevanceWarning, setIsFilterTransitioning]);
+    setSettings((current) => ({ ...current, sortMode: mode }));
+    setRelevanceWarning(null);
+    saveSetting("sortMode", mode);
+    setTimeout(() => setIsFilterTransitioning(false), 20);
+  }, [settings.sortMode, setSettings, saveSetting, setRelevanceWarning, setIsFilterTransitioning]);
 
   const handleSetLayout = useCallback((mode: import("../constants/article").LayoutMode) => {
+    if (settings.layout === mode) return;
     setIsFilterTransitioning(true);
-    setTimeout(() => {
-      saveSetting("layout", mode);
-      setSettings((current) => (current.layout === mode ? current : { ...current, layout: mode }));
-      setTimeout(() => setIsFilterTransitioning(false), 50);
-    }, 150);
-  }, [setSettings, saveSetting, setIsFilterTransitioning]);
+    setSettings((current) => ({ ...current, layout: mode }));
+    saveSetting("layout", mode);
+    setTimeout(() => setIsFilterTransitioning(false), 20);
+  }, [settings.layout, setSettings, saveSetting, setIsFilterTransitioning]);
 
   const setPreferenceConcepts = useCallback((field: "likedConcepts" | "dislikedConcepts", value: string) => {
     setSettings((current) => ({ ...current, [field]: value }));
