@@ -7,10 +7,9 @@ export type LoadingDataStep = (typeof LOADING_STEP_KEYS)[number] | "";
 
 interface StartupScreenProps {
   isDarkMode: boolean;
-  startupPhase: "loading-settings" | "preparing-embedding" | "loading-data" | "ready" | "error";
+  startupPhase: "loading-settings" | "loading-data" | "ready" | "error";
   startupErrorMessage: string;
   localEmbeddingStatus: LocalEmbeddingStatus | null;
-  settingsLocalEmbeddingModel: string;
   loadingDataStep?: LoadingDataStep;
   onRetry: () => void;
   onCleanReset: () => void;
@@ -21,7 +20,6 @@ export function StartupScreen({
   startupPhase,
   startupErrorMessage,
   localEmbeddingStatus,
-  settingsLocalEmbeddingModel,
   loadingDataStep,
   onRetry,
   onCleanReset,
@@ -30,11 +28,9 @@ export function StartupScreen({
 
   const phaseMessage = startupPhase === "loading-settings"
     ? t("startup.loadingSettings")
-    : startupPhase === "preparing-embedding"
-      ? t("startup.loadingModel", { model: settingsLocalEmbeddingModel })
-      : startupPhase === "loading-data"
-        ? getLoadingStepMessage(t, loadingDataStep ?? "")
-        : startupErrorMessage;
+    : startupPhase === "loading-data"
+      ? getLoadingStepMessage(t, loadingDataStep ?? "")
+      : startupErrorMessage;
 
   return (
     <div className={`min-h-screen ${isDarkMode ? "bg-zinc-950 text-zinc-200" : "bg-white text-zinc-900"} flex items-center justify-center p-6`}>

@@ -5,13 +5,14 @@ use hf_hub::{Cache, api::sync::ApiBuilder};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 
 pub const DEFAULT_LOCAL_EMBEDDING_MODEL: &str = "multilingual-e5-small";
+const EVICTION_IDLE_SECS: u64 = 600;
+const EVICTION_CHECK_INTERVAL_SECS: u64 = 60;
+pub const RELEVANCE_NOT_CACHED_TOKEN: &str = "RELEVANCE_EMBEDDING_NOT_CACHED";
 
-/// Whether the input text is a search query or a document passage.
-/// Models that require distinct prefixes (e.g. E5) use this to prepend
-/// `"query: "` or `"passage: "` automatically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbedPurpose {
     Query,
@@ -81,14 +82,25 @@ struct LoadedModel {
     tokenizer: Tokenizer,
 }
 
-// SAFETY: BertModel and Tokenizer are internally immutable after construction.
-// We only call &self methods (forward / encode) behind a Mutex so access is serialised.
 unsafe impl Send for LoadedModel {}
 unsafe impl Sync for LoadedModel {}
 
-static EMBEDDERS: OnceLock<Mutex<HashMap<String, LoadedModel>>> = OnceLock::new();
+struct EvictableModel {
+    inner: LoadedModel,
+    last_used: Instant,
+}
+
+static EMBEDDERS: OnceLock<Mutex<HashMap<String, EvictableModel>>> = OnceLock::new();
 static CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
 static STATUS: OnceLock<Mutex<LocalEmbeddingStatus>> = OnceLock::new();
+
+fn lock_embedders() -> Result<std::sync::MutexGuard<'static, HashMap<String, EvictableModel>>, String> {
+    let embedders = EMBEDDERS.get_or_init(|| Mutex::new(HashMap::new()));
+    match embedders.lock() {
+        Ok(guard) => Ok(guard),
+        Err(poisoned) => Ok(poisoned.into_inner()),
+    }
+}
 
 fn normalized_model(model: Option<&str>) -> String {
     model
@@ -177,10 +189,12 @@ pub fn get_status() -> LocalEmbeddingStatus {
 
 pub fn clear_loaded_models() -> Result<(), String> {
     if let Some(embedders) = EMBEDDERS.get() {
-        embedders
-            .lock()
-            .map_err(|_| "Embedding models lock poisoned".to_string())?
-            .clear();
+        match embedders.lock() {
+            Ok(mut guard) => guard.clear(),
+            Err(poisoned) => {
+                poisoned.into_inner().clear();
+            }
+        }
     }
 
     let cache_message = CACHE_DIR
@@ -215,15 +229,6 @@ pub fn ensure_model_supported(model: Option<&str>) -> Result<String, String> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Model loading
-// ---------------------------------------------------------------------------
-
-/// Resolves all three required model files from the local hf_hub disk cache
-/// without making any network requests. Returns `None` if any file is missing.
-///
-/// Uses the official `hf_hub::Cache` API so path resolution matches hf_hub's
-/// internal cache layout on all platforms, including Windows.
 fn find_cached_model_files(
     cache_dir: &PathBuf,
     hf_repo: &str,
@@ -234,6 +239,36 @@ fn find_cached_model_files(
     let tokenizer_path = repo.get("tokenizer.json")?;
     let weights_path = repo.get("model.safetensors")?;
     Some((config_path, tokenizer_path, weights_path))
+}
+
+fn load_model_from_files(
+    model_name: &str,
+    config_path: PathBuf,
+    tokenizer_path: PathBuf,
+    weights_path: PathBuf,
+) -> Result<LoadedModel, String> {
+    let device = Device::Cpu;
+
+    let config_str = std::fs::read_to_string(&config_path)
+        .map_err(|e| format!("Failed to read config.json: {}", e))?;
+    let config: BertConfig =
+        serde_json::from_str(&config_str).map_err(|e| format!("Failed to parse config.json: {}", e))?;
+
+    let vb = unsafe {
+        VarBuilder::from_mmaped_safetensors(&[weights_path], DType::F32, &device)
+            .map_err(|e| format!("Failed to load model weights: {}", e))?
+    };
+
+    let bert = BertModel::load(vb, &config)
+        .map_err(|e| format!("Failed to build BERT model '{}': {}", model_name, e))?;
+
+    let tokenizer = Tokenizer::from_file(&tokenizer_path)
+        .map_err(|e| format!("Failed to load tokenizer: {}", e))?;
+
+    Ok(LoadedModel {
+        model: bert,
+        tokenizer,
+    })
 }
 
 fn get_or_init_model(model_name: &str, allow_download: bool) -> Result<(), String> {
@@ -250,12 +285,10 @@ fn get_or_init_model(model_name: &str, allow_download: bool) -> Result<(), Strin
         )
     })?;
 
-    let embedders = EMBEDDERS.get_or_init(|| Mutex::new(HashMap::new()));
     {
-        let guard = embedders
-            .lock()
-            .map_err(|_| "Embedding models lock poisoned".to_string())?;
-        if guard.contains_key(&model_name) {
+        let mut guard = lock_embedders()?;
+        if let Some(evictable) = guard.get_mut(&model_name) {
+            evictable.last_used = Instant::now();
             set_status(
                 "ready",
                 Some(model_name.clone()),
@@ -265,17 +298,8 @@ fn get_or_init_model(model_name: &str, allow_download: bool) -> Result<(), Strin
         }
     }
 
-    if !allow_download {
-        return Err(format!(
-            "Model '{}' not loaded. Open Settings → Embedding Settings and click Download Model.",
-            model_name
-        ));
-    }
-
     let cache_dir = configured_cache_dir()?;
 
-    // Fast path: all three model files are already in the local hf_hub disk cache.
-    // Skip the HuggingFace ETag round-trip entirely so startup works offline.
     let (config_path, tokenizer_path, weights_path) =
         if let Some(paths) = find_cached_model_files(&cache_dir, spec.hf_repo) {
             set_status(
@@ -284,8 +308,7 @@ fn get_or_init_model(model_name: &str, allow_download: bool) -> Result<(), Strin
                 format!("Loading cached model '{}'…", model_name),
             );
             paths
-        } else {
-            // Slow path: download from HuggingFace (first run or missing files).
+        } else if allow_download {
             set_status(
                 "downloading",
                 Some(model_name.clone()),
@@ -316,35 +339,20 @@ fn get_or_init_model(model_name: &str, allow_download: bool) -> Result<(), Strin
             );
 
             (cfg, tok, wts)
+        } else {
+            return Err(format!(
+                "{}: Model '{}' is not cached locally. Open Settings → Embedding Settings and click Download Model.",
+                RELEVANCE_NOT_CACHED_TOKEN, model_name
+            ));
         };
 
-    let device = Device::Cpu;
+    let loaded = load_model_from_files(&model_name, config_path, tokenizer_path, weights_path)?;
 
-    let config_str = std::fs::read_to_string(&config_path)
-        .map_err(|e| format!("Failed to read config.json: {}", e))?;
-    let config: BertConfig =
-        serde_json::from_str(&config_str).map_err(|e| format!("Failed to parse config.json: {}", e))?;
-
-    let vb = unsafe {
-        VarBuilder::from_mmaped_safetensors(&[weights_path], DType::F32, &device)
-            .map_err(|e| format!("Failed to load model weights: {}", e))?
-    };
-
-    let bert = BertModel::load(vb, &config)
-        .map_err(|e| format!("Failed to build BERT model '{}': {}", model_name, e))?;
-
-    let tokenizer = Tokenizer::from_file(&tokenizer_path)
-        .map_err(|e| format!("Failed to load tokenizer: {}", e))?;
-
-    let loaded = LoadedModel {
-        model: bert,
-        tokenizer,
-    };
-
-    let mut guard = embedders
-        .lock()
-        .map_err(|_| "Embedding models lock poisoned".to_string())?;
-    guard.insert(model_name.clone(), loaded);
+    let mut guard = lock_embedders()?;
+    guard.insert(model_name.clone(), EvictableModel {
+        inner: loaded,
+        last_used: Instant::now(),
+    });
 
     set_status(
         "ready",
@@ -354,16 +362,50 @@ fn get_or_init_model(model_name: &str, allow_download: bool) -> Result<(), Strin
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Inference helpers
-// ---------------------------------------------------------------------------
+pub fn start_eviction_task() {
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(EVICTION_CHECK_INTERVAL_SECS));
+        loop {
+            interval.tick().await;
+            if let Some(embedders) = EMBEDDERS.get() {
+                let evicted: Vec<String> = match embedders.lock() {
+                    Ok(mut guard) => {
+                        let all_keys: Vec<String> = guard.keys().cloned().collect();
+                        guard.retain(|_, evictable| {
+                            evictable.last_used.elapsed() < Duration::from_secs(EVICTION_IDLE_SECS)
+                        });
+                        let kept: std::collections::HashSet<String> = guard.keys().cloned().collect();
+                        all_keys.into_iter().filter(|k| !kept.contains(k)).collect()
+                    }
+                    Err(poisoned) => {
+                        poisoned.into_inner().clear();
+                        vec![]
+                    }
+                };
+                if !evicted.is_empty() {
+                    crate::logging::info(
+                        "Embedding",
+                        format!("Evicted idle embedding models: {:?}", evicted),
+                        None,
+                    );
+                    let remaining: Vec<String> = match embedders.lock() {
+                        Ok(guard) => guard.keys().cloned().collect(),
+                        Err(poisoned) => poisoned.into_inner().keys().cloned().collect(),
+                    };
+                    if remaining.is_empty() {
+                        set_status("idle", None, "All embedding models evicted due to inactivity".to_string());
+                    }
+                }
+            }
+        }
+    });
+}
 
 fn mean_pooling(token_embeddings: &Tensor, attention_mask: &Tensor) -> Result<Vec<f32>, String> {
     let (_batch, seq_len, hidden) = token_embeddings
         .dims3()
         .map_err(|e| format!("Unexpected embedding tensor shape: {}", e))?;
 
-    // Expand mask from (1, seq_len) to (1, seq_len, hidden)
     let mask = attention_mask
         .unsqueeze(2)
         .and_then(|m| m.expand(&[1, seq_len, hidden]))
@@ -386,7 +428,6 @@ fn mean_pooling(token_embeddings: &Tensor, attention_mask: &Tensor) -> Result<Ve
         .broadcast_div(&sum_mask)
         .map_err(|e| format!("Mean pooling div failed: {}", e))?;
 
-    // L2 normalize
     let norm = pooled
         .sqr()
         .and_then(|s| s.sum_keepdim(1))
@@ -433,17 +474,13 @@ fn run_inference(loaded: &LoadedModel, text: &str) -> Result<Vec<f32>, String> {
     mean_pooling(&embeddings, &attention_mask)
 }
 
-// ---------------------------------------------------------------------------
-// Public async API
-// ---------------------------------------------------------------------------
-
 pub async fn embed_text(
     input: &str,
     model: Option<&str>,
     purpose: EmbedPurpose,
 ) -> Result<Vec<f32>, String> {
     let model_name = ensure_model_supported(model)?;
-    let spec = model_spec(&model_name).unwrap(); // safe — ensure_model_supported validated
+    let spec = model_spec(&model_name).unwrap();
 
     let mut text = input.trim().to_string();
     if text.is_empty() {
@@ -461,16 +498,14 @@ pub async fn embed_text(
     tokio::task::spawn_blocking(move || {
         get_or_init_model(&model_name, false)?;
 
-        let embedders = EMBEDDERS.get_or_init(|| Mutex::new(HashMap::new()));
-        let guard = embedders
-            .lock()
-            .map_err(|_| "Embedding models lock poisoned".to_string())?;
+        let mut guard = lock_embedders()?;
 
-        let loaded = guard
-            .get(&model_name)
+        let evictable = guard
+            .get_mut(&model_name)
             .ok_or_else(|| format!("Local embedding model '{}' was not initialized", model_name))?;
+        evictable.last_used = Instant::now();
 
-        run_inference(loaded, &text)
+        run_inference(&evictable.inner, &text)
     })
     .await
     .map_err(|e| format!("Local embedding task failed: {}", e))?

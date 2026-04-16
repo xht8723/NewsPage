@@ -574,7 +574,6 @@ function App() {
         startupPhase={startupPhase}
         startupErrorMessage={startupErrorMessage}
         localEmbeddingStatus={startupEmbeddingStatus}
-        settingsLocalEmbeddingModel={settings.localEmbeddingModel}
         loadingDataStep={loadingDataStep}
         onRetry={retryEmbeddingLoad}
         onCleanReset={() => void handleCleanReset()}

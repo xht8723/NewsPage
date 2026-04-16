@@ -855,14 +855,6 @@ async fn run_scrape_stage(
     let now = SystemTime::now();
     *state.last_scrape.lock().unwrap() = Some(now);
     persist_last_scrape(settings_path, now);
-    emit_process_stage(
-        app,
-        "scrape",
-        "done",
-        "Scrape stage completed",
-        Some(total_stages),
-        Some(total_stages),
-    )?;
     Ok(false)
 }
 
@@ -1939,13 +1931,6 @@ async fn compute_preference_scores(
         embedding_model
     };
 
-    if let Err(e) = local_embedding::health_check(Some(&embedding_model)).await {
-        return Err(format!(
-            "{}: Relevance sort unavailable because local embedding engine failed ({})",
-            RELEVANCE_UNAVAILABLE_TOKEN, e
-        ));
-    }
-
     let cache_prefix = format!("candle::{}", embedding_model.to_ascii_lowercase());
 
     let mut liked_vecs: Vec<Vec<f32>> = Vec::new();
@@ -1969,7 +1954,12 @@ async fn compute_preference_scores(
                     .insert(key, v.clone());
                 liked_vecs.push(v);
             }
-            Err(_) => {}
+            Err(e) => {
+                return Err(format!(
+                    "{}: {}",
+                    RELEVANCE_UNAVAILABLE_TOKEN, e
+                ));
+            }
         }
     }
     let mut disliked_vecs: Vec<Vec<f32>> = Vec::new();
@@ -1993,7 +1983,12 @@ async fn compute_preference_scores(
                     .insert(key, v.clone());
                 disliked_vecs.push(v);
             }
-            Err(_) => {}
+            Err(e) => {
+                return Err(format!(
+                    "{}: {}",
+                    RELEVANCE_UNAVAILABLE_TOKEN, e
+                ));
+            }
         }
     }
 
@@ -2414,7 +2409,7 @@ fn default_settings_map() -> HashMap<String, String> {
     map.insert("autoScrapeDayInterval".to_string(), "1".to_string());
     map.insert("autoScrapeTime".to_string(), "09:00".to_string());
     map.insert("lastAutoScrapeEpoch".to_string(), "0".to_string());
-    map.insert("localEmbeddingModel".to_string(), DEFAULT_LOCAL_EMBEDDING_MODEL.to_string());
+    map.insert("localEmbeddingModel".to_string(), "".to_string());
     map.insert("minSummaryPoints".to_string(), "1".to_string());
     map.insert("maxSummaryPoints".to_string(), "8".to_string());
     map.insert("llmBatchSize".to_string(), "3".to_string());
@@ -3039,6 +3034,7 @@ async fn run_pipeline(
                 stopped: true,
             });
         }
+        emit_process_stage(app, "scrape", "done", "Scrape stage completed", None, None)?;
     } else {
         emit_process_stage(app, "scrape", "done", "Skipped scrape due to cooldown", None, None)?;
     }
@@ -3640,6 +3636,7 @@ pub fn run() {
                 .map_err(|e| -> Box<dyn std::error::Error> {
                     Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
                 })?;
+            local_embedding::start_eviction_task();
             let db_path = format!("sqlite:{}", app_data_dir.join("news.db").to_string_lossy());
             logging::info(
                 "System",

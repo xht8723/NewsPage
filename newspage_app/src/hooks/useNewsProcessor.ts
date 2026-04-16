@@ -42,7 +42,6 @@ interface UseNewsProcessorReturn {
 
 export function useNewsProcessor(deps: UseNewsProcessorDeps): UseNewsProcessorReturn {
   const settings = useSettingsStore((s) => s.settings);
-  const isEmbeddingReady = useSettingsStore((s) => s.isEmbeddingReady);
   const saveSetting = useSettingsStore((s) => s.saveSetting);
   const setEnrichmentError = useNewsStore((s) => s.setEnrichmentError);
   const setRelevanceWarning = useNewsStore((s) => s.setRelevanceWarning);
@@ -128,7 +127,7 @@ export function useNewsProcessor(deps: UseNewsProcessorDeps): UseNewsProcessorRe
   const stoppingRef = useRef(false);
 
   const generateNews = useCallback(async () => {
-    if (!deps.isEmbeddingConfigured || !isEmbeddingReady) {
+    if (!deps.isEmbeddingConfigured) {
       setConfigPopupMessage("Embedding model not set up. Open Settings \u2192 Embedding Settings and click Download Model.");
       setShowConfigPopup(true);
       return;
@@ -186,7 +185,7 @@ export function useNewsProcessor(deps: UseNewsProcessorDeps): UseNewsProcessorRe
       setStopping(false);
       stoppingRef.current = false;
     }
-  }, [deps.isEmbeddingConfigured, isEmbeddingReady, settings, setEnrichmentError, setRelevanceWarning, setStageStatus, setConfigPopupMessage, setShowConfigPopup]);
+  }, [deps.isEmbeddingConfigured, settings, setEnrichmentError, setRelevanceWarning, setStageStatus, setConfigPopupMessage, setShowConfigPopup]);
 
   const stopGenerate = useCallback(async () => {
     if (stoppingRef.current) return;

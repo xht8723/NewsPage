@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import type { LocalEmbeddingStatus } from "../types/article";
 import { DEFAULT_EMBEDDING_MODEL, type LayoutMode } from "../constants/article";
-import { llmService, settingsService } from "../services";
+import { settingsService } from "../services";
 import { parseSourceBlacklist } from "../utils/sourceBlacklist";
 import { useSettingsStore, createDefaultSettings } from "../stores/settingsStore";
 import { useFeedStore } from "../stores";
 
-type StartupPhase = "loading-settings" | "preparing-embedding" | "loading-data" | "ready" | "error";
+type StartupPhase = "loading-settings" | "loading-data" | "ready" | "error";
 
 interface UseAppStartupReturn {
   startupPhase: StartupPhase;
@@ -34,45 +34,6 @@ export function useAppStartup(): UseAppStartupReturn {
   const isEmbeddingConfigured = useSettingsStore(
     useCallback((s) => s.settings.localEmbeddingModel.trim().length > 0, []),
   );
-
-  const preloadEmbeddingOnStartup = useCallback(async (model: string) => {
-    const normalizedModel = model.trim().toLowerCase();
-    if (!normalizedModel) {
-      setIsEmbeddingReady(false);
-      setStartupErrorMessage("");
-      setStartupPhase("loading-data");
-      return;
-    }
-
-    setStartupPhase("preparing-embedding");
-    setStartupErrorMessage("");
-
-    try {
-      const status = await llmService.prepareLocalEmbeddingModel(model);
-      setLocalEmbeddingStatus(status);
-
-      const ready =
-        status.state === "ready"
-        && (status.active_model ?? "").toLowerCase() === normalizedModel;
-      if (!ready) {
-        throw new Error(status.message || `Failed to load embedding model '${model}'.`);
-      }
-
-      setIsEmbeddingReady(true);
-      setStartupPhase("loading-data");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setLocalEmbeddingStatus((current) => ({
-        state: "error",
-        active_model: model,
-        cache_dir: current?.cache_dir ?? "",
-        message,
-      }));
-      setIsEmbeddingReady(false);
-      setStartupErrorMessage(message);
-      setStartupPhase("error");
-    }
-  }, []);
 
   useEffect(() => {
     settingsService.load()
@@ -142,6 +103,7 @@ export function useAppStartup(): UseAppStartupReturn {
           animeSubtitleLanguage: saved.animeSubtitleLanguage || defaults.animeSubtitleLanguage,
         }));
         setSelectedEmbeddingModel(savedLocalEmbeddingModel || DEFAULT_EMBEDDING_MODEL);
+        setIsEmbeddingReady(savedLocalEmbeddingModel.length > 0);
         if (saved.selectedFeedId?.trim()) {
           setSelectedFeedId(saved.selectedFeedId.trim());
         }
@@ -153,14 +115,9 @@ export function useAppStartup(): UseAppStartupReturn {
         void settingsService.setAutoStart(saved.autoStartOnBoot === "true");
         void settingsService.cleanupImgCache();
 
-        if (savedLocalEmbeddingModel.length > 0) {
-          void preloadEmbeddingOnStartup(savedLocalEmbeddingModel);
-        } else {
-          setLocalEmbeddingStatus(null);
-          setIsEmbeddingReady(false);
-          setStartupErrorMessage("");
-          setStartupPhase("loading-data");
-        }
+        setLocalEmbeddingStatus(null);
+        setStartupErrorMessage("");
+        setStartupPhase("loading-data");
       })
       .catch(() => {
         resetSettings();
@@ -170,7 +127,7 @@ export function useAppStartup(): UseAppStartupReturn {
         setStartupErrorMessage("");
         setStartupPhase("loading-data");
       });
-  }, [preloadEmbeddingOnStartup, setSettings, resetSettings, setSelectedFeedId]);
+  }, [setSettings, resetSettings, setIsEmbeddingReady, setSelectedFeedId]);
 
   const resetStartupState = useCallback(() => {
     setSelectedEmbeddingModel(DEFAULT_EMBEDDING_MODEL);
@@ -183,9 +140,11 @@ export function useAppStartup(): UseAppStartupReturn {
   const retryEmbeddingLoad = useCallback(() => {
     const model = useSettingsStore.getState().settings.localEmbeddingModel;
     if (model.trim()) {
-      void preloadEmbeddingOnStartup(model);
+      setSelectedEmbeddingModel(model);
+      setIsEmbeddingReady(true);
+      setStartupPhase("loading-data");
     }
-  }, [preloadEmbeddingOnStartup]);
+  }, [setIsEmbeddingReady]);
 
   const completeDataLoading = useCallback(() => {
     setStartupPhase("ready");
