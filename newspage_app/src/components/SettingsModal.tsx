@@ -11,6 +11,8 @@ import { NeonCheckbox } from "./NeonCheckbox";
 import {
   AVAILABLE_REGIONS,
   EMBEDDING_MODEL_INFO,
+  NEWS_SOURCES,
+  RSS_SOURCE_TYPES,
   type OllamaConnectionState,
 } from "../constants/article";
 import type { FeedSource, LocalEmbeddingStatus, UserSettings } from "../types/article";
@@ -791,12 +793,11 @@ ariaLabel={t("settings.enableAutoScrape")}
                   <div className="flex items-center gap-2">
                     <input
                       type="number"
-                      min={100}
-                      max={5000}
+                      min={0}
                       step={50}
                       value={settings.imgCacheLimitMb}
                       onChange={(e) => {
-                        const val = Math.min(5000, Math.max(100, Number(e.target.value)));
+                        const val = Math.max(0, Number(e.target.value));
                         setSettings((s) => ({ ...s, imgCacheLimitMb: val }));
                         saveSetting("imgCacheLimitMb", String(val));
                       }}
@@ -902,7 +903,7 @@ ariaLabel={t("settings.enableAutoScrape")}
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <div ref={googleNewsSectionRef} className={`relative rounded-xl border p-4 ${isDarkMode ? "border-zinc-800 bg-zinc-950/40" : "border-zinc-200 bg-zinc-150"}`}>
-                {/* Onboarding tooltip bubble: Google News Regions */}
+                {/* Onboarding tooltip bubble: News Source */}
                 {showOnboardingHints && !googleNewsBubbleDismissed && (
                   <div className={`onboarding-bubble ${isDarkMode ? "" : "onboarding-bubble-light"} left-0 right-0 bottom-full mb-2 rounded-xl border px-4 py-3 shadow-xl ${
                     isDarkMode
@@ -925,33 +926,64 @@ ariaLabel={t("settings.enableAutoScrape")}
                     </div>
                   </div>
                 )}
-                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{t("settings.googleNewsRegions")}</p>
-                <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>{t("settings.selectRegions")}</p>
+                <p className={`mb-3 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-400"}`}>{t("settings.newsSource")}</p>
+                <p className={`mb-3 text-xs ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>{t("settings.selectNewsSources")}</p>
                 <div className="space-y-2">
-                  {AVAILABLE_REGIONS.map((region) => {
-                    const checked = settings.selectedRegions.includes(region.id);
+                  {NEWS_SOURCES.map((source) => {
+                    const checked = settings.enabledNewsSources.includes(source.id);
                     return (
-                      <label key={region.id} className="flex items-center gap-2 cursor-pointer">
+                      <label key={source.id} className="flex items-center gap-2 cursor-pointer">
                         <NeonCheckbox
                           checked={checked}
                           onChange={() => {
                             const next = checked
-                              ? settings.selectedRegions.filter((r) => r !== region.id)
-                              : [...settings.selectedRegions, region.id];
-                            setSettings((s) => ({ ...s, selectedRegions: next }));
-                            saveSetting("selectedRegions", JSON.stringify(next));
+                              ? settings.enabledNewsSources.filter((s) => s !== source.id)
+                              : [...settings.enabledNewsSources, source.id];
+                            setSettings((s) => {
+                              const updated = { ...s, enabledNewsSources: next };
+                              if (source.id === "google_news" && !next.includes("google_news")) {
+                                updated.selectedRegions = [];
+                                saveSetting("selectedRegions", JSON.stringify([]));
+                              }
+                              return updated;
+                            });
+                            saveSetting("enabledNewsSources", JSON.stringify(next));
                           }}
                           isDarkMode={isDarkMode}
                           size="sm"
-ariaLabel={`Toggle ${t(region.labelKey)}`}
-                         />
-                        <span className="text-sm">{t(region.labelKey)}</span>
+                          ariaLabel={`Toggle ${t(source.labelKey)}`}
+                        />
+                        <span className="text-sm">{t(source.labelKey)}</span>
                       </label>
                     );
                   })}
                 </div>
-                {settings.selectedRegions.length === 0 && (
-                  <p className="mt-2 text-xs text-amber-500">{t("settings.noRegionsSelected")}</p>
+                {settings.enabledNewsSources.includes("google_news") && (
+                  <div className="mt-4 space-y-2">
+                    <p className={`text-xs font-semibold ${isDarkMode ? "text-zinc-400" : "text-zinc-500"}`}>{t("settings.selectRegions")}</p>
+                    {AVAILABLE_REGIONS.map((region) => {
+                      const checked = settings.selectedRegions.includes(region.id);
+                      return (
+                        <label key={region.id} className="flex items-center gap-2 cursor-pointer">
+                          <NeonCheckbox
+                            checked={checked}
+                            onChange={() => {
+                              const next = checked
+                                ? settings.selectedRegions.filter((r) => r !== region.id)
+                                : [...settings.selectedRegions, region.id];
+                              setSettings((s) => ({ ...s, selectedRegions: next }));
+                              saveSetting("selectedRegions", JSON.stringify(next));
+                            }}
+                            isDarkMode={isDarkMode}
+                            size="sm"
+                            ariaLabel={`Toggle ${t(region.labelKey)}`}
+                          />
+                          <span className="text-sm">{t(region.labelKey)}</span>
+                        </label>
+                      );
+                    })}
+
+                  </div>
                 )}
               </div>
 
@@ -993,7 +1025,7 @@ ariaLabel={`Toggle ${t(region.labelKey)}`}
                     }`}
                   >
                     <span>{t("settings.customRssFeed")}</span>
-                    <span className="text-[10px] opacity-70">{t("settings.saved", { count: feedSources.filter((s) => ["ann", "automaton", "gcores", "yys", "custom_rss"].includes(s.source_type)).length })}</span>
+                    <span className="text-[10px] opacity-70">{t("settings.saved", { count: feedSources.filter((s) => (RSS_SOURCE_TYPES as readonly string[]).includes(s.source_type)).length })}</span>
                   </button>
                 </div>
               </div>

@@ -12,6 +12,7 @@ interface CardContextMenuProps {
   reprocessingArticleId: string | null;
   isSourceBlacklisted: boolean;
   sortMode: string;
+  llmAvailable: boolean;
   onClose: () => void;
   onReprocess: (articleId: string) => void;
   onHideSource: (sourceName: string) => void;
@@ -25,6 +26,7 @@ export function CardContextMenu({
   reprocessingArticleId,
   isSourceBlacklisted,
   sortMode,
+  llmAvailable,
   onClose,
   onReprocess,
   onHideSource,
@@ -73,7 +75,7 @@ export function CardContextMenu({
         )}
         <button
           type="button"
-          disabled={isCurrentCardReprocessing}
+          disabled={isCurrentCardReprocessing || !llmAvailable}
           onClick={() => onReprocess(contextMenu.article.id)}
           className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-bold transition-colors ${
             isDarkMode ? "hover:bg-zinc-800" : "hover:bg-zinc-200"

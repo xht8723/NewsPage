@@ -44,6 +44,16 @@ export function getSelectedApiKey(settings: UserSettings): string {
   return "";
 }
 
+export function isLlmAvailable(settings: UserSettings): boolean {
+  if (!settings.aiModeEnabled) return false;
+  const provider = normalizedProvider(settings);
+  if (provider === "openai") return settings.openaiApiKey.trim().length > 0;
+  if (provider === "claude") return settings.claudeApiKey.trim().length > 0;
+  if (provider === "gemini") return settings.geminiApiKey.trim().length > 0;
+  if (provider === "deepseek") return settings.deepseekApiKey.trim().length > 0;
+  return true;
+}
+
 export function getSelectedEndpoint(settings: UserSettings): string {
   const provider = normalizedProvider(settings);
   return provider === "ollama" ? settings.ollamaAddress : "";

@@ -538,6 +538,7 @@ struct ResolvedLlmSettings {
     ollama_model: String,
     local_embedding_model: String,
     selected_regions: Vec<String>,
+    enabled_news_sources: Vec<String>,
     source_blacklist: HashSet<String>,
     llm_batch_size: usize,
     concurrent_llm_requests: usize,
@@ -660,6 +661,10 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
         .get("selectedRegions")
         .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_default();
+    let saved_enabled_news_sources: Vec<String> = settings_map
+        .get("enabledNewsSources")
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default();
     let saved_source_blacklist = parse_source_blacklist(settings_map);
 
     ResolvedLlmSettings {
@@ -679,6 +684,7 @@ fn resolve_llm_settings(settings_map: &HashMap<String, String>, overrides: LlmOv
             saved_local_embedding_model,
         ),
         selected_regions: saved_selected_regions,
+        enabled_news_sources: saved_enabled_news_sources,
         source_blacklist: saved_source_blacklist,
         llm_batch_size: settings_map
             .get("llmBatchSize")
@@ -805,6 +811,7 @@ async fn run_scrape_stage(
         .map_err(|e| format!("Failed to load HTML-to-RSS rules: {}", e))?;
     let scrape_context = ScrapeContext {
         selected_regions: resolved.selected_regions.clone(),
+        enabled_news_sources: resolved.enabled_news_sources.clone(),
         rss_sources,
         subscribed_rss_names,
         subscribed_news_categories,
@@ -2311,7 +2318,13 @@ async fn list_cloud_models(
         _ => vec![],
     };
 
-    match reqwest::get("https://models.dev/api.json").await {
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+    match client.get("https://models.dev/api.json").send().await {
         Ok(response) => {
             let body = response
                 .text()
@@ -2382,7 +2395,7 @@ fn open_app_data_dir(app: tauri::AppHandle) -> Result<(), String> {
 fn default_settings_map() -> HashMap<String, String> {
     let mut map = HashMap::new();
     map.insert("aiModeEnabled".to_string(), "false".to_string());
-    map.insert("newsLimit".to_string(), "5".to_string());
+    map.insert("newsLimit".to_string(), "10".to_string());
     map.insert("perCategoryNewsLimits".to_string(), "{}".to_string());
     map.insert("scrapeCooldownHours".to_string(), "2".to_string());
     map.insert("llmProvider".to_string(), "ollama".to_string());
@@ -2438,7 +2451,10 @@ fn cleanup_img_cache(app: tauri::AppHandle) -> Result<(), String> {
         .and_then(|raw| serde_json::from_str::<HashMap<String, String>>(&raw).ok())
         .and_then(|map| map.get("imgCacheLimitMb").and_then(|v| v.parse::<u64>().ok()))
         .unwrap_or(500)
-        .clamp(100, 5000);
+        .max(0);
+    if limit_mb == 0 {
+        return Ok(());
+    }
     let limit_bytes = limit_mb * 1024 * 1024;
     let target_bytes = limit_bytes / 5;
 
@@ -2557,7 +2573,7 @@ async fn list_feed_sources_action(
         .map_err(|e| format!("Failed to list feed sources: {}", e))
 }
 
-const ALLOWED_SOURCE_TYPES: &[&str] = &["custom_rss", "gcores", "ann", "automaton", "yys", "html_to_rss"];
+const ALLOWED_SOURCE_TYPES: &[&str] = &["custom_rss", "gcores", "ann", "automaton", "yys", "readhub", "html_to_rss"];
 
 #[tauri::command]
 async fn upsert_feed_source_action(

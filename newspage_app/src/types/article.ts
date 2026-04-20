@@ -78,6 +78,7 @@ export interface UserSettings {
   geminiModel: string;
   deepseekApiKey: string;
   deepseekModel: string;
+  enabledNewsSources: string[];
   selectedRegions: string[];
   sourceBlacklist: string[];
   showFeedDeletionConfirmation: boolean;

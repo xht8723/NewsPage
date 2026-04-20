@@ -14,6 +14,29 @@ export const TOPIC_CATEGORIES = [
 export type LayoutMode = "grid" | "list" | "compact_list";
 export type OllamaConnectionState = "unknown" | "ok" | "fail";
 
+export const RSS_SOURCE_TYPES = [
+  "ann",
+  "automaton",
+  "gcores",
+  "yys",
+  "readhub",
+  "custom_rss",
+  "html_to_rss",
+] as const;
+
+export const BUILTIN_RSS_SOURCE_TYPES = [
+  "ann",
+  "automaton",
+  "gcores",
+  "yys",
+  "readhub",
+] as const;
+
+export const NEWS_SOURCES = [
+  { id: "google_news", labelKey: "settings.sourceGoogleNews" },
+  { id: "baidu_news", labelKey: "settings.sourceBaiduNews" },
+] as const;
+
 export const AVAILABLE_REGIONS = [
   { id: "canada", labelKey: "settings.regionCanada" },
   { id: "chinese", labelKey: "settings.regionChinese" },

@@ -29,6 +29,7 @@
     "liveTranslation": "Live translation",
     "targetLanguage": "Target language",
     "enableLiveTranslation": "Enable live translation",
+    "translationRequiresAi": "AI mode must be enabled and an LLM provider configured to use translation.",
     "english": "English",
     "chinese": "Chinese"
   },
@@ -148,6 +149,10 @@
     "noBlacklisted": "No blacklisted sources yet.",
     "noSourcesMatch": "No sources match your search.",
     "addManually": "Add source name manually",
+    "newsSource": "News Source",
+    "selectNewsSources": "Choose which news sources to scrape",
+    "sourceGoogleNews": "Google News",
+    "sourceBaiduNews": "百度新闻",
     "googleNewsRegions": "Google News Regions",
     "regionCanada": "Canada (English)",
     "regionChinese": "Chinese (Simplified)",

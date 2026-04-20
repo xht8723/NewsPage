@@ -97,7 +97,7 @@ export function useAppStartup(): UseAppStartupReturn {
           autoScrapeHourInterval: saved.autoScrapeHourInterval ? Math.min(24, Math.max(1, Number(saved.autoScrapeHourInterval))) : defaults.autoScrapeHourInterval,
           autoScrapeDayInterval: saved.autoScrapeDayInterval ? Math.min(30, Math.max(1, Number(saved.autoScrapeDayInterval))) : defaults.autoScrapeDayInterval,
           autoScrapeTime: saved.autoScrapeTime?.match(/^\d{1,2}:\d{2}$/) ? saved.autoScrapeTime : defaults.autoScrapeTime,
-          imgCacheLimitMb: saved.imgCacheLimitMb ? Math.min(5000, Math.max(100, Number(saved.imgCacheLimitMb))) : defaults.imgCacheLimitMb,
+          imgCacheLimitMb: saved.imgCacheLimitMb ? Math.max(0, Number(saved.imgCacheLimitMb)) : defaults.imgCacheLimitMb,
           upcomingGamesSources: saved.upcomingGamesSources ? (() => { try { return JSON.parse(saved.upcomingGamesSources) as string[]; } catch { return defaults.upcomingGamesSources; } })() : defaults.upcomingGamesSources,
           animeTitleLanguage: saved.animeTitleLanguage || defaults.animeTitleLanguage,
           animeSubtitleLanguage: saved.animeSubtitleLanguage || defaults.animeSubtitleLanguage,

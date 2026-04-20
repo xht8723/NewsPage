@@ -1,4 +1,4 @@
-﻿use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc};
 use reqwest::Client;
 
 use crate::id_generator::generate_article_id;
@@ -121,7 +121,7 @@ pub fn parse_pub_date(date_str: &str) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
-pub fn extract_rss_thumbnail(item_xml: &str) -> String {
+fn extract_rss_thumbnail(item_xml: &str) -> String {
     // 1. <media:content url="..." />
     if let Some(url) = extract_media_content_url(item_xml) {
         return url;

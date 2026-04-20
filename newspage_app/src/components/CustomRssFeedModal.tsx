@@ -8,6 +8,7 @@ import { normalizeRssFeedUrl } from "../utils/rssSettings";
 import { usePanelTransition } from "../hooks/usePanelTransition";
 import { TAG_COLOR_PRESETS } from "../utils/articleMeta";
 import { feedService } from "../services/feedService";
+import { BUILTIN_RSS_SOURCE_TYPES, RSS_SOURCE_TYPES } from "../constants/article";
 import { useSettingsStore } from "../stores/settingsStore";
 import { getSelectedModel, getSelectedApiKey, getSelectedEndpoint } from "../utils/llmConfig";
 
@@ -103,7 +104,7 @@ function ColorPicker({ value, isDarkMode, disabled, onChange }: ColorPickerProps
   );
 }
 
-const DEFAULT_SOURCE_TYPES = ["ann", "automaton", "gcores", "yys"];
+const DEFAULT_SOURCE_TYPES = [...BUILTIN_RSS_SOURCE_TYPES];
 
 // ─── Main modal ───────────────────────────────────────────────────────────────
 
@@ -149,7 +150,7 @@ export function CustomRssFeedModal({
   }`;
 
   const customFeeds = feedSources.filter((s) =>
-    ["ann", "automaton", "gcores", "yys", "custom_rss", "html_to_rss"].includes(s.source_type),
+    (RSS_SOURCE_TYPES as readonly string[]).includes(s.source_type),
   );
   const canAddFeed = draftName.trim().length > 0 && normalizeRssFeedUrl(draftFeed).length > 0;
   const canSaveEdit = editingName.trim().length > 0 && normalizeRssFeedUrl(editingFeedUrl).length > 0;
@@ -472,7 +473,7 @@ export function CustomRssFeedModal({
                               }`}
                               style={{ background: "conic-gradient(red, yellow, lime, cyan, blue, magenta, red)" }}
                             />
-                            {DEFAULT_SOURCE_TYPES.includes(source.source_type) ? (
+                            {(DEFAULT_SOURCE_TYPES as readonly string[]).includes(source.source_type) ? (
                               <NeonCheckbox
                                 checked={source.enabled}
                                 onChange={() => void toggleFeedEnabled(source)}

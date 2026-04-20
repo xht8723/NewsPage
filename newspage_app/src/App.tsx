@@ -13,7 +13,7 @@ import {
 import type { CardContextMenuState, FeedDefinition, NewsArticle } from "./types/article";
 import { formatDateLocal, getProviderLabel } from "./utils/articleMeta";
 import { getFeedDisplayName } from "./utils/feedNames";
-import { getSelectedModel, getSelectedApiKey, getSelectedEndpoint } from "./utils/llmConfig";
+import { getSelectedModel, getSelectedApiKey, getSelectedEndpoint, isLlmAvailable } from "./utils/llmConfig";
 import { useEnrichedArticles } from "./hooks/useEnrichedArticles";
 import { usePanelTransition } from "./hooks/usePanelTransition";
 import { useAppStartup } from "./hooks/useAppStartup";
@@ -180,6 +180,8 @@ function App() {
     apiKey: getSelectedApiKey(settings),
     endpoint: getSelectedEndpoint(settings),
   }), [settings.llmProvider, settings.ollamaAddress, settings.ollamaModel, settings.openaiApiKey, settings.openaiModel, settings.claudeApiKey, settings.claudeModel, settings.geminiApiKey, settings.geminiModel, settings.deepseekApiKey, settings.deepseekModel]);
+
+  const llmAvailable = useMemo(() => isLlmAvailable(settings), [settings.aiModeEnabled, settings.llmProvider, settings.openaiApiKey, settings.claudeApiKey, settings.geminiApiKey, settings.deepseekApiKey]);
 
   const blacklistedSources = articleFilter.blacklistedSources;
 
@@ -675,8 +677,9 @@ function App() {
             </button>
             <div ref={translatePanelRef} className="relative">
               <button
+                disabled={!llmAvailable}
                 onClick={() => setShowTranslatePanel((current) => !current)}
-                className={`rounded-full border p-2 transition-colors ${isDarkMode ? "border-zinc-800 hover:bg-zinc-800" : "border-zinc-300 bg-white hover:bg-zinc-200"}`}
+                className={`rounded-full border p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${isDarkMode ? "border-zinc-800 hover:bg-zinc-800" : "border-zinc-300 bg-white hover:bg-zinc-200"}`}
                 title={t("app.liveTranslation")}
               >
                 <Languages size={18} />
@@ -690,15 +693,21 @@ function App() {
                   <p className={`mb-2 text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? "text-zinc-500" : "text-zinc-500"}`}>
                     {t("app.liveTranslation")}
                   </p>
+                  {!llmAvailable && (
+                    <p className={`mb-2 rounded-lg border px-2.5 py-2 text-[11px] font-semibold ${isDarkMode ? "border-amber-800/60 bg-amber-900/30 text-amber-300" : "border-amber-300 bg-amber-50 text-amber-700"}`}>
+                      {t("app.translationRequiresAi")}
+                    </p>
+                  )}
                   <label className="mb-1 block text-xs font-semibold opacity-80">{t("app.targetLanguage")}</label>
                   <select
+                    disabled={!llmAvailable}
                     value={settings.translationTargetLanguage}
                     onChange={(event) => {
                       const nextLanguage = event.target.value === "zh-CN" ? "zh-CN" : "en";
                       setSettings((current) => ({ ...current, translationTargetLanguage: nextLanguage }));
                       saveSetting("translationTargetLanguage", nextLanguage);
                     }}
-                    className={`mb-3 w-full rounded-lg border px-2.5 py-2 text-sm focus:outline-none ${
+                    className={`mb-3 w-full rounded-lg border px-2.5 py-2 text-sm focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 ${
                       isDarkMode ? "border-zinc-700 bg-zinc-800 text-zinc-100" : "border-zinc-300 bg-zinc-100 text-zinc-900"
                     }`}
                   >
@@ -716,6 +725,7 @@ function App() {
                       isDarkMode={isDarkMode}
                       size="sm"
                       ariaLabel={t("app.enableLiveTranslation")}
+                      disabled={!llmAvailable}
                     />
                   </label>
                 </div>
@@ -794,6 +804,7 @@ function App() {
           reprocessingArticleId={reprocessingArticleId}
           isSourceBlacklisted={blacklistedSources.has(normalizeSourceName(contextMenuView.article.sourceName))}
           sortMode={settings.sortMode}
+          llmAvailable={llmAvailable}
           onClose={() => setContextMenu(null)}
           onReprocess={(articleId) => {
             const article = news.find((item) => item.id === articleId);
@@ -968,6 +979,7 @@ function App() {
           liveTranslationEnabled={settings.liveTranslationEnabled}
           translationTargetLanguage={settings.translationTargetLanguage}
           translationRuntime={translationRuntime}
+          llmAvailable={llmAvailable}
           onClose={() => setSelectedArticle(null)}
           onOpenUrl={(url) => { void articleService.openUrl(url); }}
           onReprocessArticle={(article) => { void newsProcessor.reprocessArticle(article); }}

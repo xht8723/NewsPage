@@ -17,6 +17,7 @@ interface ArticleDetailModalProps {
   liveTranslationEnabled: boolean;
   translationTargetLanguage: "en" | "zh-CN";
   translationRuntime: TranslationRuntimeConfig;
+  llmAvailable: boolean;
   onClose: () => void;
   onOpenUrl: (url: string) => void;
   onReprocessArticle: (article: NewsArticle) => void;
@@ -30,6 +31,7 @@ export function ArticleDetailModal({
   liveTranslationEnabled,
   translationTargetLanguage,
   translationRuntime,
+  llmAvailable,
   onClose,
   onOpenUrl,
   onReprocessArticle,
@@ -173,7 +175,7 @@ export function ArticleDetailModal({
             )}
             <button
               type="button"
-              disabled={reprocessingArticleId === activeArticle.id}
+              disabled={reprocessingArticleId === activeArticle.id || !llmAvailable}
               onClick={() => onReprocessArticle(activeArticle)}
               className={`inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold transition-colors ${
                 isDarkMode

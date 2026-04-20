@@ -209,7 +209,9 @@ impl ScraperStage for GlRssScraperStage {
     }
 
     fn should_run(&self, ctx: &ScrapeContext) -> bool {
-        !ctx.selected_regions.is_empty() && !ctx.subscribed_news_categories.is_empty()
+        ctx.enabled_news_sources.iter().any(|s| s == "google_news")
+            && !ctx.selected_regions.is_empty()
+            && !ctx.subscribed_news_categories.is_empty()
     }
 
     async fn run(&self, ctx: &ScrapeContext) -> Result<Vec<Article>, String> {

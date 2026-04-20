@@ -29,7 +29,7 @@ const saver = new DebouncedSaver();
 export function createDefaultSettings(): UserSettings {
   return {
     aiModeEnabled: false,
-    newsLimit: 5,
+    newsLimit: 10,
     perCategoryNewsLimits: {},
     scrapeCooldownHours: 2,
     llmBatchSize: 3,
@@ -47,6 +47,7 @@ export function createDefaultSettings(): UserSettings {
     geminiModel: "gemini-2.5-flash",
     deepseekApiKey: "",
     deepseekModel: "deepseek-chat",
+    enabledNewsSources: [],
     selectedRegions: [],
     sourceBlacklist: [],
     showFeedDeletionConfirmation: true,

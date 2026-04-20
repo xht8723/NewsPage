@@ -29,6 +29,7 @@
     "liveTranslation": "实时翻译",
     "targetLanguage": "目标语言",
     "enableLiveTranslation": "启用实时翻译",
+    "translationRequiresAi": "需要启用 AI 模式并配置 LLM 服务才能使用翻译功能。",
     "english": "英语",
     "chinese": "中文"
   },
@@ -148,6 +149,10 @@
     "noBlacklisted": "暂无被拉黑的来源。",
     "noSourcesMatch": "没有匹配的来源。",
     "addManually": "手动添加来源名称",
+    "newsSource": "新闻来源",
+    "selectNewsSources": "选择要抓取的新闻来源",
+    "sourceGoogleNews": "Google 新闻",
+    "sourceBaiduNews": "百度新闻",
     "googleNewsRegions": "Google 新闻区域",
     "regionCanada": "加拿大（英语）",
     "regionChinese": "中文（简体）",

@@ -24,13 +24,6 @@ const DEFAULT_FEED_TOPICS: &[DefaultFeedSeed] = &[
         rss_categories: &[],
     },
     DefaultFeedSeed {
-        id: "feed-entertainment",
-        name: "Entertainment",
-        slug: "entertainment",
-        categories: &["anime", "gaming", "entertainment", "technology"],
-        rss_categories: &[],
-    },
-    DefaultFeedSeed {
         id: "feed-science-health",
         name: "Science & Health",
         slug: "science-health",
@@ -38,17 +31,24 @@ const DEFAULT_FEED_TOPICS: &[DefaultFeedSeed] = &[
         rss_categories: &[],
     },
     DefaultFeedSeed {
-        id: "feed-sports",
-        name: "Sports",
-        slug: "sports",
-        categories: &["sports"],
-        rss_categories: &[],
-    },
-    DefaultFeedSeed {
         id: "feed-business",
         name: "Business",
         slug: "business",
         categories: &["business"],
+        rss_categories: &[],
+    },
+    DefaultFeedSeed {
+        id: "feed-entertainment",
+        name: "Entertainment",
+        slug: "entertainment",
+        categories: &["anime", "gaming", "entertainment", "technology"],
+        rss_categories: &[],
+    },
+    DefaultFeedSeed {
+        id: "feed-sports",
+        name: "Sports",
+        slug: "sports",
+        categories: &["sports"],
         rss_categories: &[],
     },
     DefaultFeedSeed {
@@ -529,26 +529,6 @@ VALUES (?1, ?2, ?3, 1, 0)",
     .execute(&mut *tx)
     .await?;
 
-    sqlx::query(
-        "INSERT INTO feed_definitions(id, name, slug, is_visible, sort_order)
-VALUES (?1, ?2, ?3, 1, 1)",
-    )
-    .bind("feed-upcoming-games")
-    .bind("Upcoming Games")
-    .bind("upcoming-games")
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query(
-        "INSERT INTO feed_definitions(id, name, slug, is_visible, sort_order)
- VALUES (?1, ?2, ?3, 1, 2)"
-    )
-    .bind("feed-weekly-anime")
-    .bind("Weekly Anime")
-    .bind("weekly-anime")
-    .execute(&mut *tx)
-    .await?;
-
     for (index, feed) in DEFAULT_FEED_TOPICS.iter().enumerate() {
         sqlx::query(
             "INSERT INTO feed_definitions(id, name, slug, is_visible, sort_order)
@@ -557,7 +537,7 @@ VALUES (?1, ?2, ?3, 1, ?4)",
         .bind(feed.id)
         .bind(feed.name)
         .bind(feed.slug)
-        .bind((index + 3) as i64)
+        .bind((index + 1) as i64)
         .execute(&mut *tx)
         .await?;
 
@@ -580,6 +560,30 @@ VALUES (?1, ?2, ?3, 1, ?4)",
         }
     }
 
+    let topic_count = DEFAULT_FEED_TOPICS.len() as i64;
+
+    sqlx::query(
+        "INSERT INTO feed_definitions(id, name, slug, is_visible, sort_order)
+VALUES (?1, ?2, ?3, 1, ?4)",
+    )
+    .bind("feed-upcoming-games")
+    .bind("Upcoming Games")
+    .bind("upcoming-games")
+    .bind(topic_count + 1)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO feed_definitions(id, name, slug, is_visible, sort_order)
+VALUES (?1, ?2, ?3, 1, ?4)",
+    )
+    .bind("feed-weekly-anime")
+    .bind("Weekly Anime")
+    .bind("weekly-anime")
+    .bind(topic_count + 2)
+    .execute(&mut *tx)
+    .await?;
+
     tx.commit().await?;
 
     let default_sources = [
@@ -587,6 +591,7 @@ VALUES (?1, ?2, ?3, 1, ?4)",
         ("ann", "https://www.animenewsnetwork.com/news/?topic=anime", "ANN"),
         ("automaton", "https://automaton-media.com/en/feed/", "AUTOMATON"),
         ("yys", "https://www.yystv.cn/rss/feed", "游研社"),
+        ("readhub", "https://readhub.cn/rss", "Readhub"),
     ];
     for (source_type, source_ref, display_name) in default_sources {
         sqlx::query(

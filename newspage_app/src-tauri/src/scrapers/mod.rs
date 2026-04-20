@@ -8,26 +8,31 @@ use crate::logging;
 
 pub mod ann;
 pub mod automaton;
+pub mod baidu_news;
 pub mod bangumi;
 pub mod custom_rss;
 pub mod gcores;
 pub mod gl_rss;
 pub mod html_to_rss;
 pub mod open_critics;
+pub mod readhub;
 pub mod rss_common;
 pub mod yys;
 
 use ann::AnnScraperStage;
 use automaton::AutomatonScraperStage;
+use baidu_news::BaiduNewsScraperStage;
 use custom_rss::CustomRssScraperStage;
 use gcores::GcoresScraperStage;
 use gl_rss::GlRssScraperStage;
 use html_to_rss::HtmlToRssScraperStage;
+use readhub::ReadhubScraperStage;
 use yys::YysScraperStage;
 
 #[derive(Clone)]
 pub struct ScrapeContext {
     pub selected_regions: Vec<String>,
+    pub enabled_news_sources: Vec<String>,
     pub rss_sources: Vec<FeedSource>,
     /// Lowercase display names of RSS sources that are subscribed to by at
     /// least one feed.  Only sources whose name appears here will be scraped.
@@ -61,8 +66,10 @@ fn default_scraper_stages() -> Vec<Box<dyn ScraperStage>> {
         // To disable Automaton: remove the line below (or set ENABLED=false in automaton.rs).
         Box::new(AutomatonScraperStage),
         Box::new(GlRssScraperStage),
+        Box::new(BaiduNewsScraperStage),
         Box::new(CustomRssScraperStage),
         Box::new(GcoresScraperStage),
+        Box::new(ReadhubScraperStage),
         Box::new(YysScraperStage),
         Box::new(HtmlToRssScraperStage),
     ]
