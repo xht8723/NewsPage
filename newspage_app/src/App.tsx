@@ -302,16 +302,18 @@ function App() {
         if (cancelled) return;
         steps[0].done = true;
 
-        if (settings.sortMode === "score" && articles.length > 0) {
-          setLoadingDataStep("scoring");
-          try {
-            await runScoreComputation(
-              articles.map((a) => a.id),
-              () => cancelled,
-            );
-          } catch {
+        if (settings.sortMode === "score") {
+          if (articles.length > 0) {
+            setLoadingDataStep("scoring");
+            try {
+              await runScoreComputation(
+                articles.map((a) => a.id),
+                () => cancelled,
+              );
+            } catch {
+            }
+            if (cancelled) return;
           }
-          if (cancelled) return;
           steps[1].done = true;
         }
 
