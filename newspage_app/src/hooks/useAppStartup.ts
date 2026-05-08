@@ -71,6 +71,7 @@ export function useAppStartup(): UseAppStartupReturn {
           geminiModel: saved.geminiModel?.trim() ? saved.geminiModel : defaults.geminiModel,
           deepseekApiKey: saved.deepseekApiKey ?? defaults.deepseekApiKey,
           deepseekModel: saved.deepseekModel?.trim() ? saved.deepseekModel : defaults.deepseekModel,
+          enabledNewsSources: saved.enabledNewsSources ? (() => { try { return JSON.parse(saved.enabledNewsSources) as string[]; } catch { return defaults.enabledNewsSources; } })() : defaults.enabledNewsSources,
           selectedRegions: saved.selectedRegions ? (() => { try { return JSON.parse(saved.selectedRegions) as string[]; } catch { return defaults.selectedRegions; } })() : defaults.selectedRegions,
           sourceBlacklist: parseSourceBlacklist(saved.sourceBlacklist),
           showFeedDeletionConfirmation: saved.showFeedDeletionConfirmation !== "false",
@@ -101,6 +102,8 @@ export function useAppStartup(): UseAppStartupReturn {
           upcomingGamesSources: saved.upcomingGamesSources ? (() => { try { return JSON.parse(saved.upcomingGamesSources) as string[]; } catch { return defaults.upcomingGamesSources; } })() : defaults.upcomingGamesSources,
           animeTitleLanguage: saved.animeTitleLanguage || defaults.animeTitleLanguage,
           animeSubtitleLanguage: saved.animeSubtitleLanguage || defaults.animeSubtitleLanguage,
+          uiLanguage: saved.uiLanguage || defaults.uiLanguage,
+          maxVotedArticles: saved.maxVotedArticles ? Math.max(1, Number(saved.maxVotedArticles)) : defaults.maxVotedArticles,
         }));
         setSelectedEmbeddingModel(savedLocalEmbeddingModel || DEFAULT_EMBEDDING_MODEL);
         setIsEmbeddingReady(savedLocalEmbeddingModel.length > 0);
