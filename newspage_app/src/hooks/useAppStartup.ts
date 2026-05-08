@@ -53,7 +53,7 @@ export function useAppStartup(): UseAppStartupReturn {
         setSettings(() => ({
           ...defaults,
           aiModeEnabled: saved.aiModeEnabled === "true",
-          newsLimit: saved.newsLimit ? Math.min(50, Math.max(1, Number(saved.newsLimit))) : defaults.newsLimit,
+          newsLimit: saved.newsLimit !== undefined && saved.newsLimit !== "" ? Math.min(100, Math.max(0, Number(saved.newsLimit))) : defaults.newsLimit,
           perCategoryNewsLimits: (() => { try { return saved.perCategoryNewsLimits ? JSON.parse(saved.perCategoryNewsLimits) as Record<string, number> : {}; } catch { return {}; } })(),
           scrapeCooldownHours: saved.scrapeCooldownHours ? Math.min(24, Math.max(0, Number(saved.scrapeCooldownHours))) : defaults.scrapeCooldownHours,
           llmBatchSize: saved.llmBatchSize ? Math.min(20, Math.max(1, Number(saved.llmBatchSize))) : defaults.llmBatchSize,
